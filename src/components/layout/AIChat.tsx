@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 
 interface Message {
@@ -9,7 +10,7 @@ interface Message {
 }
 
 export default function AIChat() {
-  const [messages] = useState<Message[]>([
+  const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
       content:
@@ -17,10 +18,18 @@ export default function AIChat() {
     },
   ]);
   const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const pathname = usePathname();
 
   /* Chat files are session-only — gone when conversation ends */
   const { chatFiles, addChatFiles, removeChatFile, clearChatFiles } = useFiles();
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  /* Auto-scroll to bottom when messages change */
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleChatFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -29,14 +38,77 @@ export default function AIChat() {
     }
   }, [addChatFiles]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    // Will be wired to Claude API in Phase 2
-    // AI always has context of all library files
-    // chatFiles are additional session-only context for this conversation
-    setInput("");
-  };
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!input.trim() || sending) return;
+
+      const userMessage: Message = { role: "user", content: input.trim() };
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      setInput("");
+      setSending(true);
+
+      /* Prepare chat file contents for the API */
+      const chatFileContents = chatFiles
+        .filter((f) => f.textContent !== null)
+        .map((f) => ({ name: f.name, content: f.textContent! }));
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: updatedMessages,
+            currentPage: pathname,
+            chatFileContents,
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: `Error: ${errText}` },
+          ]);
+          setSending(false);
+          return;
+        }
+
+        /* Add empty assistant message that we'll stream into */
+        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            updated[updated.length - 1] = {
+              ...last,
+              content: last.content + chunk,
+            };
+            return updated;
+          });
+        }
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "Sorry, something went wrong. Please try again.",
+          },
+        ]);
+      } finally {
+        setSending(false);
+      }
+    },
+    [input, messages, sending, chatFiles, pathname]
+  );
 
   return (
     <aside className="ai-panel">
@@ -60,9 +132,15 @@ export default function AIChat() {
                 <span>AI Copilot</span>
               </div>
             )}
-            <p>{msg.content}</p>
+            {/* Show pulsing dots while streaming hasn't started yet */}
+            {msg.role === "assistant" && msg.content === "" && sending ? (
+              <p className="ai-typing">Thinking...</p>
+            ) : (
+              <p style={{ whiteSpace: "pre-wrap" }}>{msg.content}</p>
+            )}
           </div>
         ))}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* ─── Input ─── */}
@@ -81,6 +159,7 @@ export default function AIChat() {
           className="ai-upload-btn"
           type="button"
           onClick={() => chatFileInputRef.current?.click()}
+          disabled={sending}
         >
           <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
             <path d="M7 1v12M1 7h12" />
@@ -117,17 +196,23 @@ export default function AIChat() {
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your message..."
+            placeholder={sending ? "Waiting for response..." : "Type your message..."}
             rows={3}
             className="ai-textarea"
+            disabled={sending}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !sending) {
                 e.preventDefault();
                 handleSubmit(e);
               }
             }}
           />
-          <button type="submit" className="ai-send-btn" aria-label="Send message">
+          <button
+            type="submit"
+            className="ai-send-btn"
+            aria-label="Send message"
+            disabled={sending || !input.trim()}
+          >
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M1 7h12M8 2l5 5-5 5" />
             </svg>
