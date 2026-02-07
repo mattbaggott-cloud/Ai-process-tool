@@ -2,7 +2,9 @@
 
 import React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+import { createClient } from "@/lib/supabase/client";
 
 /* ── navigation data ─────────────────────────────────────── */
 
@@ -72,6 +74,15 @@ const icons: Record<string, React.ReactNode> = {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user } = useAuth();
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  };
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -142,10 +153,24 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      {/* ─── Bottom buttons ─── */}
+      {/* ─── User + sign out ─── */}
       <div className="sidebar-footer">
-        <button className="btn btn-primary btn-full">+ New Project</button>
-        <button className="btn btn-secondary btn-full">Upload Flow</button>
+        {user && (
+          <div className="sidebar-user">
+            <div className="sidebar-user-avatar">
+              {(user.email ?? "U")[0].toUpperCase()}
+            </div>
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-email">{user.email}</div>
+            </div>
+          </div>
+        )}
+        <button
+          className="btn btn-secondary btn-full"
+          onClick={handleSignOut}
+        >
+          Sign Out
+        </button>
       </div>
     </aside>
   );
