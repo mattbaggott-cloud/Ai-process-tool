@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { useFiles, formatFileSize, getFileExtension, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
+import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 
 interface Message {
   role: "user" | "assistant";

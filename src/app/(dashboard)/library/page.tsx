@@ -1,31 +1,13 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useFiles, formatFileSize, getFileExtension, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
+import { useAuth } from "@/context/AuthContext";
+import { createClient } from "@/lib/supabase/client";
 import type { UploadedFile } from "@/context/FileContext";
-
-/* ══════════════════════════════════════════════════════════
-   TYPES
-   ══════════════════════════════════════════════════════════ */
-
-type Category = "Note" | "Document" | "Template" | "Reference";
-
-interface LibraryItem {
-  id: string;
-  title: string;
-  content: string;
-  category: Category;
-  tags: string[];
-  createdAt: string;
-  updatedAt: string;
-}
+import type { Category } from "@/lib/types/database";
 
 /* ── Helpers ───────────────────────────────────────────── */
-
-let counter = 0;
-const uid = () => `lib-${++counter}-${Date.now()}`;
-
-const now = () => new Date().toISOString();
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -39,28 +21,63 @@ const categoryStyles: Record<Category, { bg: string; color: string }> = {
   Reference: { bg: "#f5f3ff", color: "#7c3aed" },
 };
 
+/* ── Types (local view of database row) ───────────────── */
+
+interface LibItem {
+  id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  category: Category;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 /* ══════════════════════════════════════════════════════════
    MAIN COMPONENT
    ══════════════════════════════════════════════════════════ */
 
 export default function LibraryPage() {
-  const [items, setItems] = useState<LibraryItem[]>([]);
+  const { user } = useAuth();
+  const supabase = createClient();
+
+  const [items, setItems] = useState<LibItem[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"All" | Category>("All");
+  const [filter, setFilter] = useState<"All" | Category | "File">("All");
 
   /* ── Form state ── */
   const blankItem = { title: "", content: "", category: "Note" as Category, tags: "" };
   const [form, setForm] = useState(blankItem);
 
   /* ── File upload (library = permanent platform storage) ── */
-  const { libraryFiles, addLibraryFiles, removeLibraryFile } = useFiles();
+  const { libraryFiles, addLibraryFiles, removeLibraryFile, libraryLoading } = useFiles();
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const dragCounter = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /* ── Load notes from Supabase ── */
+  useEffect(() => {
+    if (!user) { setItemsLoading(false); return; }
+
+    setItemsLoading(true);
+    supabase
+      .from("library_items")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) setItems(data as LibItem[]);
+        setItemsLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  /* ── Drag & drop handlers ── */
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -129,48 +146,68 @@ export default function LibraryPage() {
 
   const filteredFiles = libraryFiles.filter(matchesFileSearch);
 
-  /* ── CRUD ── */
-  const addItem = () => {
-    if (!form.title.trim()) return;
-    const ts = now();
-    const item: LibraryItem = {
-      id: uid(),
+  /* ── CRUD (Supabase-backed) ── */
+
+  const addItem = async () => {
+    if (!form.title.trim() || !user) return;
+    const newItem = {
+      user_id: user.id,
       title: form.title,
       content: form.content,
       category: form.category,
       tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      createdAt: ts,
-      updatedAt: ts,
     };
-    setItems([item, ...items]);
-    setForm(blankItem);
-    setShowForm(false);
+    const { data, error } = await supabase
+      .from("library_items")
+      .insert(newItem)
+      .select()
+      .single();
+
+    if (data && !error) {
+      setItems([data as LibItem, ...items]);
+      setForm(blankItem);
+      setShowForm(false);
+    }
   };
 
-  const updateItem = (id: string) => {
-    setItems(items.map((item) =>
-      item.id === id
-        ? {
-            ...item,
-            title: form.title,
-            content: form.content,
-            category: form.category,
-            tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-            updatedAt: now(),
-          }
-        : item
-    ));
-    setEditingId(null);
-    setForm(blankItem);
+  const updateItem = async (id: string) => {
+    const updates = {
+      title: form.title,
+      content: form.content,
+      category: form.category,
+      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase
+      .from("library_items")
+      .update(updates)
+      .eq("id", id);
+
+    if (!error) {
+      setItems(
+        items.map((item) =>
+          item.id === id ? { ...item, ...updates } : item
+        )
+      );
+      setEditingId(null);
+      setForm(blankItem);
+    }
   };
 
-  const deleteItem = (id: string) => {
-    setItems(items.filter((item) => item.id !== id));
-    if (editingId === id) { setEditingId(null); setForm(blankItem); }
-    if (viewingId === id) setViewingId(null);
+  const deleteItem = async (id: string) => {
+    const { error } = await supabase
+      .from("library_items")
+      .delete()
+      .eq("id", id);
+
+    if (!error) {
+      setItems(items.filter((item) => item.id !== id));
+      if (editingId === id) { setEditingId(null); setForm(blankItem); }
+      if (viewingId === id) setViewingId(null);
+    }
   };
 
-  const startEdit = (item: LibraryItem) => {
+  const startEdit = (item: LibItem) => {
     setEditingId(item.id);
     setViewingId(null);
     setForm({
@@ -187,7 +224,7 @@ export default function LibraryPage() {
   };
 
   /* ── Search & filter notes ── */
-  const matchesSearch = (item: LibraryItem) => {
+  const matchesSearch = (item: LibItem) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (
@@ -203,13 +240,24 @@ export default function LibraryPage() {
 
   const countFor = (cat: Category) => items.filter((i) => i.category === cat).length;
 
-  const filters: { label: string; value: "All" | Category; count: number }[] = [
-    { label: "All", value: "All", count: items.length },
-    ...categories.map((c) => ({ label: c + "s", value: c as "All" | Category, count: countFor(c) })),
+  const totalCount = items.length + libraryFiles.length;
+  const fileCount = libraryFiles.filter(matchesFileSearch).length;
+
+  const filters: { label: string; value: "All" | Category | "File"; count: number }[] = [
+    { label: "All", value: "All", count: totalCount },
+    ...categories.map((c) => ({ label: c + "s", value: c as "All" | Category | "File", count: countFor(c) })),
+    { label: "Files", value: "File" as "All" | Category | "File", count: libraryFiles.length },
   ];
 
   /* ── Viewing item ── */
   const viewItem = viewingId ? items.find((i) => i.id === viewingId) : null;
+
+  /* ── Loading state ── */
+  const isLoading = itemsLoading || libraryLoading;
+
+  /* Should we show files in the card grid? */
+  const showFiles = filter === "All" || filter === "File";
+  const showNotes = filter !== "File";
 
   return (
     <>
@@ -229,6 +277,13 @@ export default function LibraryPage() {
 
       {/* ─── Content ─── */}
       <div className="canvas-content">
+
+        {/* ── Loading indicator ── */}
+        {isLoading && (
+          <div style={{ textAlign: "center", padding: 24, color: "#6b7280", fontSize: 14 }}>
+            Loading library...
+          </div>
+        )}
 
         {/* ── Add form ── */}
         {showForm && (
@@ -269,7 +324,35 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* ── Search ── */}
+        {/* 1. Filter tabs */}
+        <div className="pill-group" style={{ marginBottom: 20, flexWrap: "wrap" }}>
+          {filters.map((f) => (
+            <button
+              key={f.value}
+              className={`pill ${filter === f.value ? "pill-active" : "pill-inactive"}`}
+              onClick={() => setFilter(f.value)}
+            >
+              {f.label}
+              {f.count > 0 && <span style={{ marginLeft: 6, opacity: 0.7 }}>{f.count}</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* 2. Stats cards */}
+        <div className="stat-grid" style={{ marginBottom: 24, gridTemplateColumns: "repeat(5, 1fr)" }}>
+          {categories.map((c) => (
+            <div key={c} className="stat-box">
+              <div className="stat-value" style={{ color: categoryStyles[c].color }}>{countFor(c)}</div>
+              <div className="stat-label">{c}s</div>
+            </div>
+          ))}
+          <div className="stat-box">
+            <div className="stat-value" style={{ color: "#0891b2" }}>{libraryFiles.length}</div>
+            <div className="stat-label">Files</div>
+          </div>
+        </div>
+
+        {/* 3. Search bar */}
         <input
           className="input"
           placeholder="Search files, notes, and documents..."
@@ -278,7 +361,7 @@ export default function LibraryPage() {
           style={{ marginBottom: 12 }}
         />
 
-        {/* ── Compact upload drop zone ── */}
+        {/* 4. Drop zone */}
         <div
           className={`upload-zone-compact ${isDragging ? "upload-zone-compact-active" : ""}`}
           onDragEnter={handleDragEnter}
@@ -286,6 +369,7 @@ export default function LibraryPage() {
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
+          style={{ marginBottom: 20 }}
         >
           <input
             ref={fileInputRef}
@@ -308,90 +392,7 @@ export default function LibraryPage() {
         </div>
 
         {uploadError && (
-          <div className="upload-error" style={{ marginTop: 8 }}>{uploadError}</div>
-        )}
-
-        {/* ── Uploaded files table ── */}
-        {filteredFiles.length > 0 && (
-          <div className="upload-file-list" style={{ marginTop: 12, marginBottom: 20, maxHeight: 320, overflowY: "auto" }}>
-            {filteredFiles.map((f) => {
-              const ext = getFileExtension(f.name);
-              return (
-                <div key={f.id} className="upload-file-row">
-                  <div className="upload-file-icon">
-                    {ext === "PDF" ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                    ) : ext === "CSV" || ext === "TSV" ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                        <line x1="3" y1="9" x2="21" y2="9" />
-                        <line x1="3" y1="15" x2="21" y2="15" />
-                        <line x1="9" y1="3" x2="9" y2="21" />
-                        <line x1="15" y1="3" x2="15" y2="21" />
-                      </svg>
-                    ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                        <line x1="16" y1="13" x2="8" y2="13" />
-                        <line x1="16" y1="17" x2="8" y2="17" />
-                      </svg>
-                    )}
-                  </div>
-                  <span className="upload-file-name" title={f.name}>{f.name}</span>
-                  <span className="upload-file-type-badge">{ext}</span>
-                  <span className="upload-file-size">{formatFileSize(f.size)}</span>
-                  <span className="upload-file-date">{fmtUploadDate(f.addedAt)}</span>
-                  {f.textContent !== null && (
-                    <span className="upload-file-status" title="Text extracted for AI context">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </span>
-                  )}
-                  <button
-                    className="item-delete"
-                    onClick={() => removeLibraryFile(f.id)}
-                    title="Remove file"
-                    style={{ opacity: 1 }}
-                  >
-                    &times;
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* ── Filter pills ── */}
-        {items.length > 0 && (
-          <div className="pill-group" style={{ marginBottom: 20, flexWrap: "wrap" }}>
-            {filters.map((f) => (
-              <button
-                key={f.value}
-                className={`pill ${filter === f.value ? "pill-active" : "pill-inactive"}`}
-                onClick={() => setFilter(f.value)}
-              >
-                {f.label}
-                {f.count > 0 && <span style={{ marginLeft: 6, opacity: 0.7 }}>{f.count}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* ── Stats ── */}
-        {items.length > 0 && (
-          <div className="stat-grid" style={{ marginBottom: 24, gridTemplateColumns: "repeat(4, 1fr)" }}>
-            {categories.map((c) => (
-              <div key={c} className="stat-box">
-                <div className="stat-value" style={{ color: categoryStyles[c].color }}>{countFor(c)}</div>
-                <div className="stat-label">{c}s</div>
-              </div>
-            ))}
-          </div>
+          <div className="upload-error" style={{ marginBottom: 16 }}>{uploadError}</div>
         )}
 
         {/* ── View detail panel ── */}
@@ -407,8 +408,8 @@ export default function LibraryPage() {
                 </span>
                 <h3 className="lib-detail-title">{viewItem.title}</h3>
                 <div className="lib-detail-meta">
-                  Created {fmtDate(viewItem.createdAt)}
-                  {viewItem.updatedAt !== viewItem.createdAt && ` · Updated ${fmtDate(viewItem.updatedAt)}`}
+                  Created {fmtDate(viewItem.created_at)}
+                  {viewItem.updated_at !== viewItem.created_at && ` · Updated ${fmtDate(viewItem.updated_at)}`}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -425,83 +426,107 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* ── Note cards ── */}
-        {filtered.length > 0 && (
-          <div className="lib-grid">
-            {filtered.map((item) => {
-              const isEditing = editingId === item.id;
-              const cs = categoryStyles[item.category];
+        {/* 5. Cards grid — files + notes together */}
+        <div className="lib-grid">
 
-              return (
-                <div key={item.id} className={`lib-card ${viewingId === item.id ? "lib-card-active" : ""}`}>
-                  {isEditing ? (
-                    /* ── Edit mode ── */
-                    <div className="inline-form" style={{ border: "none", padding: 0, margin: 0, background: "transparent" }}>
+          {/* ── File cards ── */}
+          {showFiles && filteredFiles.map((f) => {
+            const ext = getFileExtension(f.name);
+            return (
+              <div key={`file-${f.id}`} className="lib-card">
+                <div className="lib-card-body">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span className="lib-category-badge" style={{ background: "#ecfeff", color: "#0891b2" }}>
+                      {ext}
+                    </span>
+                    <span className="lib-card-date">{fmtDate(f.addedAt)}</span>
+                  </div>
+                  <div className="lib-card-title">{f.name}</div>
+                  <div className="lib-card-preview" style={{ color: "#6b7280" }}>
+                    {formatFileSize(f.size)}
+                    {f.textContent !== null && " · Text extracted for AI context"}
+                  </div>
+                </div>
+                <div className="lib-card-actions">
+                  <span className="upload-file-type-badge">{ext}</span>
+                  <button className="item-delete" onClick={() => removeLibraryFile(f.id)} title="Remove file" style={{ opacity: 1 }}>&times;</button>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* ── Note cards ── */}
+          {showNotes && filtered.map((item) => {
+            const isEditing = editingId === item.id;
+            const cs = categoryStyles[item.category];
+
+            return (
+              <div key={item.id} className={`lib-card ${viewingId === item.id ? "lib-card-active" : ""}`}>
+                {isEditing ? (
+                  <div className="inline-form" style={{ border: "none", padding: 0, margin: 0, background: "transparent" }}>
+                    <input
+                      className="input"
+                      value={form.title}
+                      onChange={(e) => setForm({ ...form, title: e.target.value })}
+                      autoFocus
+                    />
+                    <textarea
+                      className="input textarea"
+                      rows={3}
+                      value={form.content}
+                      onChange={(e) => setForm({ ...form, content: e.target.value })}
+                    />
+                    <div className="inline-form-row">
+                      <select
+                        className="select"
+                        value={form.category}
+                        onChange={(e) => setForm({ ...form, category: e.target.value as Category })}
+                      >
+                        {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
                       <input
                         className="input"
-                        value={form.title}
-                        onChange={(e) => setForm({ ...form, title: e.target.value })}
-                        autoFocus
+                        placeholder="Tags (comma-separated)"
+                        value={form.tags}
+                        onChange={(e) => setForm({ ...form, tags: e.target.value })}
                       />
-                      <textarea
-                        className="input textarea"
-                        rows={3}
-                        value={form.content}
-                        onChange={(e) => setForm({ ...form, content: e.target.value })}
-                      />
-                      <div className="inline-form-row">
-                        <select
-                          className="select"
-                          value={form.category}
-                          onChange={(e) => setForm({ ...form, category: e.target.value as Category })}
-                        >
-                          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                        <input
-                          className="input"
-                          placeholder="Tags (comma-separated)"
-                          value={form.tags}
-                          onChange={(e) => setForm({ ...form, tags: e.target.value })}
-                        />
-                      </div>
-                      <div className="inline-form-actions">
-                        <button className="btn btn-primary btn-sm" onClick={() => updateItem(item.id)}>Save</button>
-                        <button className="btn btn-secondary btn-sm" onClick={cancelEdit}>Cancel</button>
-                      </div>
                     </div>
-                  ) : (
-                    /* ── Display mode ── */
-                    <>
-                      <div className="lib-card-body" onClick={() => setViewingId(viewingId === item.id ? null : item.id)}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span className="lib-category-badge" style={{ background: cs.bg, color: cs.color }}>
-                            {item.category}
-                          </span>
-                          <span className="lib-card-date">{fmtDate(item.updatedAt)}</span>
+                    <div className="inline-form-actions">
+                      <button className="btn btn-primary btn-sm" onClick={() => updateItem(item.id)}>Save</button>
+                      <button className="btn btn-secondary btn-sm" onClick={cancelEdit}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="lib-card-body" onClick={() => setViewingId(viewingId === item.id ? null : item.id)}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span className="lib-category-badge" style={{ background: cs.bg, color: cs.color }}>
+                          {item.category}
+                        </span>
+                        <span className="lib-card-date">{fmtDate(item.updated_at)}</span>
+                      </div>
+                      <div className="lib-card-title">{item.title}</div>
+                      {item.content && (
+                        <div className="lib-card-preview">
+                          {item.content.length > 120 ? item.content.slice(0, 120) + "..." : item.content}
                         </div>
-                        <div className="lib-card-title">{item.title}</div>
-                        {item.content && (
-                          <div className="lib-card-preview">
-                            {item.content.length > 120 ? item.content.slice(0, 120) + "..." : item.content}
-                          </div>
-                        )}
-                        {item.tags.length > 0 && (
-                          <div className="lib-card-tags">
-                            {item.tags.map((t) => <span key={t} className="tag">{t}</span>)}
-                          </div>
-                        )}
-                      </div>
-                      <div className="lib-card-actions">
-                        <button className="text-link" onClick={() => startEdit(item)}>Edit</button>
-                        <button className="item-delete" onClick={() => deleteItem(item.id)} title="Delete" style={{ opacity: 1 }}>&times;</button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                      )}
+                      {item.tags.length > 0 && (
+                        <div className="lib-card-tags">
+                          {item.tags.map((t) => <span key={t} className="tag">{t}</span>)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="lib-card-actions">
+                      <button className="text-link" onClick={() => startEdit(item)}>Edit</button>
+                      <button className="item-delete" onClick={() => deleteItem(item.id)} title="Delete" style={{ opacity: 1 }}>&times;</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </>
   );

@@ -1,11 +1,31 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useRef } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+} from "react";
 import type { ReactNode } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { createClient } from "@/lib/supabase/client";
 
 /* ── Types ─────────────────────────────────────────────── */
 
 export interface UploadedFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;        /* mime type */
+  addedAt: string;
+  textContent: string | null;
+  storagePath: string; /* path in Supabase Storage */
+}
+
+/* Chat files are session-only — stored in memory with the raw File */
+export interface ChatFile {
   id: string;
   name: string;
   size: number;
@@ -16,13 +36,14 @@ export interface UploadedFile {
 }
 
 interface FileContextValue {
-  /* Library files — permanent platform storage, AI always has context */
+  /* Library files — permanent, persisted to Supabase */
   libraryFiles: UploadedFile[];
   addLibraryFiles: (newFiles: File[]) => Promise<void>;
-  removeLibraryFile: (id: string) => void;
+  removeLibraryFile: (id: string) => Promise<void>;
+  libraryLoading: boolean;
 
-  /* Chat files — session-only, gone when conversation ends */
-  chatFiles: UploadedFile[];
+  /* Chat files — session-only, in-memory only */
+  chatFiles: ChatFile[];
   addChatFiles: (newFiles: File[]) => Promise<void>;
   removeChatFile: (id: string) => void;
   clearChatFiles: () => void;
@@ -72,36 +93,6 @@ export function getFileExtension(name: string): string {
   return (name.split(".").pop() ?? "").toUpperCase();
 }
 
-/* shared logic for processing files */
-async function processFiles(rawFiles: File[]): Promise<UploadedFile[]> {
-  const entries: UploadedFile[] = [];
-
-  for (const file of rawFiles) {
-    if (file.size > MAX_FILE_SIZE) continue;
-
-    let textContent: string | null = null;
-    if (isTextReadable(file)) {
-      try {
-        textContent = await readFileAsText(file);
-      } catch {
-        textContent = null;
-      }
-    }
-
-    entries.push({
-      id: uid("file"),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      addedAt: new Date().toISOString(),
-      textContent,
-      file,
-    });
-  }
-
-  return entries;
-}
-
 /* ── Context ───────────────────────────────────────────── */
 
 const FileContext = createContext<FileContextValue | null>(null);
@@ -115,35 +106,172 @@ export function useFiles(): FileContextValue {
 /* ── Provider ──────────────────────────────────────────── */
 
 export function FileProvider({ children }: { children: ReactNode }) {
-  /* Library files — permanent platform storage */
-  const [libraryFiles, setLibraryFiles] = useState<UploadedFile[]>([]);
+  const { user } = useAuth();
+  const supabase = createClient();
 
-  /* Chat files — session-only, temporary context for current conversation */
-  const [chatFiles, setChatFiles] = useState<UploadedFile[]>([]);
+  /* Library files — persisted to Supabase Storage + library_files table */
+  const [libraryFiles, setLibraryFiles] = useState<UploadedFile[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(true);
+
+  /* Chat files — session-only, in-memory */
+  const [chatFiles, setChatFiles] = useState<ChatFile[]>([]);
 
   /* prevent rapid duplicate drops */
   const processingRef = useRef(false);
 
-  const addLibraryFiles = useCallback(async (newFiles: File[]) => {
-    if (processingRef.current) return;
-    processingRef.current = true;
-    try {
-      const entries = await processFiles(newFiles);
-      if (entries.length > 0) setLibraryFiles((prev) => [...entries, ...prev]);
-    } finally {
-      processingRef.current = false;
+  /* ── Load library files from Supabase on login ── */
+  useEffect(() => {
+    if (!user) {
+      setLibraryFiles([]);
+      setLibraryLoading(false);
+      return;
     }
-  }, []);
 
-  const removeLibraryFile = useCallback((id: string) => {
-    setLibraryFiles((prev) => prev.filter((f) => f.id !== id));
-  }, []);
+    setLibraryLoading(true);
+    supabase
+      .from("library_files")
+      .select("*")
+      .order("added_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setLibraryFiles(
+            data.map((row) => ({
+              id: row.id,
+              name: row.name,
+              size: row.size,
+              type: row.mime_type,
+              addedAt: row.added_at,
+              textContent: row.text_content,
+              storagePath: row.storage_path,
+            }))
+          );
+        }
+        setLibraryLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  /* ── Add library files (upload to Storage + insert metadata) ── */
+  const addLibraryFiles = useCallback(
+    async (newFiles: File[]) => {
+      if (!user || processingRef.current) return;
+      processingRef.current = true;
+
+      try {
+        const entries: UploadedFile[] = [];
+
+        for (const file of newFiles) {
+          if (file.size > MAX_FILE_SIZE) continue;
+
+          /* Extract text for AI context */
+          let textContent: string | null = null;
+          if (isTextReadable(file)) {
+            try {
+              textContent = await readFileAsText(file);
+            } catch {
+              textContent = null;
+            }
+          }
+
+          /* Upload file to Supabase Storage */
+          const storagePath = `${user.id}/${Date.now()}-${file.name}`;
+          const { error: uploadError } = await supabase.storage
+            .from("library-files")
+            .upload(storagePath, file);
+
+          if (uploadError) {
+            console.error("Upload error:", uploadError.message);
+            continue;
+          }
+
+          /* Insert metadata row */
+          const { data: row, error: insertError } = await supabase
+            .from("library_files")
+            .insert({
+              user_id: user.id,
+              name: file.name,
+              size: file.size,
+              mime_type: file.type || "application/octet-stream",
+              storage_path: storagePath,
+              text_content: textContent,
+            })
+            .select()
+            .single();
+
+          if (insertError || !row) {
+            console.error("Insert error:", insertError?.message);
+            continue;
+          }
+
+          entries.push({
+            id: row.id,
+            name: row.name,
+            size: row.size,
+            type: row.mime_type,
+            addedAt: row.added_at,
+            textContent: row.text_content,
+            storagePath: row.storage_path,
+          });
+        }
+
+        if (entries.length > 0) {
+          setLibraryFiles((prev) => [...entries, ...prev]);
+        }
+      } finally {
+        processingRef.current = false;
+      }
+    },
+    [user, supabase]
+  );
+
+  /* ── Remove library file (delete from Storage + table) ── */
+  const removeLibraryFile = useCallback(
+    async (id: string) => {
+      if (!user) return;
+      const file = libraryFiles.find((f) => f.id === id);
+      if (!file) return;
+
+      /* Remove from Storage */
+      await supabase.storage
+        .from("library-files")
+        .remove([file.storagePath]);
+
+      /* Remove metadata row */
+      await supabase.from("library_files").delete().eq("id", id);
+
+      /* Update local state */
+      setLibraryFiles((prev) => prev.filter((f) => f.id !== id));
+    },
+    [user, libraryFiles, supabase]
+  );
+
+  /* ── Chat files — session-only (no Supabase) ── */
 
   const addChatFiles = useCallback(async (newFiles: File[]) => {
     if (processingRef.current) return;
     processingRef.current = true;
     try {
-      const entries = await processFiles(newFiles);
+      const entries: ChatFile[] = [];
+      for (const file of newFiles) {
+        if (file.size > MAX_FILE_SIZE) continue;
+        let textContent: string | null = null;
+        if (isTextReadable(file)) {
+          try {
+            textContent = await readFileAsText(file);
+          } catch {
+            textContent = null;
+          }
+        }
+        entries.push({
+          id: uid("chat"),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          addedAt: new Date().toISOString(),
+          textContent,
+          file,
+        });
+      }
       if (entries.length > 0) setChatFiles((prev) => [...entries, ...prev]);
     } finally {
       processingRef.current = false;
@@ -161,8 +289,14 @@ export function FileProvider({ children }: { children: ReactNode }) {
   return (
     <FileContext.Provider
       value={{
-        libraryFiles, addLibraryFiles, removeLibraryFile,
-        chatFiles, addChatFiles, removeChatFile, clearChatFiles,
+        libraryFiles,
+        addLibraryFiles,
+        removeLibraryFile,
+        libraryLoading,
+        chatFiles,
+        addChatFiles,
+        removeChatFile,
+        clearChatFiles,
       }}
     >
       {children}
