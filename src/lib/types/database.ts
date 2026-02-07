@@ -116,6 +116,35 @@ export interface TeamFile {
   added_at: string;
 }
 
+// Phase 9: Organization
+export type OrgStage = "Idea" | "Pre-Seed" | "Seed" | "Series A" | "Series B" | "Series C+" | "Growth" | "Public";
+
+export interface Organization {
+  id: string;
+  user_id: string;
+  name: string;
+  industry: string;
+  description: string;
+  website: string;
+  stage: OrgStage | "";
+  target_market: string;
+  differentiators: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrganizationFile {
+  id: string;
+  user_id: string;
+  name: string;
+  size: number;
+  mime_type: string;
+  storage_path: string;
+  text_content: string | null;
+  added_at: string;
+}
+
 // Phase 8: Tool Catalog + Stack
 export type ToolStatus = "Active" | "Evaluating" | "Deprecated";
 

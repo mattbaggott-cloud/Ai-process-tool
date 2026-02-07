@@ -43,6 +43,8 @@ export async function executeTool(
         return await handleDeleteTeamTools(input, supabase);
       case "delete_goal":
         return await handleDeleteGoal(input, supabase);
+      case "update_organization":
+        return await handleUpdateOrganization(input, supabase, userId);
       case "search_tool_catalog":
         return await handleSearchToolCatalog(input, supabase);
       case "add_stack_tool":
@@ -677,6 +679,47 @@ async function handleDeleteGoal(
   const { error } = await supabase.from("goals").delete().eq("id", goalId);
   if (error) return { success: false, message: `Failed to delete goal: ${error.message}` };
   return { success: true, message: `Deleted goal "${goalName}" and all its sub-goals` };
+}
+
+/* ══════════════════════════════════════════════════════════
+   ORGANIZATION HANDLERS
+   ══════════════════════════════════════════════════════════ */
+
+async function handleUpdateOrganization(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  /* Build partial update from any provided fields */
+  const fields = ["name", "industry", "description", "website", "stage", "target_market", "differentiators", "notes"];
+  const updates: Record<string, unknown> = {};
+  for (const f of fields) {
+    if (input[f] !== undefined && input[f] !== null) {
+      updates[f] = input[f];
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: "No fields provided to update" };
+  }
+
+  updates.updated_at = new Date().toISOString();
+
+  /* Upsert (create if not exists, update if exists) */
+  const { data, error } = await supabase
+    .from("organizations")
+    .upsert(
+      { user_id: userId, ...updates },
+      { onConflict: "user_id" }
+    )
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to update organization: ${error.message}` };
+
+  const updatedFields = Object.keys(updates).filter((k) => k !== "updated_at").join(", ");
+  const orgName = data.name ? ` for "${data.name}"` : "";
+  return { success: true, message: `Updated organization${orgName}: ${updatedFields}` };
 }
 
 /* ══════════════════════════════════════════════════════════

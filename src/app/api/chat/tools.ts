@@ -322,6 +322,31 @@ export function getToolDefinitions(): Tool[] {
       },
     },
 
+    /* ── Organization tools ──────────────────────────────── */
+    {
+      name: "update_organization",
+      description:
+        "Update the user's organization profile. Use when the user mentions their company name, what they sell, their industry, stage, target market, differentiators, or other company info. This is a partial update — only specified fields are changed.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string", description: "Company name (e.g. 'Acme Corp')" },
+          industry: { type: "string", description: "Industry (e.g. 'B2B SaaS', 'FinTech')" },
+          description: { type: "string", description: "What the company does / sells" },
+          website: { type: "string", description: "Company website URL" },
+          stage: {
+            type: "string",
+            enum: ["Idea", "Pre-Seed", "Seed", "Series A", "Series B", "Series C+", "Growth", "Public"],
+            description: "Company stage",
+          },
+          target_market: { type: "string", description: "Target market or ideal customer profile (ICP)" },
+          differentiators: { type: "string", description: "Key differentiators / competitive advantages" },
+          notes: { type: "string", description: "Additional business context or notes" },
+        },
+        required: [],
+      },
+    },
+
     /* ── Stack & Catalog tools ────────────────────────────── */
     {
       name: "search_tool_catalog",

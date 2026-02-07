@@ -10,7 +10,6 @@ import { createClient } from "@/lib/supabase/client";
 
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
-  { label: "Goals",      href: "/goals",      icon: "target" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Brainstorm", href: "/brainstorm",  icon: "zap" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
@@ -51,6 +50,13 @@ const icons: Record<string, React.ReactNode> = {
       <path d="M10.3 2.3a3.5 3.5 0 0 0-4.1 5.5L2.5 11.5a1.4 1.4 0 0 0 2 2l3.7-3.7a3.5 3.5 0 0 0 5.5-4.1L11.5 7.8 9.2 5.5l2.1-2.1-.7-.7-.3-.4Z" />
     </svg>
   ),
+  building: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 14V3.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1V14" />
+      <path d="M1.5 14h13" />
+      <path d="M6 5.5h1M9 5.5h1M6 8h1M9 8h1M6.5 14v-2.5h3V14" />
+    </svg>
+  ),
   users: (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="5.5" cy="5.5" r="2" /><path d="M1.5 13.5a4 4 0 0 1 8 0" />
@@ -71,9 +77,10 @@ export default function Sidebar() {
   const router = useRouter();
   const { user } = useAuth();
 
-  /* ── Load teams dynamically ── */
+  /* ── Load teams + org name dynamically ── */
   const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
-  const loadSidebarTeams = useCallback(() => {
+  const [orgName, setOrgName] = useState<string>("");
+  const loadSidebarData = useCallback(() => {
     if (!user) return;
     const supabase = createClient();
     supabase
@@ -83,16 +90,24 @@ export default function Sidebar() {
       .then(({ data }) => {
         if (data) setSidebarTeams(data.map((t) => ({ slug: t.slug, name: t.name || t.slug })));
       });
+    supabase
+      .from("organizations")
+      .select("name")
+      .eq("user_id", user.id)
+      .single()
+      .then(({ data }) => {
+        if (data?.name) setOrgName(data.name);
+      });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadSidebarTeams(); }, [loadSidebarTeams]);
+  useEffect(() => { loadSidebarData(); }, [loadSidebarData]);
 
   /* Listen for AI-triggered data changes */
   useEffect(() => {
-    const handler = () => loadSidebarTeams();
+    const handler = () => loadSidebarData();
     window.addEventListener("workspace-updated", handler);
     return () => window.removeEventListener("workspace-updated", handler);
-  }, [loadSidebarTeams]);
+  }, [loadSidebarData]);
 
   const handleSignOut = async () => {
     const supabase = createClient();
@@ -130,6 +145,25 @@ export default function Sidebar() {
         {/* ─── Business Model ─── */}
         <div className="nav-section">
           <div className="nav-section-title">Business Model</div>
+
+          {/* Organization */}
+          <Link
+            href="/organization"
+            prefetch={false}
+            className={`nav-item ${pathname === "/organization" ? "active" : ""}`}
+          >
+            <span className="nav-icon">{icons.building}</span>
+            {orgName || "Organization"}
+          </Link>
+          <Link
+            href="/organization/goals"
+            prefetch={false}
+            className={`nav-item-sub ${isActive("/organization/goals") ? "active" : ""}`}
+          >
+            Goals
+          </Link>
+
+          {/* Teams */}
           <Link
             href="/teams"
             prefetch={false}

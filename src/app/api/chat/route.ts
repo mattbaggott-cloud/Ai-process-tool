@@ -23,6 +23,8 @@ function truncate(text: string | null, max: number): string {
 
 function buildSystemPrompt(data: {
   email: string;
+  organization: Record<string, unknown> | null;
+  organizationFiles: Record<string, unknown>[];
   teams: Record<string, unknown>[];
   teamRoles: Record<string, unknown>[];
   teamKpis: Record<string, unknown>[];
@@ -39,7 +41,8 @@ function buildSystemPrompt(data: {
   currentPage: string;
 }): string {
   const {
-    email, teams, teamRoles, teamKpis, teamTools, teamFiles,
+    email, organization, organizationFiles,
+    teams, teamRoles, teamKpis, teamTools, teamFiles,
     goals, subGoals, libraryItems, libraryFiles,
     stackTools, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage,
@@ -96,6 +99,7 @@ function buildSystemPrompt(data: {
 
 ## Your Capabilities
 You can take actions in the user's workspace using tools:
+- Update the organization profile (company name, industry, description, stage, target market, differentiators)
 - Create teams and add roles, KPIs, and tools to them
 - Delete roles, KPIs, and tools from teams
 - Create goals and sub-goals, update their status
@@ -113,6 +117,40 @@ When the user asks about tools, use search_tool_catalog to look up details. When
 ## User's Current Page
 ${currentPage}
 `;
+
+  /* ── Organization ── */
+  if (organization) {
+    const org = organization;
+    prompt += `\n## Organization\n`;
+    if (org.name) prompt += `**Company:** ${org.name}\n`;
+    if (org.industry) prompt += `**Industry:** ${org.industry}\n`;
+    if (org.description) prompt += `**What they sell:** ${org.description}\n`;
+    if (org.website) prompt += `**Website:** ${org.website}\n`;
+    if (org.stage) prompt += `**Stage:** ${org.stage}\n`;
+    if (org.target_market) prompt += `**Target Market/ICP:** ${org.target_market}\n`;
+    if (org.differentiators) prompt += `**Differentiators:** ${org.differentiators}\n`;
+    if (org.notes) prompt += `**Notes:** ${org.notes}\n`;
+
+    /* Auto-calculate team size from roles */
+    const totalHeadcount = teamRoles.reduce(
+      (sum, r) => sum + ((r.headcount as number) ?? 0),
+      0
+    );
+    if (totalHeadcount > 0) prompt += `**Team Size:** ${totalHeadcount} people\n`;
+  }
+
+  /* ── Organization Files ── */
+  if (organizationFiles.length > 0) {
+    prompt += `\n### Company Documents\n`;
+    for (const f of organizationFiles) {
+      const content = truncate(f.text_content as string | null, 2000);
+      if (content) {
+        prompt += `- ${f.name}:\n${content}\n`;
+      } else {
+        prompt += `- ${f.name} (no text extracted)\n`;
+      }
+    }
+  }
 
   /* ── Teams ── */
   if (teams.length > 0) {
@@ -302,6 +340,8 @@ export async function POST(req: Request) {
 
   /* 4. Load ALL user data in parallel */
   const [
+    { data: organization },
+    { data: organizationFiles },
     { data: teams },
     { data: teamRoles },
     { data: teamKpis },
@@ -314,6 +354,8 @@ export async function POST(req: Request) {
     { data: stackTools },
     { data: catalogCategories },
   ] = await Promise.all([
+    supabase.from("organizations").select("*").eq("user_id", user.id).single(),
+    supabase.from("organization_files").select("id, name, text_content").order("added_at", { ascending: false }),
     supabase.from("teams").select("*").order("created_at"),
     supabase.from("team_roles").select("*").order("created_at"),
     supabase.from("team_kpis").select("*").order("created_at"),
@@ -351,6 +393,8 @@ export async function POST(req: Request) {
   /* 5. Build system prompt */
   const systemPrompt = buildSystemPrompt({
     email: user.email ?? "User",
+    organization: organization ?? null,
+    organizationFiles: organizationFiles ?? [],
     teams: teams ?? [],
     teamRoles: teamRoles ?? [],
     teamKpis: teamKpis ?? [],
