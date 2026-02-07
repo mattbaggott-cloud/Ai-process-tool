@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
+import { useFiles, formatFileSize, getFileExtension, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
+import type { UploadedFile } from "@/context/FileContext";
 
 /* ══════════════════════════════════════════════════════════
    TYPES
@@ -52,6 +54,80 @@ export default function LibraryPage() {
   /* ── Form state ── */
   const blankItem = { title: "", content: "", category: "Note" as Category, tags: "" };
   const [form, setForm] = useState(blankItem);
+
+  /* ── File upload (library = permanent platform storage) ── */
+  const { libraryFiles, addLibraryFiles, removeLibraryFile } = useFiles();
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const dragCounter = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current += 1;
+    if (dragCounter.current === 1) setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current -= 1;
+    if (dragCounter.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const validateAndAdd = useCallback(async (fileList: FileList | File[]) => {
+    setUploadError("");
+    const valid: File[] = [];
+    const files = Array.from(fileList);
+    for (const f of files) {
+      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+      if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+        setUploadError(`Unsupported file type: .${ext}. Accepted: ${ACCEPTED_EXTENSIONS.join(", ")}`);
+        continue;
+      }
+      if (f.size > 10 * 1024 * 1024) {
+        setUploadError(`File too large: ${f.name}. Max 10 MB.`);
+        continue;
+      }
+      valid.push(f);
+    }
+    if (valid.length > 0) await addLibraryFiles(valid);
+  }, [addLibraryFiles]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      await validateAndAdd(e.dataTransfer.files);
+    }
+  }, [validateAndAdd]);
+
+  const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await validateAndAdd(e.target.files);
+      e.target.value = "";
+    }
+  }, [validateAndAdd]);
+
+  const fmtUploadDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  /* ── Search files ── */
+  const matchesFileSearch = (f: UploadedFile) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return f.name.toLowerCase().includes(q);
+  };
+
+  const filteredFiles = libraryFiles.filter(matchesFileSearch);
 
   /* ── CRUD ── */
   const addItem = () => {
@@ -110,7 +186,7 @@ export default function LibraryPage() {
     setForm(blankItem);
   };
 
-  /* ── Search & filter ── */
+  /* ── Search & filter notes ── */
   const matchesSearch = (item: LibraryItem) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -141,7 +217,7 @@ export default function LibraryPage() {
       <div className="canvas-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <h1 className="canvas-title">Library</h1>
-          <p className="canvas-subtitle">Searchable archive of notes, documents, and references</p>
+          <p className="canvas-subtitle">Platform storage for files, notes, and documents. AI has context of everything here.</p>
         </div>
         <button
           className="btn btn-primary"
@@ -196,11 +272,99 @@ export default function LibraryPage() {
         {/* ── Search ── */}
         <input
           className="input"
-          placeholder="Search by title, content, or tags..."
+          placeholder="Search files, notes, and documents..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: 12 }}
         />
+
+        {/* ── Compact upload drop zone ── */}
+        <div
+          className={`upload-zone-compact ${isDragging ? "upload-zone-compact-active" : ""}`}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_EXTENSIONS.map((e) => `.${e}`).join(",")}
+            onChange={handleFileInput}
+            style={{ display: "none" }}
+          />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="upload-zone-compact-icon">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          <span className="upload-zone-compact-text">
+            {isDragging ? "Drop files here" : "Drop files here or"}
+          </span>
+          {!isDragging && <span className="upload-browse-btn">browse</span>}
+          <span className="upload-zone-compact-hint">PDF, CSV, TXT, MD, JSON, TSV</span>
+        </div>
+
+        {uploadError && (
+          <div className="upload-error" style={{ marginTop: 8 }}>{uploadError}</div>
+        )}
+
+        {/* ── Uploaded files table ── */}
+        {filteredFiles.length > 0 && (
+          <div className="upload-file-list" style={{ marginTop: 12, marginBottom: 20, maxHeight: 320, overflowY: "auto" }}>
+            {filteredFiles.map((f) => {
+              const ext = getFileExtension(f.name);
+              return (
+                <div key={f.id} className="upload-file-row">
+                  <div className="upload-file-icon">
+                    {ext === "PDF" ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                    ) : ext === "CSV" || ext === "TSV" ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <line x1="3" y1="9" x2="21" y2="9" />
+                        <line x1="3" y1="15" x2="21" y2="15" />
+                        <line x1="9" y1="3" x2="9" y2="21" />
+                        <line x1="15" y1="3" x2="15" y2="21" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="16" y1="13" x2="8" y2="13" />
+                        <line x1="16" y1="17" x2="8" y2="17" />
+                      </svg>
+                    )}
+                  </div>
+                  <span className="upload-file-name" title={f.name}>{f.name}</span>
+                  <span className="upload-file-type-badge">{ext}</span>
+                  <span className="upload-file-size">{formatFileSize(f.size)}</span>
+                  <span className="upload-file-date">{fmtUploadDate(f.addedAt)}</span>
+                  {f.textContent !== null && (
+                    <span className="upload-file-status" title="Text extracted for AI context">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </span>
+                  )}
+                  <button
+                    className="item-delete"
+                    onClick={() => removeLibraryFile(f.id)}
+                    title="Remove file"
+                    style={{ opacity: 1 }}
+                  >
+                    &times;
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* ── Filter pills ── */}
         {items.length > 0 && (
@@ -261,18 +425,8 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* ── Item list ── */}
-        {filtered.length === 0 && !showForm ? (
-          <div className="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: "0 auto 16px" }}>
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-            </svg>
-            <h3>{items.length === 0 ? "Library is empty" : "No matching items"}</h3>
-            <p>{items.length === 0
-              ? "Click \"+ New Item\" to save your first note, document, or reference."
-              : "Try adjusting your search or filter."}</p>
-          </div>
-        ) : (
+        {/* ── Note cards ── */}
+        {filtered.length > 0 && (
           <div className="lib-grid">
             {filtered.map((item) => {
               const isEditing = editingId === item.id;

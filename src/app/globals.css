@@ -1523,3 +1523,316 @@ body {
   padding-top: 16px;
   border-top: 1px solid var(--color-gray-100);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   UPLOAD DROP ZONE
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Compact upload drop zone (single row) ───────────────── */
+
+.upload-zone-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 6px;
+  background: var(--color-gray-50);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.upload-zone-compact:hover {
+  border-color: var(--color-gray-300);
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.upload-zone-compact-active {
+  border-color: #0891b2;
+  background: #ecfeff;
+  box-shadow: 0 0 0 1px #0891b2;
+}
+
+.upload-zone-compact-icon {
+  color: var(--color-gray-400);
+  flex-shrink: 0;
+}
+
+.upload-zone-compact-active .upload-zone-compact-icon {
+  color: #0891b2;
+}
+
+.upload-zone-compact-text {
+  font-size: 13px;
+  color: var(--color-gray-500);
+}
+
+.upload-zone-compact-hint {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  margin-left: auto;
+}
+
+.upload-browse-btn {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-primary-500);
+}
+
+.upload-zone-compact:hover .upload-browse-btn {
+  color: var(--color-primary-600);
+}
+
+.upload-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-error);
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+}
+
+/* ── Uploaded file list ──────────────────────────────────── */
+
+.upload-file-list {
+  margin-top: 12px;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.upload-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-gray-100);
+  transition: background 0.15s;
+}
+
+.upload-file-row:last-child {
+  border-bottom: none;
+}
+
+.upload-file-row:hover {
+  background: var(--color-gray-50);
+}
+
+.upload-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: #ecfeff;
+  color: #0891b2;
+  flex-shrink: 0;
+}
+
+.upload-file-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-gray-900);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-file-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: #ecfeff;
+  color: #0891b2;
+  flex-shrink: 0;
+}
+
+.upload-file-size {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.upload-file-date {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.upload-file-status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AI FILE CONTEXT (Chat Panel)
+   ═══════════════════════════════════════════════════════════ */
+
+.ai-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #0891b2;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+/* ── File picker popover ─────────────────────────────────── */
+
+.ai-file-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.ai-file-picker-header {
+  padding: 10px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-500);
+}
+
+.ai-file-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ai-file-picker-item:hover {
+  background: var(--color-gray-50);
+}
+
+.ai-file-picker-item input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  border: 1px solid var(--color-gray-300);
+  cursor: pointer;
+  accent-color: #0891b2;
+  flex-shrink: 0;
+}
+
+.ai-file-picker-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-gray-700);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-file-picker-footer {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--color-gray-400);
+  border-top: 1px solid var(--color-gray-100);
+  text-align: center;
+}
+
+.ai-file-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 16px;
+  font-size: 13px;
+  color: var(--color-gray-600);
+  gap: 2px;
+}
+
+/* ── Selected file chips ─────────────────────────────────── */
+
+.ai-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.ai-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 10px;
+  border-radius: 9999px;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  font-size: 12px;
+  color: #0891b2;
+}
+
+.ai-file-chip-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-file-chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #0891b2;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+
+.ai-file-chip-remove:hover {
+  background: #a5f3fc;
+}
+
+.ai-file-chip-clear {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-gray-400);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-family: inherit;
+  transition: color 0.15s;
+}
+
+.ai-file-chip-clear:hover {
+  color: var(--color-error);
+}

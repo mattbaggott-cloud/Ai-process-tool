@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useFiles, formatFileSize, getFileExtension, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 
 interface Message {
   role: "user" | "assistant";
@@ -17,10 +18,23 @@ export default function AIChat() {
   ]);
   const [input, setInput] = useState("");
 
+  /* Chat files are session-only — gone when conversation ends */
+  const { chatFiles, addChatFiles, removeChatFile, clearChatFiles } = useFiles();
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleChatFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await addChatFiles(Array.from(e.target.files));
+      e.target.value = "";
+    }
+  }, [addChatFiles]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
     // Will be wired to Claude API in Phase 2
+    // AI always has context of all library files
+    // chatFiles are additional session-only context for this conversation
     setInput("");
   };
 
@@ -53,12 +67,51 @@ export default function AIChat() {
 
       {/* ─── Input ─── */}
       <div className="ai-input-area">
-        <button className="ai-upload-btn" type="button">
+
+        {/* ── Add files for this session ── */}
+        <input
+          ref={chatFileInputRef}
+          type="file"
+          multiple
+          accept={ACCEPTED_EXTENSIONS.map((e) => `.${e}`).join(",")}
+          onChange={handleChatFileInput}
+          style={{ display: "none" }}
+        />
+        <button
+          className="ai-upload-btn"
+          type="button"
+          onClick={() => chatFileInputRef.current?.click()}
+        >
           <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
             <path d="M7 1v12M1 7h12" />
           </svg>
-          Add files for context
+          Add files for this session
         </button>
+
+        {/* ── Session file chips ── */}
+        {chatFiles.length > 0 && (
+          <div className="ai-file-chips">
+            {chatFiles.map((f) => (
+              <span key={f.id} className="ai-file-chip">
+                <span className="ai-file-chip-name">{f.name}</span>
+                <button
+                  className="ai-file-chip-remove"
+                  onClick={() => removeChatFile(f.id)}
+                  title="Remove from session"
+                >
+                  &times;
+                </button>
+              </span>
+            ))}
+            <button
+              className="ai-file-chip-clear"
+              onClick={clearChatFiles}
+              title="Clear all session files"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="ai-form">
           <textarea
