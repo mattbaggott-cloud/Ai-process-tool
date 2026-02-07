@@ -1,9 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+import { createClient } from "@/lib/supabase/client";
+import type { KpiPeriod } from "@/lib/types/database";
 
-/* ── Types ──────────────────────────────────────────────── */
+/* ── Local types (match Supabase columns) ──────────────── */
 
 interface Role {
   id: string;
@@ -12,14 +15,12 @@ interface Role {
   headcount: number;
 }
 
-type Period = "Day" | "Week" | "Month" | "Quarter" | "Year";
-
 interface KPI {
   id: string;
   name: string;
-  current: number | "";
-  target: number | "";
-  period: Period;
+  current_value: number | null;
+  target_value: number | null;
+  period: KpiPeriod;
 }
 
 interface Tool {
@@ -36,18 +37,17 @@ const teamNames: Record<string, string> = {
   "customer-success": "Customer Success",
 };
 
-/* ── Unique ID helper ───────────────────────────────────── */
-
-let counter = 0;
-const uid = () => `item-${++counter}-${Date.now()}`;
-
 /* ── Component ──────────────────────────────────────────── */
 
 export default function TeamPage() {
   const { slug } = useParams<{ slug: string }>();
   const teamName = teamNames[slug] || slug;
+  const { user } = useAuth();
+  const supabase = createClient();
 
-  /* ── State ── */
+  /* ── Core state ── */
+  const [teamId, setTeamId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [roles, setRoles] = useState<Role[]>([]);
   const [kpis, setKpis] = useState<KPI[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
@@ -58,11 +58,9 @@ export default function TeamPage() {
   const [showKpiForm, setShowKpiForm] = useState(false);
   const [showToolForm, setShowToolForm] = useState(false);
 
-  /* ── Role form state ── */
+  /* ── Form state ── */
   const [newRole, setNewRole] = useState({ name: "", description: "", headcount: 1 });
-  /* ── KPI form state ── */
-  const [newKpi, setNewKpi] = useState<{ name: string; current: number | ""; target: number | ""; period: Period }>({ name: "", current: "", target: "", period: "Month" });
-  /* ── Tool form state ── */
+  const [newKpi, setNewKpi] = useState<{ name: string; current_value: number | null; target_value: number | null; period: KpiPeriod }>({ name: "", current_value: null, target_value: null, period: "Month" });
   const [newTool, setNewTool] = useState({ name: "", purpose: "" });
 
   /* ── Editing state ── */
@@ -70,66 +68,290 @@ export default function TeamPage() {
   const [editingKpi, setEditingKpi] = useState<string | null>(null);
   const [editingTool, setEditingTool] = useState<string | null>(null);
 
-  /* ── Handlers: Roles ── */
-  const addRole = () => {
-    if (!newRole.name.trim()) return;
-    setRoles([...roles, { id: uid(), ...newRole }]);
+  /* ── Description auto-save on blur ── */
+  const descriptionRef = useRef(description);
+  descriptionRef.current = description;
+
+  /* ── Period options ── */
+  const periods: KpiPeriod[] = ["Day", "Week", "Month", "Quarter", "Year"];
+
+  /* ══════════════════════════════════════════════════════════
+     LOAD: Get-or-create team, then load roles/KPIs/tools
+     ══════════════════════════════════════════════════════════ */
+
+  const loadTeam = useCallback(async () => {
+    if (!user) return;
+
+    /* Get or create the team row */
+    let { data: team } = await supabase
+      .from("teams")
+      .select("*")
+      .eq("slug", slug)
+      .single();
+
+    if (!team) {
+      const { data: newTeam, error } = await supabase
+        .from("teams")
+        .insert({
+          user_id: user.id,
+          slug,
+          name: teamNames[slug] || slug,
+          description: "",
+        })
+        .select()
+        .single();
+
+      if (error || !newTeam) {
+        console.error("Create team error:", error?.message);
+        setLoading(false);
+        return;
+      }
+      team = newTeam;
+    }
+
+    setTeamId(team.id);
+    setDescription(team.description ?? "");
+
+    /* Load child data in parallel */
+    const [rolesRes, kpisRes, toolsRes] = await Promise.all([
+      supabase.from("team_roles").select("*").eq("team_id", team.id).order("created_at"),
+      supabase.from("team_kpis").select("*").eq("team_id", team.id).order("created_at"),
+      supabase.from("team_tools").select("*").eq("team_id", team.id).order("created_at"),
+    ]);
+
+    setRoles(
+      (rolesRes.data ?? []).map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description ?? "",
+        headcount: r.headcount ?? 1,
+      }))
+    );
+
+    setKpis(
+      (kpisRes.data ?? []).map((k) => ({
+        id: k.id,
+        name: k.name,
+        current_value: k.current_value,
+        target_value: k.target_value,
+        period: k.period ?? "Month",
+      }))
+    );
+
+    setTools(
+      (toolsRes.data ?? []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        purpose: t.purpose ?? "",
+      }))
+    );
+
+    setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, slug]);
+
+  useEffect(() => { loadTeam(); }, [loadTeam]);
+
+  /* ══════════════════════════════════════════════════════════
+     DESCRIPTION — auto-save on blur
+     ══════════════════════════════════════════════════════════ */
+
+  const saveDescription = async () => {
+    if (!teamId) return;
+    await supabase
+      .from("teams")
+      .update({ description: descriptionRef.current })
+      .eq("id", teamId);
+  };
+
+  /* ══════════════════════════════════════════════════════════
+     ROLES CRUD
+     ══════════════════════════════════════════════════════════ */
+
+  const addRole = async () => {
+    if (!newRole.name.trim() || !teamId) return;
+
+    const { data: row, error } = await supabase
+      .from("team_roles")
+      .insert({
+        team_id: teamId,
+        name: newRole.name,
+        description: newRole.description,
+        headcount: newRole.headcount,
+      })
+      .select()
+      .single();
+
+    if (error || !row) {
+      console.error("Add role error:", error?.message);
+      return;
+    }
+
+    setRoles((prev) => [...prev, {
+      id: row.id,
+      name: row.name,
+      description: row.description ?? "",
+      headcount: row.headcount ?? 1,
+    }]);
     setNewRole({ name: "", description: "", headcount: 1 });
     setShowRoleForm(false);
   };
 
-  const updateRole = (id: string, updates: Partial<Role>) => {
-    setRoles(roles.map((r) => (r.id === id ? { ...r, ...updates } : r)));
+  const updateRole = async (id: string, updates: Partial<Role>) => {
+    const { error } = await supabase
+      .from("team_roles")
+      .update(updates)
+      .eq("id", id);
+
+    if (error) {
+      console.error("Update role error:", error.message);
+      return;
+    }
+    setRoles((prev) => prev.map((r) => (r.id === id ? { ...r, ...updates } : r)));
   };
 
-  const deleteRole = (id: string) => {
-    setRoles(roles.filter((r) => r.id !== id));
+  const deleteRole = async (id: string) => {
+    const { error } = await supabase.from("team_roles").delete().eq("id", id);
+    if (error) {
+      console.error("Delete role error:", error.message);
+      return;
+    }
+    setRoles((prev) => prev.filter((r) => r.id !== id));
     if (editingRole === id) setEditingRole(null);
   };
 
-  /* ── Period options ── */
-  const periods: Period[] = ["Day", "Week", "Month", "Quarter", "Year"];
+  /* ══════════════════════════════════════════════════════════
+     KPI CRUD
+     ══════════════════════════════════════════════════════════ */
 
-  /* ── Format helper ── */
-  const fmtKpiValue = (val: number | "", period: Period) =>
-    val !== "" ? `${val.toLocaleString()} / ${period}` : "—";
+  const fmtKpiValue = (val: number | null, period: KpiPeriod) =>
+    val !== null ? `${val.toLocaleString()} / ${period}` : "—";
 
-  /* ── Handlers: KPIs ── */
-  const addKpi = () => {
-    if (!newKpi.name.trim()) return;
-    setKpis([...kpis, { id: uid(), ...newKpi }]);
-    setNewKpi({ name: "", current: "", target: "", period: "Month" });
+  const addKpi = async () => {
+    if (!newKpi.name.trim() || !teamId) return;
+
+    const { data: row, error } = await supabase
+      .from("team_kpis")
+      .insert({
+        team_id: teamId,
+        name: newKpi.name,
+        current_value: newKpi.current_value,
+        target_value: newKpi.target_value,
+        period: newKpi.period,
+      })
+      .select()
+      .single();
+
+    if (error || !row) {
+      console.error("Add KPI error:", error?.message);
+      return;
+    }
+
+    setKpis((prev) => [...prev, {
+      id: row.id,
+      name: row.name,
+      current_value: row.current_value,
+      target_value: row.target_value,
+      period: row.period ?? "Month",
+    }]);
+    setNewKpi({ name: "", current_value: null, target_value: null, period: "Month" });
     setShowKpiForm(false);
   };
 
-  const updateKpi = (id: string, updates: Partial<KPI>) => {
-    setKpis(kpis.map((k) => (k.id === id ? { ...k, ...updates } : k)));
+  const updateKpi = async (id: string, updates: Partial<KPI>) => {
+    const { error } = await supabase
+      .from("team_kpis")
+      .update(updates)
+      .eq("id", id);
+
+    if (error) {
+      console.error("Update KPI error:", error.message);
+      return;
+    }
+    setKpis((prev) => prev.map((k) => (k.id === id ? { ...k, ...updates } : k)));
   };
 
-  const deleteKpi = (id: string) => {
-    setKpis(kpis.filter((k) => k.id !== id));
+  const deleteKpi = async (id: string) => {
+    const { error } = await supabase.from("team_kpis").delete().eq("id", id);
+    if (error) {
+      console.error("Delete KPI error:", error.message);
+      return;
+    }
+    setKpis((prev) => prev.filter((k) => k.id !== id));
     if (editingKpi === id) setEditingKpi(null);
   };
 
-  /* ── Handlers: Tools ── */
-  const addTool = () => {
-    if (!newTool.name.trim()) return;
-    setTools([...tools, { id: uid(), ...newTool }]);
+  /* ══════════════════════════════════════════════════════════
+     TOOLS CRUD
+     ══════════════════════════════════════════════════════════ */
+
+  const addTool = async () => {
+    if (!newTool.name.trim() || !teamId) return;
+
+    const { data: row, error } = await supabase
+      .from("team_tools")
+      .insert({
+        team_id: teamId,
+        name: newTool.name,
+        purpose: newTool.purpose,
+      })
+      .select()
+      .single();
+
+    if (error || !row) {
+      console.error("Add tool error:", error?.message);
+      return;
+    }
+
+    setTools((prev) => [...prev, {
+      id: row.id,
+      name: row.name,
+      purpose: row.purpose ?? "",
+    }]);
     setNewTool({ name: "", purpose: "" });
     setShowToolForm(false);
   };
 
-  const updateTool = (id: string, updates: Partial<Tool>) => {
-    setTools(tools.map((t) => (t.id === id ? { ...t, ...updates } : t)));
+  const updateTool = async (id: string, updates: Partial<Tool>) => {
+    const { error } = await supabase
+      .from("team_tools")
+      .update(updates)
+      .eq("id", id);
+
+    if (error) {
+      console.error("Update tool error:", error.message);
+      return;
+    }
+    setTools((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
   };
 
-  const deleteTool = (id: string) => {
-    setTools(tools.filter((t) => t.id !== id));
+  const deleteTool = async (id: string) => {
+    const { error } = await supabase.from("team_tools").delete().eq("id", id);
+    if (error) {
+      console.error("Delete tool error:", error.message);
+      return;
+    }
+    setTools((prev) => prev.filter((t) => t.id !== id));
     if (editingTool === id) setEditingTool(null);
   };
 
   /* ── Computed stats ── */
   const totalHeadcount = roles.reduce((sum, r) => sum + r.headcount, 0);
+
+  /* ── Loading state ── */
+  if (loading) {
+    return (
+      <>
+        <div className="canvas-header">
+          <h1 className="canvas-title">{teamName}</h1>
+          <p className="canvas-subtitle">Define roles, KPIs, and tools for this team</p>
+        </div>
+        <div className="canvas-content">
+          <div className="empty-state"><p>Loading team…</p></div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -321,9 +543,9 @@ export default function TeamPage() {
                   type="number"
                   min={0}
                   placeholder="Current"
-                  value={newKpi.current}
+                  value={newKpi.current_value ?? ""}
                   onChange={(e) =>
-                    setNewKpi({ ...newKpi, current: e.target.value === "" ? "" : Number(e.target.value) })
+                    setNewKpi({ ...newKpi, current_value: e.target.value === "" ? null : Number(e.target.value) })
                   }
                 />
                 <input
@@ -331,15 +553,15 @@ export default function TeamPage() {
                   type="number"
                   min={0}
                   placeholder="Target"
-                  value={newKpi.target}
+                  value={newKpi.target_value ?? ""}
                   onChange={(e) =>
-                    setNewKpi({ ...newKpi, target: e.target.value === "" ? "" : Number(e.target.value) })
+                    setNewKpi({ ...newKpi, target_value: e.target.value === "" ? null : Number(e.target.value) })
                   }
                 />
                 <select
                   className="select"
                   value={newKpi.period}
-                  onChange={(e) => setNewKpi({ ...newKpi, period: e.target.value as Period })}
+                  onChange={(e) => setNewKpi({ ...newKpi, period: e.target.value as KpiPeriod })}
                   style={{ flexShrink: 0 }}
                 >
                   {periods.map((p) => (
@@ -355,7 +577,7 @@ export default function TeamPage() {
                   className="btn btn-secondary btn-sm"
                   onClick={() => {
                     setShowKpiForm(false);
-                    setNewKpi({ name: "", current: "", target: "", period: "Month" });
+                    setNewKpi({ name: "", current_value: null, target_value: null, period: "Month" });
                   }}
                 >
                   Cancel
@@ -387,9 +609,9 @@ export default function TeamPage() {
                           type="number"
                           min={0}
                           placeholder="Current"
-                          value={kpi.current}
+                          value={kpi.current_value ?? ""}
                           onChange={(e) =>
-                            updateKpi(kpi.id, { current: e.target.value === "" ? "" : Number(e.target.value) })
+                            updateKpi(kpi.id, { current_value: e.target.value === "" ? null : Number(e.target.value) })
                           }
                         />
                         <input
@@ -397,15 +619,15 @@ export default function TeamPage() {
                           type="number"
                           min={0}
                           placeholder="Target"
-                          value={kpi.target}
+                          value={kpi.target_value ?? ""}
                           onChange={(e) =>
-                            updateKpi(kpi.id, { target: e.target.value === "" ? "" : Number(e.target.value) })
+                            updateKpi(kpi.id, { target_value: e.target.value === "" ? null : Number(e.target.value) })
                           }
                         />
                         <select
                           className="select"
                           value={kpi.period}
-                          onChange={(e) => updateKpi(kpi.id, { period: e.target.value as Period })}
+                          onChange={(e) => updateKpi(kpi.id, { period: e.target.value as KpiPeriod })}
                           style={{ flexShrink: 0 }}
                         >
                           {periods.map((p) => (
@@ -427,10 +649,10 @@ export default function TeamPage() {
                         <div className="item-name">{kpi.name}</div>
                         <div className="item-meta">
                           <span>
-                            Current: <strong>{fmtKpiValue(kpi.current, kpi.period)}</strong>
+                            Current: <strong>{fmtKpiValue(kpi.current_value, kpi.period)}</strong>
                           </span>
                           <span>
-                            Target: <strong>{fmtKpiValue(kpi.target, kpi.period)}</strong>
+                            Target: <strong>{fmtKpiValue(kpi.target_value, kpi.period)}</strong>
                           </span>
                         </div>
                       </div>
@@ -564,6 +786,7 @@ export default function TeamPage() {
             placeholder="Describe how this team operates, their daily workflow, key processes..."
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            onBlur={saveDescription}
           />
         </div>
       </div>

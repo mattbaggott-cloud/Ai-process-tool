@@ -1,48 +1,45 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { createClient } from "@/lib/supabase/client";
+import type { GoalStatus } from "@/lib/types/database";
 
 /* ══════════════════════════════════════════════════════════
-   TYPES
+   LOCAL TYPES  (matches Supabase columns — snake_case)
    ══════════════════════════════════════════════════════════ */
-
-type Status = "Backlog" | "To Do" | "In Progress" | "In Review" | "Done";
 
 interface Goal {
   id: string;
   name: string;
   description: string;
-  status: Status;
+  status: GoalStatus;
   teams: string[];
-  /* SMART fields */
   owner: string;
-  startDate: string;
-  endDate: string;
+  start_date: string | null;
+  end_date: string | null;
   metric: string;
-  metricTarget: string;
-  /* Sub-goals */
+  metric_target: string;
+  created_at: string;
+  /* joined client-side */
   subGoals: SubGoal[];
 }
 
 interface SubGoal {
   id: string;
+  goal_id: string;
   name: string;
   description: string;
-  status: Status;
+  status: GoalStatus;
   owner: string;
-  endDate: string;
+  end_date: string | null;
 }
-
-/* ── ID helper ──────────────────────────────────────────── */
-
-let counter = 0;
-const uid = () => `g-${++counter}-${Date.now()}`;
 
 /* ── Status config ──────────────────────────────────────── */
 
-const statuses: Status[] = ["Backlog", "To Do", "In Progress", "In Review", "Done"];
+const statuses: GoalStatus[] = ["Backlog", "To Do", "In Progress", "In Review", "Done"];
 
-const statusStyles: Record<Status, { bg: string; color: string; dot: string }> = {
+const statusStyles: Record<GoalStatus, { bg: string; color: string; dot: string }> = {
   Backlog:       { bg: "#f3f4f6", color: "#6b7280", dot: "#9ca3af" },
   "To Do":       { bg: "#fef3c7", color: "#92400e", dot: "#f59e0b" },
   "In Progress": { bg: "#eff6ff", color: "#2563eb", dot: "#2563eb" },
@@ -56,21 +53,20 @@ const teamOptions = ["Sales", "Marketing", "Customer Success"];
 
 /* ── Blank states ───────────────────────────────────────── */
 
-const blankGoal = (): Omit<Goal, "id"> => ({
+const blankGoal = (): Omit<Goal, "id" | "created_at" | "subGoals"> => ({
   name: "", description: "", status: "Backlog", teams: [],
-  owner: "", startDate: "", endDate: "", metric: "", metricTarget: "",
-  subGoals: [],
+  owner: "", start_date: null, end_date: null, metric: "", metric_target: "",
 });
 
-const blankSub = (): Omit<SubGoal, "id"> => ({
-  name: "", description: "", status: "Backlog", owner: "", endDate: "",
+const blankSub = (): Omit<SubGoal, "id" | "goal_id"> => ({
+  name: "", description: "", status: "Backlog", owner: "", end_date: null,
 });
 
 /* ══════════════════════════════════════════════════════════
    SMALL REUSABLE PIECES
    ══════════════════════════════════════════════════════════ */
 
-function StatusPill({ status }: { status: Status }) {
+function StatusPill({ status }: { status: GoalStatus }) {
   const s = statusStyles[status];
   return (
     <span className="goal-status-pill" style={{ background: s.bg, color: s.color }}>
@@ -120,8 +116,8 @@ function GoalForm({
   onCancel,
   saveLabel,
 }: {
-  goal: Omit<Goal, "id">;
-  onChange: (g: Omit<Goal, "id">) => void;
+  goal: Omit<Goal, "id" | "created_at" | "subGoals">;
+  onChange: (g: Omit<Goal, "id" | "created_at" | "subGoals">) => void;
   onSave: () => void;
   onCancel: () => void;
   saveLabel: string;
@@ -148,7 +144,7 @@ function GoalForm({
         <select
           className="select"
           value={goal.status}
-          onChange={(e) => onChange({ ...goal, status: e.target.value as Status })}
+          onChange={(e) => onChange({ ...goal, status: e.target.value as GoalStatus })}
         >
           {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -167,8 +163,8 @@ function GoalForm({
           <input
             className="input"
             type="date"
-            value={goal.startDate}
-            onChange={(e) => onChange({ ...goal, startDate: e.target.value })}
+            value={goal.start_date ?? ""}
+            onChange={(e) => onChange({ ...goal, start_date: e.target.value || null })}
           />
         </div>
         <div style={{ flex: 1 }}>
@@ -176,8 +172,8 @@ function GoalForm({
           <input
             className="input"
             type="date"
-            value={goal.endDate}
-            onChange={(e) => onChange({ ...goal, endDate: e.target.value })}
+            value={goal.end_date ?? ""}
+            onChange={(e) => onChange({ ...goal, end_date: e.target.value || null })}
           />
         </div>
       </div>
@@ -193,8 +189,8 @@ function GoalForm({
         <input
           className="input"
           placeholder="Target (e.g. $2M)"
-          value={goal.metricTarget}
-          onChange={(e) => onChange({ ...goal, metricTarget: e.target.value })}
+          value={goal.metric_target}
+          onChange={(e) => onChange({ ...goal, metric_target: e.target.value })}
         />
       </div>
 
@@ -213,18 +209,74 @@ function GoalForm({
    ══════════════════════════════════════════════════════════ */
 
 export default function GoalsPage() {
+  const { user } = useAuth();
+  const supabase = createClient();
+
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<"All" | Status>("All");
+  const [filter, setFilter] = useState<"All" | GoalStatus>("All");
   const [addingSubFor, setAddingSubFor] = useState<string | null>(null);
 
   /* ── New goal form ── */
-  const [newGoal, setNewGoal] = useState<Omit<Goal, "id">>(blankGoal());
+  const [newGoal, setNewGoal] = useState(blankGoal());
 
   /* ── New sub-goal form ── */
-  const [newSub, setNewSub] = useState<Omit<SubGoal, "id">>(blankSub());
+  const [newSub, setNewSub] = useState(blankSub());
+
+  /* ── Edit goal form (separate state so we don't overwrite the display) ── */
+  const [editForm, setEditForm] = useState(blankGoal());
+
+  /* ── Load goals + sub-goals from Supabase on mount ── */
+  const loadGoals = useCallback(async () => {
+    if (!user) return;
+
+    const [goalsRes, subsRes] = await Promise.all([
+      supabase.from("goals").select("*").order("created_at", { ascending: false }),
+      supabase.from("sub_goals").select("*").order("created_at", { ascending: true }),
+    ]);
+
+    const goalsData = goalsRes.data ?? [];
+    const subsData = subsRes.data ?? [];
+
+    /* Group sub-goals by goal_id */
+    const subsByGoal: Record<string, SubGoal[]> = {};
+    for (const s of subsData) {
+      if (!subsByGoal[s.goal_id]) subsByGoal[s.goal_id] = [];
+      subsByGoal[s.goal_id].push({
+        id: s.id,
+        goal_id: s.goal_id,
+        name: s.name,
+        description: s.description ?? "",
+        status: s.status,
+        owner: s.owner ?? "",
+        end_date: s.end_date,
+      });
+    }
+
+    setGoals(
+      goalsData.map((row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description ?? "",
+        status: row.status,
+        teams: row.teams ?? [],
+        owner: row.owner ?? "",
+        start_date: row.start_date,
+        end_date: row.end_date,
+        metric: row.metric ?? "",
+        metric_target: row.metric_target ?? "",
+        created_at: row.created_at,
+        subGoals: subsByGoal[row.id] ?? [],
+      }))
+    );
+    setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  useEffect(() => { loadGoals(); }, [loadGoals]);
 
   /* ── Toggle expand ── */
   const toggleExpand = (id: string) => {
@@ -235,66 +287,213 @@ export default function GoalsPage() {
     });
   };
 
-  /* ── Goal CRUD ── */
-  const addGoal = () => {
-    if (!newGoal.name.trim()) return;
-    const id = uid();
-    setGoals([...goals, { id, ...newGoal }]);
+  /* ══════════════════════════════════════════════════════════
+     GOAL CRUD — write to Supabase, then update local state
+     ══════════════════════════════════════════════════════════ */
+
+  const addGoal = async () => {
+    if (!newGoal.name.trim() || !user) return;
+
+    const { data: row, error } = await supabase
+      .from("goals")
+      .insert({
+        user_id: user.id,
+        name: newGoal.name,
+        description: newGoal.description,
+        status: newGoal.status,
+        teams: newGoal.teams,
+        owner: newGoal.owner,
+        start_date: newGoal.start_date,
+        end_date: newGoal.end_date,
+        metric: newGoal.metric,
+        metric_target: newGoal.metric_target,
+      })
+      .select()
+      .single();
+
+    if (error || !row) {
+      console.error("Add goal error:", error?.message);
+      return;
+    }
+
+    setGoals((prev) => [
+      {
+        id: row.id,
+        name: row.name,
+        description: row.description ?? "",
+        status: row.status,
+        teams: row.teams ?? [],
+        owner: row.owner ?? "",
+        start_date: row.start_date,
+        end_date: row.end_date,
+        metric: row.metric ?? "",
+        metric_target: row.metric_target ?? "",
+        created_at: row.created_at,
+        subGoals: [],
+      },
+      ...prev,
+    ]);
     setNewGoal(blankGoal());
     setShowForm(false);
   };
 
-  const updateGoal = (id: string, updates: Partial<Goal>) => {
-    setGoals(goals.map((g) => (g.id === id ? { ...g, ...updates } : g)));
+  const updateGoal = async (id: string, updates: Partial<Omit<Goal, "id" | "created_at" | "subGoals">>) => {
+    const { error } = await supabase
+      .from("goals")
+      .update(updates)
+      .eq("id", id);
+
+    if (error) {
+      console.error("Update goal error:", error.message);
+      return;
+    }
+
+    setGoals((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, ...updates } : g))
+    );
   };
 
-  const deleteGoal = (id: string) => {
-    setGoals(goals.filter((g) => g.id !== id));
+  const deleteGoal = async (id: string) => {
+    /* Sub-goals cascade-delete via ON DELETE CASCADE in the DB */
+    const { error } = await supabase.from("goals").delete().eq("id", id);
+    if (error) {
+      console.error("Delete goal error:", error.message);
+      return;
+    }
+    setGoals((prev) => prev.filter((g) => g.id !== id));
     if (editingId === id) setEditingId(null);
   };
 
-  /* ── Sub-goal CRUD ── */
-  const addSubGoal = (parentId: string) => {
+  /* ── Start editing — populate the edit form ── */
+  const startEdit = (goal: Goal) => {
+    setEditingId(goal.id);
+    setEditForm({
+      name: goal.name,
+      description: goal.description,
+      status: goal.status,
+      teams: goal.teams,
+      owner: goal.owner,
+      start_date: goal.start_date,
+      end_date: goal.end_date,
+      metric: goal.metric,
+      metric_target: goal.metric_target,
+    });
+  };
+
+  const saveEdit = async (id: string) => {
+    await updateGoal(id, editForm);
+    setEditingId(null);
+  };
+
+  /* ══════════════════════════════════════════════════════════
+     SUB-GOAL CRUD
+     ══════════════════════════════════════════════════════════ */
+
+  const addSubGoal = async (parentId: string) => {
     if (!newSub.name.trim()) return;
-    const sub: SubGoal = { id: uid(), ...newSub };
-    setGoals(goals.map((g) =>
-      g.id === parentId ? { ...g, subGoals: [...g.subGoals, sub] } : g
-    ));
+
+    const { data: row, error } = await supabase
+      .from("sub_goals")
+      .insert({
+        goal_id: parentId,
+        user_id: user!.id,
+        name: newSub.name,
+        description: newSub.description,
+        status: newSub.status,
+        owner: newSub.owner,
+        end_date: newSub.end_date,
+      })
+      .select()
+      .single();
+
+    if (error || !row) {
+      console.error("Add sub-goal error:", error?.message);
+      return;
+    }
+
+    const sub: SubGoal = {
+      id: row.id,
+      goal_id: row.goal_id,
+      name: row.name,
+      description: row.description ?? "",
+      status: row.status,
+      owner: row.owner ?? "",
+      end_date: row.end_date,
+    };
+
+    setGoals((prev) =>
+      prev.map((g) => (g.id === parentId ? { ...g, subGoals: [...g.subGoals, sub] } : g))
+    );
     setNewSub(blankSub());
     setAddingSubFor(null);
-    // Auto-expand
     setExpandedIds((prev) => new Set(prev).add(parentId));
   };
 
-  const updateSubGoal = (parentId: string, subId: string, updates: Partial<SubGoal>) => {
-    setGoals(goals.map((g) =>
-      g.id === parentId
-        ? { ...g, subGoals: g.subGoals.map((s) => (s.id === subId ? { ...s, ...updates } : s)) }
-        : g
-    ));
+  const updateSubGoal = async (parentId: string, subId: string, updates: Partial<SubGoal>) => {
+    const { error } = await supabase
+      .from("sub_goals")
+      .update(updates)
+      .eq("id", subId);
+
+    if (error) {
+      console.error("Update sub-goal error:", error.message);
+      return;
+    }
+
+    setGoals((prev) =>
+      prev.map((g) =>
+        g.id === parentId
+          ? { ...g, subGoals: g.subGoals.map((s) => (s.id === subId ? { ...s, ...updates } : s)) }
+          : g
+      )
+    );
   };
 
-  const deleteSubGoal = (parentId: string, subId: string) => {
-    setGoals(goals.map((g) =>
-      g.id === parentId ? { ...g, subGoals: g.subGoals.filter((s) => s.id !== subId) } : g
-    ));
+  const deleteSubGoal = async (parentId: string, subId: string) => {
+    const { error } = await supabase.from("sub_goals").delete().eq("id", subId);
+    if (error) {
+      console.error("Delete sub-goal error:", error.message);
+      return;
+    }
+    setGoals((prev) =>
+      prev.map((g) =>
+        g.id === parentId ? { ...g, subGoals: g.subGoals.filter((s) => s.id !== subId) } : g
+      )
+    );
   };
 
   /* ── Filter & counts ── */
-  const allGoals = goals; // top-level only for filtering
+  const allGoals = goals;
   const filtered = filter === "All" ? allGoals : allGoals.filter((g) => g.status === filter);
-  const countFor = (s: Status) => allGoals.filter((g) => g.status === s).length;
+  const countFor = (s: GoalStatus) => allGoals.filter((g) => g.status === s).length;
 
-  const filters: { label: string; value: "All" | Status; count: number }[] = [
+  const filters: { label: string; value: "All" | GoalStatus; count: number }[] = [
     { label: "All", value: "All", count: allGoals.length },
-    ...statuses.map((s) => ({ label: s, value: s as "All" | Status, count: countFor(s) })),
+    ...statuses.map((s) => ({ label: s, value: s as "All" | GoalStatus, count: countFor(s) })),
   ];
 
   /* ── Date formatter ── */
-  const fmtDate = (d: string) => {
+  const fmtDate = (d: string | null) => {
     if (!d) return "";
     return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   };
+
+  /* ── Loading state ── */
+  if (loading) {
+    return (
+      <>
+        <div className="canvas-header">
+          <h1 className="canvas-title">Goals</h1>
+          <p className="canvas-subtitle">Set objectives, track progress, and link to teams &amp; KPIs</p>
+        </div>
+        <div className="canvas-content">
+          <div className="empty-state">
+            <p>Loading goals…</p>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -376,9 +575,9 @@ export default function GoalsPage() {
                       /* ── Edit mode ── */
                       <div style={{ flex: 1 }}>
                         <GoalForm
-                          goal={goal}
-                          onChange={(updated) => updateGoal(goal.id, updated)}
-                          onSave={() => setEditingId(null)}
+                          goal={editForm}
+                          onChange={setEditForm}
+                          onSave={() => saveEdit(goal.id)}
                           onCancel={() => setEditingId(null)}
                           saveLabel="Done"
                         />
@@ -386,7 +585,7 @@ export default function GoalsPage() {
                     ) : (
                       /* ── Display mode ── */
                       <>
-                        <div className="goal-card-content" onClick={() => setEditingId(goal.id)}>
+                        <div className="goal-card-content" onClick={() => startEdit(goal)}>
                           {/* Status + teams */}
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                             <StatusPill status={goal.status} />
@@ -400,18 +599,18 @@ export default function GoalsPage() {
 
                           {/* SMART meta row */}
                           <div className="goal-meta-row">
-                            {(goal.startDate || goal.endDate) && (
+                            {(goal.start_date || goal.end_date) && (
                               <span className="goal-meta-item">
-                                {goal.startDate && goal.endDate
-                                  ? `${fmtDate(goal.startDate)} → ${fmtDate(goal.endDate)}`
-                                  : goal.endDate
-                                  ? `Due ${fmtDate(goal.endDate)}`
-                                  : `Starts ${fmtDate(goal.startDate)}`}
+                                {goal.start_date && goal.end_date
+                                  ? `${fmtDate(goal.start_date)} → ${fmtDate(goal.end_date)}`
+                                  : goal.end_date
+                                  ? `Due ${fmtDate(goal.end_date)}`
+                                  : `Starts ${fmtDate(goal.start_date)}`}
                               </span>
                             )}
                             {goal.metric && (
                               <span className="goal-meta-item">
-                                {goal.metric}{goal.metricTarget ? `: ${goal.metricTarget}` : ""}
+                                {goal.metric}{goal.metric_target ? `: ${goal.metric_target}` : ""}
                               </span>
                             )}
                           </div>
@@ -442,7 +641,7 @@ export default function GoalsPage() {
                           <select
                             className="sub-status-select"
                             value={sub.status}
-                            onChange={(e) => updateSubGoal(goal.id, sub.id, { status: e.target.value as Status })}
+                            onChange={(e) => updateSubGoal(goal.id, sub.id, { status: e.target.value as GoalStatus })}
                             style={{ color: statusStyles[sub.status].color }}
                           >
                             {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -452,7 +651,7 @@ export default function GoalsPage() {
                             {sub.description && <div className="sub-goal-desc">{sub.description}</div>}
                           </div>
                           {sub.owner && <span className="tag" style={{ fontSize: 11 }}>{sub.owner}</span>}
-                          {sub.endDate && <span className="goal-meta-item" style={{ fontSize: 11 }}>{fmtDate(sub.endDate)}</span>}
+                          {sub.end_date && <span className="goal-meta-item" style={{ fontSize: 11 }}>{fmtDate(sub.end_date)}</span>}
                           <button className="item-delete" onClick={() => deleteSubGoal(goal.id, sub.id)} style={{ width: 20, height: 20, fontSize: 14 }}>&times;</button>
                         </div>
                       ))}
@@ -483,8 +682,8 @@ export default function GoalsPage() {
                             <input
                               className="input"
                               type="date"
-                              value={newSub.endDate}
-                              onChange={(e) => setNewSub({ ...newSub, endDate: e.target.value })}
+                              value={newSub.end_date ?? ""}
+                              onChange={(e) => setNewSub({ ...newSub, end_date: e.target.value || null })}
                               style={{ width: 140, flexShrink: 0 }}
                             />
                           </div>

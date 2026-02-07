@@ -35,3 +35,71 @@ export interface LibraryFile {
   text_content: string | null;
   added_at: string;
 }
+
+// Phase 5: Goals
+export type GoalStatus = "Backlog" | "To Do" | "In Progress" | "In Review" | "Done";
+
+export interface Goal {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  status: GoalStatus;
+  teams: string[];
+  owner: string;
+  start_date: string | null;
+  end_date: string | null;
+  metric: string;
+  metric_target: string;
+  created_at: string;
+}
+
+export interface SubGoal {
+  id: string;
+  goal_id: string;
+  name: string;
+  description: string;
+  status: GoalStatus;
+  owner: string;
+  end_date: string | null;
+  created_at: string;
+}
+
+// Phase 6: Teams
+export type KpiPeriod = "Day" | "Week" | "Month" | "Quarter" | "Year";
+
+export interface Team {
+  id: string;
+  user_id: string;
+  slug: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
+export interface TeamRole {
+  id: string;
+  team_id: string;
+  name: string;
+  description: string;
+  headcount: number;
+  created_at: string;
+}
+
+export interface TeamKPI {
+  id: string;
+  team_id: string;
+  name: string;
+  current_value: number | null;
+  target_value: number | null;
+  period: KpiPeriod;
+  created_at: string;
+}
+
+export interface TeamTool {
+  id: string;
+  team_id: string;
+  name: string;
+  purpose: string;
+  created_at: string;
+}
