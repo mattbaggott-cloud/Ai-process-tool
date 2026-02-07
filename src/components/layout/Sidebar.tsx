@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
@@ -14,12 +14,6 @@ const mainNav = [
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Brainstorm", href: "/brainstorm",  icon: "zap" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
-];
-
-const teams = [
-  { label: "Sales",            href: "/teams/sales" },
-  { label: "Marketing",        href: "/teams/marketing" },
-  { label: "Customer Success",  href: "/teams/customer-success" },
 ];
 
 const projects = [
@@ -77,6 +71,20 @@ export default function Sidebar() {
   const router = useRouter();
   const { user } = useAuth();
 
+  /* ── Load teams dynamically ── */
+  const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    const supabase = createClient();
+    supabase
+      .from("teams")
+      .select("slug, name")
+      .order("created_at")
+      .then(({ data }) => {
+        if (data) setSidebarTeams(data.map((t) => ({ slug: t.slug, name: t.name || t.slug })));
+      });
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSignOut = async () => {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -113,18 +121,22 @@ export default function Sidebar() {
         {/* ─── Business Model ─── */}
         <div className="nav-section">
           <div className="nav-section-title">Business Model</div>
-          <div className="nav-item nav-parent">
+          <Link
+            href="/teams"
+            prefetch={false}
+            className={`nav-item ${pathname === "/teams" ? "active" : ""}`}
+          >
             <span className="nav-icon">{icons.users}</span>
             Teams
-          </div>
-          {teams.map((t) => (
+          </Link>
+          {sidebarTeams.map((t) => (
             <Link
-              key={t.href}
-              href={t.href}
+              key={t.slug}
+              href={`/teams/${t.slug}`}
               prefetch={false}
-              className={`nav-item-sub ${isActive(t.href) ? "active" : ""}`}
+              className={`nav-item-sub ${isActive(`/teams/${t.slug}`) ? "active" : ""}`}
             >
-              {t.label}
+              {t.name}
             </Link>
           ))}
         </div>

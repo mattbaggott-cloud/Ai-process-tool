@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { createClient } from "@/lib/supabase/client";
@@ -29,21 +30,62 @@ interface Tool {
   purpose: string;
 }
 
-/* ── Team display names ─────────────────────────────────── */
+interface TeamFileItem {
+  id: string;
+  name: string;
+  size: number;
+  mime_type: string;
+  storage_path: string;
+  text_content: string | null;
+  added_at: string;
+}
 
-const teamNames: Record<string, string> = {
-  sales: "Sales",
-  marketing: "Marketing",
-  "customer-success": "Customer Success",
-};
+/* ── File helpers ──────────────────────────────────────── */
+
+const ACCEPTED_EXTENSIONS = ["pdf", "csv", "txt", "md", "json", "tsv"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+const TEXT_TYPES = new Set(["text/plain", "text/csv", "text/markdown", "text/tab-separated-values", "application/json"]);
+const TEXT_EXTS = new Set(["txt", "csv", "md", "json", "tsv"]);
+
+function isTextReadable(file: File): boolean {
+  if (TEXT_TYPES.has(file.type)) return true;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return TEXT_EXTS.has(ext);
+}
+
+function readFileText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getFileExt(name: string): string {
+  return (name.split(".").pop() ?? "").toUpperCase();
+}
+
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 /* ── Component ──────────────────────────────────────────── */
 
 export default function TeamPage() {
   const { slug } = useParams<{ slug: string }>();
-  const teamName = teamNames[slug] || slug;
   const { user } = useAuth();
   const supabase = createClient();
+
+  /* Team name comes from the database now */
+  const [teamName, setTeamName] = useState(slug);
 
   /* ── Core state ── */
   const [teamId, setTeamId] = useState<string | null>(null);
@@ -68,6 +110,12 @@ export default function TeamPage() {
   const [editingKpi, setEditingKpi] = useState<string | null>(null);
   const [editingTool, setEditingTool] = useState<string | null>(null);
 
+  /* ── Team files state ── */
+  const [teamFiles, setTeamFiles] = useState<TeamFileItem[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   /* ── Description auto-save on blur ── */
   const descriptionRef = useRef(description);
   descriptionRef.current = description;
@@ -90,12 +138,18 @@ export default function TeamPage() {
       .single();
 
     if (!team) {
+      /* Auto-create: capitalize slug as default name */
+      const defaultName = slug
+        .split("-")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+
       const { data: newTeam, error } = await supabase
         .from("teams")
         .insert({
           user_id: user.id,
           slug,
-          name: teamNames[slug] || slug,
+          name: defaultName,
           description: "",
         })
         .select()
@@ -110,13 +164,15 @@ export default function TeamPage() {
     }
 
     setTeamId(team.id);
+    setTeamName(team.name || slug);
     setDescription(team.description ?? "");
 
     /* Load child data in parallel */
-    const [rolesRes, kpisRes, toolsRes] = await Promise.all([
+    const [rolesRes, kpisRes, toolsRes, filesRes] = await Promise.all([
       supabase.from("team_roles").select("*").eq("team_id", team.id).order("created_at"),
       supabase.from("team_kpis").select("*").eq("team_id", team.id).order("created_at"),
       supabase.from("team_tools").select("*").eq("team_id", team.id).order("created_at"),
+      supabase.from("team_files").select("*").eq("team_id", team.id).order("added_at", { ascending: false }),
     ]);
 
     setRoles(
@@ -143,6 +199,18 @@ export default function TeamPage() {
         id: t.id,
         name: t.name,
         purpose: t.purpose ?? "",
+      }))
+    );
+
+    setTeamFiles(
+      (filesRes.data ?? []).map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mime_type: f.mime_type,
+        storage_path: f.storage_path,
+        text_content: f.text_content,
+        added_at: f.added_at,
       }))
     );
 
@@ -335,6 +403,101 @@ export default function TeamPage() {
     if (editingTool === id) setEditingTool(null);
   };
 
+  /* ══════════════════════════════════════════════════════════
+     TEAM FILES — upload / delete
+     ══════════════════════════════════════════════════════════ */
+
+  const uploadFiles = async (files: File[]) => {
+    if (!user || !teamId) return;
+    setUploadError("");
+
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        setUploadError(`${file.name} exceeds 10 MB limit.`);
+        continue;
+      }
+
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+        setUploadError(`${file.name} has unsupported type. Use: ${ACCEPTED_EXTENSIONS.join(", ")}`);
+        continue;
+      }
+
+      /* Extract text for AI context */
+      let textContent: string | null = null;
+      if (isTextReadable(file)) {
+        try { textContent = await readFileText(file); } catch { textContent = null; }
+      }
+
+      /* Upload to Supabase Storage */
+      const storagePath = `${user.id}/${teamId}/${Date.now()}-${file.name}`;
+      const { error: uploadErr } = await supabase.storage
+        .from("team-files")
+        .upload(storagePath, file);
+
+      if (uploadErr) {
+        console.error("Upload error:", uploadErr.message);
+        setUploadError(`Upload failed: ${uploadErr.message}`);
+        continue;
+      }
+
+      /* Insert metadata row */
+      const { data: row, error: insertErr } = await supabase
+        .from("team_files")
+        .insert({
+          team_id: teamId,
+          user_id: user.id,
+          name: file.name,
+          size: file.size,
+          mime_type: file.type || "application/octet-stream",
+          storage_path: storagePath,
+          text_content: textContent,
+        })
+        .select()
+        .single();
+
+      if (insertErr || !row) {
+        console.error("Insert error:", insertErr?.message);
+        continue;
+      }
+
+      setTeamFiles((prev) => [{
+        id: row.id,
+        name: row.name,
+        size: row.size,
+        mime_type: row.mime_type,
+        storage_path: row.storage_path,
+        text_content: row.text_content,
+        added_at: row.added_at,
+      }, ...prev]);
+    }
+  };
+
+  const deleteFile = async (id: string) => {
+    const file = teamFiles.find((f) => f.id === id);
+    if (!file) return;
+
+    await supabase.storage.from("team-files").remove([file.storage_path]);
+    await supabase.from("team_files").delete().eq("id", id);
+    setTeamFiles((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  /* ── Drag-and-drop handlers ── */
+  const handleDragEnter = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) uploadFiles(Array.from(e.dataTransfer.files));
+  };
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      uploadFiles(Array.from(e.target.files));
+      e.target.value = "";
+    }
+  };
+
   /* ── Computed stats ── */
   const totalHeadcount = roles.reduce((sum, r) => sum + r.headcount, 0);
 
@@ -343,6 +506,9 @@ export default function TeamPage() {
     return (
       <>
         <div className="canvas-header">
+          <Link href="/teams" prefetch={false} className="text-link" style={{ fontSize: 13, marginBottom: 8, display: "inline-block" }}>
+            ← All Teams
+          </Link>
           <h1 className="canvas-title">{teamName}</h1>
           <p className="canvas-subtitle">Define roles, KPIs, and tools for this team</p>
         </div>
@@ -357,6 +523,9 @@ export default function TeamPage() {
     <>
       {/* Header */}
       <div className="canvas-header">
+        <Link href="/teams" prefetch={false} className="text-link" style={{ fontSize: 13, marginBottom: 8, display: "inline-block" }}>
+          ← All Teams
+        </Link>
         <h1 className="canvas-title">{teamName}</h1>
         <p className="canvas-subtitle">
           Define roles, KPIs, and tools for this team
@@ -776,7 +945,7 @@ export default function TeamPage() {
         {/* ═══════════════════════════════════════════════════════
             HOW THIS TEAM WORKS
             ═══════════════════════════════════════════════════════ */}
-        <div className="card">
+        <div className="card" style={{ marginBottom: 16 }}>
           <div className="section-header">
             <h3 className="section-title">How This Team Works</h3>
           </div>
@@ -788,6 +957,94 @@ export default function TeamPage() {
             onChange={(e) => setDescription(e.target.value)}
             onBlur={saveDescription}
           />
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════
+            TEAM DOCUMENTS
+            ═══════════════════════════════════════════════════════ */}
+        <div className="card">
+          <div className="section-header">
+            <h3 className="section-title">
+              Team Documents
+              {teamFiles.length > 0 && (
+                <span style={{ fontWeight: 400, fontSize: 13, color: "#6b7280", marginLeft: 8 }}>
+                  ({teamFiles.length})
+                </span>
+              )}
+            </h3>
+          </div>
+
+          {/* Drop zone */}
+          <div
+            className={`upload-zone-compact ${isDragging ? "upload-zone-compact-active" : ""}`}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            style={{ marginBottom: teamFiles.length > 0 ? 16 : 0 }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPTED_EXTENSIONS.map((e) => `.${e}`).join(",")}
+              onChange={handleFileInput}
+              style={{ display: "none" }}
+            />
+            <span className="upload-zone-compact-text">
+              {isDragging ? "Drop files here" : "Drop process docs, KPI sheets, or"}
+            </span>
+            {!isDragging && <span className="upload-browse-btn">browse</span>}
+            <span className="upload-zone-compact-hint">PDF, CSV, TXT, MD, JSON, TSV</span>
+          </div>
+
+          {uploadError && (
+            <div className="upload-error" style={{ marginTop: 8, marginBottom: 8 }}>{uploadError}</div>
+          )}
+
+          {/* File list */}
+          {teamFiles.length > 0 && (
+            <div className="item-list">
+              {teamFiles.map((f) => {
+                const ext = getFileExt(f.name);
+                return (
+                  <div key={f.id} className="item-row">
+                    <div className="item-content">
+                      <div className="item-name" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className="upload-file-type-badge">{ext}</span>
+                        {f.name}
+                      </div>
+                      <div className="item-meta" style={{ fontSize: 12, color: "#6b7280" }}>
+                        <span>{formatFileSize(f.size)}</span>
+                        <span style={{ margin: "0 6px" }}>·</span>
+                        <span>{fmtDate(f.added_at)}</span>
+                        {f.text_content !== null && (
+                          <>
+                            <span style={{ margin: "0 6px" }}>·</span>
+                            <span>Text extracted for AI</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      className="item-delete"
+                      onClick={() => deleteFile(f.id)}
+                      title="Remove file"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {teamFiles.length === 0 && !uploadError && (
+            <p className="empty-text" style={{ marginTop: 8 }}>
+              Upload process docs, org charts, KPI sheets — the AI will use these as context.
+            </p>
+          )}
         </div>
       </div>
     </>

@@ -103,3 +103,15 @@ export interface TeamTool {
   purpose: string;
   created_at: string;
 }
+
+export interface TeamFile {
+  id: string;
+  team_id: string;
+  user_id: string;
+  name: string;
+  size: number;
+  mime_type: string;
+  storage_path: string;
+  text_content: string | null;
+  added_at: string;
+}
