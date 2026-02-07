@@ -32,12 +32,16 @@ function buildSystemPrompt(data: {
   subGoals: Record<string, unknown>[];
   libraryItems: Record<string, unknown>[];
   libraryFiles: Record<string, unknown>[];
+  stackTools: Record<string, unknown>[];
+  catalogSummary: { category: string; count: number }[];
+  catalogSubcategories: { category: string; subcategory: string; count: number }[];
   chatFileContents: { name: string; content: string }[];
   currentPage: string;
 }): string {
   const {
     email, teams, teamRoles, teamKpis, teamTools, teamFiles,
     goals, subGoals, libraryItems, libraryFiles,
+    stackTools, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage,
   } = data;
 
@@ -97,10 +101,14 @@ You can take actions in the user's workspace using tools:
 - Create goals and sub-goals, update their status
 - Delete goals (and all their sub-goals)
 - Create library items (notes, documents, templates)
+- Search the tool catalog for tool details, features, pricing, and comparisons
+- Add or remove tools from the user's tech stack
+- Compare 2-3 tools side by side from the catalog
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
 The UI updates automatically after changes — no need to tell the user to refresh.
+When the user asks about tools, use search_tool_catalog to look up details. When comparing tools, use compare_tools to get full data.
 
 ## User's Current Page
 ${currentPage}
@@ -211,6 +219,47 @@ ${currentPage}
     }
   }
 
+  /* ── Tech Stack ── */
+  if (stackTools.length > 0) {
+    prompt += `\n## User's Tech Stack\n`;
+    for (const t of stackTools) {
+      prompt += `- **${t.name}** (${t.category || "Uncategorized"}) [${t.status}]`;
+      const stackTeams = t.teams as string[] | null;
+      if (stackTeams && stackTeams.length > 0) prompt += ` — Teams: ${stackTeams.join(", ")}`;
+      if (t.description) prompt += `\n  ${truncate(t.description as string, 200)}`;
+      const usage = t.team_usage as Record<string, string> | null;
+      if (usage && Object.keys(usage).length > 0) {
+        for (const [team, desc] of Object.entries(usage)) {
+          prompt += `\n  ${team}: ${desc}`;
+        }
+      }
+      prompt += `\n`;
+    }
+  }
+
+  /* ── Tool Catalog summary (for context — use search_tool_catalog for details) ── */
+  if (catalogSummary.length > 0) {
+    const totalCatalog = catalogSummary.reduce((sum, c) => sum + c.count, 0);
+    prompt += `\n## Tool Catalog\n`;
+    prompt += `You have access to a catalog of ${totalCatalog} tools. Use the search_tool_catalog tool to look up details about specific tools.\n`;
+    prompt += `Categories: ${catalogSummary.map((c) => `${c.category} (${c.count})`).join(", ")}\n`;
+
+    /* Show subcategories so AI knows what to search for */
+    if (catalogSubcategories.length > 0) {
+      prompt += `\nSubcategories by category:\n`;
+      const byCat: Record<string, string[]> = {};
+      for (const s of catalogSubcategories) {
+        if (!byCat[s.category]) byCat[s.category] = [];
+        byCat[s.category].push(`${s.subcategory} (${s.count})`);
+      }
+      for (const [cat, subs] of Object.entries(byCat)) {
+        prompt += `- ${cat}: ${subs.join(", ")}\n`;
+      }
+    }
+
+    prompt += `\nWhen searching the catalog, use subcategory names or keywords for best results. For example: "AI SDR", "CRM", "Email Marketing", "LLM Provider".\n`;
+  }
+
   /* ── Session files ── */
   if (chatFileContents.length > 0) {
     prompt += `\n## Session Files (uploaded for this conversation)\n`;
@@ -262,6 +311,8 @@ export async function POST(req: Request) {
     { data: subGoals },
     { data: libraryItems },
     { data: libraryFiles },
+    { data: stackTools },
+    { data: catalogCategories },
   ] = await Promise.all([
     supabase.from("teams").select("*").order("created_at"),
     supabase.from("team_roles").select("*").order("created_at"),
@@ -272,7 +323,30 @@ export async function POST(req: Request) {
     supabase.from("sub_goals").select("*").order("created_at"),
     supabase.from("library_items").select("*").order("updated_at", { ascending: false }),
     supabase.from("library_files").select("id, name, text_content").order("added_at", { ascending: false }),
+    supabase.from("user_stack_tools").select("*").order("created_at", { ascending: false }),
+    supabase.from("tool_catalog").select("category, subcategory"),
   ]);
+
+  /* Build catalog category summary */
+  const catCounts: Record<string, number> = {};
+  const subCounts: Record<string, Record<string, number>> = {};
+  for (const row of catalogCategories ?? []) {
+    const cat = (row.category as string) || "Uncategorized";
+    const sub = (row.subcategory as string) || "";
+    catCounts[cat] = (catCounts[cat] ?? 0) + 1;
+    if (sub) {
+      if (!subCounts[cat]) subCounts[cat] = {};
+      subCounts[cat][sub] = (subCounts[cat][sub] ?? 0) + 1;
+    }
+  }
+  const catalogSummary = Object.entries(catCounts).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count);
+  const catalogSubcategories: { category: string; subcategory: string; count: number }[] = [];
+  for (const [cat, subs] of Object.entries(subCounts)) {
+    for (const [sub, count] of Object.entries(subs)) {
+      catalogSubcategories.push({ category: cat, subcategory: sub, count });
+    }
+  }
+  catalogSubcategories.sort((a, b) => a.category.localeCompare(b.category) || b.count - a.count);
 
   /* 5. Build system prompt */
   const systemPrompt = buildSystemPrompt({
@@ -286,6 +360,9 @@ export async function POST(req: Request) {
     subGoals: subGoals ?? [],
     libraryItems: libraryItems ?? [],
     libraryFiles: libraryFiles ?? [],
+    stackTools: stackTools ?? [],
+    catalogSummary,
+    catalogSubcategories,
     chatFileContents: chatFileContents ?? [],
     currentPage: currentPage ?? "/",
   });
@@ -323,12 +400,17 @@ export async function POST(req: Request) {
             }
           }
 
-          /* Check if Claude wants to use tools */
-          const finalMessage = await stream.finalMessage();
+          /* Check if Claude wants to use tools — support up to 5 rounds */
+          let currentMessage = await stream.finalMessage();
+          let currentMessages = [...apiMessages];
+          let rounds = 0;
+          const MAX_TOOL_ROUNDS = 5;
 
-          if (finalMessage.stop_reason === "tool_use") {
+          while (currentMessage.stop_reason === "tool_use" && rounds < MAX_TOOL_ROUNDS) {
+            rounds++;
+
             /* Extract tool_use blocks */
-            const toolUseBlocks = finalMessage.content.filter(
+            const toolUseBlocks = currentMessage.content.filter(
               (block): block is Anthropic.Messages.ToolUseBlock =>
                 block.type === "tool_use"
             );
@@ -350,23 +432,24 @@ export async function POST(req: Request) {
               });
             }
 
-            /* ── Second API call with tool results ── */
-            const secondMessages: Anthropic.Messages.MessageParam[] = [
-              ...apiMessages,
-              { role: "assistant", content: finalMessage.content },
-              { role: "user", content: toolResults },
+            /* Build messages with tool results */
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant" as const, content: currentMessage.content },
+              { role: "user" as const, content: toolResults },
             ];
 
-            const secondStream = anthropic.messages.stream({
+            /* Next API call with tool results */
+            const nextStream = anthropic.messages.stream({
               model: "claude-sonnet-4-20250514",
               max_tokens: 4096,
               system: systemPrompt,
-              messages: secondMessages,
+              messages: currentMessages,
               tools,
             });
 
-            /* Stream the follow-up response */
-            for await (const event of secondStream) {
+            /* Stream any text from this round */
+            for await (const event of nextStream) {
               if (
                 event.type === "content_block_delta" &&
                 event.delta.type === "text_delta"
@@ -374,6 +457,8 @@ export async function POST(req: Request) {
                 controller.enqueue(encoder.encode(event.delta.text));
               }
             }
+
+            currentMessage = await nextStream.finalMessage();
           }
 
           controller.close();

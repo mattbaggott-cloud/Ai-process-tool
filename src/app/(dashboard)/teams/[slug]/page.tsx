@@ -361,7 +361,7 @@ export default function TeamPage() {
      ══════════════════════════════════════════════════════════ */
 
   const addTool = async () => {
-    if (!newTool.name.trim() || !teamId) return;
+    if (!newTool.name.trim() || !teamId || !user) return;
 
     const { data: row, error } = await supabase
       .from("team_tools")
@@ -383,6 +383,37 @@ export default function TeamPage() {
       name: row.name,
       purpose: row.purpose ?? "",
     }]);
+
+    /* Sync to My Tech Stack */
+    const { data: existing } = await supabase
+      .from("user_stack_tools")
+      .select("id, teams")
+      .ilike("name", newTool.name.trim())
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      /* Already in stack — add this team if not already tagged */
+      const currentTeams: string[] = existing[0].teams ?? [];
+      if (!currentTeams.some((t) => t.toLowerCase() === teamName.toLowerCase())) {
+        await supabase
+          .from("user_stack_tools")
+          .update({ teams: [...currentTeams, teamName] })
+          .eq("id", existing[0].id);
+      }
+    } else {
+      /* Not in stack — create it */
+      await supabase.from("user_stack_tools").insert({
+        user_id: user.id,
+        name: newTool.name.trim(),
+        description: newTool.purpose,
+        category: "",
+        teams: [teamName],
+        team_usage: newTool.purpose ? { [teamName]: newTool.purpose } : {},
+        status: "Active",
+      });
+    }
+    window.dispatchEvent(new Event("workspace-updated"));
+
     setNewTool({ name: "", purpose: "" });
     setShowToolForm(false);
   };

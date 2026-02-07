@@ -24,7 +24,7 @@ export async function executeTool(
       case "add_team_kpis":
         return await handleAddTeamKpis(input, supabase);
       case "add_team_tools":
-        return await handleAddTeamTools(input, supabase);
+        return await handleAddTeamTools(input, supabase, userId);
       case "update_team_description":
         return await handleUpdateTeamDescription(input, supabase);
       case "create_goal":
@@ -43,6 +43,14 @@ export async function executeTool(
         return await handleDeleteTeamTools(input, supabase);
       case "delete_goal":
         return await handleDeleteGoal(input, supabase);
+      case "search_tool_catalog":
+        return await handleSearchToolCatalog(input, supabase);
+      case "add_stack_tool":
+        return await handleAddStackTool(input, supabase, userId);
+      case "remove_stack_tool":
+        return await handleRemoveStackTool(input, supabase);
+      case "compare_tools":
+        return await handleCompareTools(input, supabase);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -232,7 +240,8 @@ async function handleAddTeamKpis(
 
 async function handleAddTeamTools(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userId: string
 ): Promise<ToolResult> {
   const teamName = input.team_name as string;
   const tools = input.tools as Array<{ name: string; purpose?: string }>;
@@ -278,6 +287,38 @@ async function handleAddTeamTools(
     }));
     const { error } = await supabase.from("team_tools").insert(rows);
     if (error) return { success: false, message: `Failed to add tools: ${error.message}` };
+  }
+
+  /* Sync all tools (new + updated) to user_stack_tools */
+  const allTools = [...toInsert, ...toUpdate];
+  for (const t of allTools) {
+    const { data: stackExisting } = await supabase
+      .from("user_stack_tools")
+      .select("id, teams")
+      .ilike("name", t.name)
+      .limit(1);
+
+    if (stackExisting && stackExisting.length > 0) {
+      /* Already in stack — add this team if not tagged */
+      const currentTeams: string[] = stackExisting[0].teams ?? [];
+      if (!currentTeams.some((tn) => tn.toLowerCase() === teamName.toLowerCase())) {
+        await supabase
+          .from("user_stack_tools")
+          .update({ teams: [...currentTeams, teamName] })
+          .eq("id", stackExisting[0].id);
+      }
+    } else {
+      /* Not in stack — create entry */
+      await supabase.from("user_stack_tools").insert({
+        user_id: userId,
+        name: t.name,
+        description: t.purpose ?? "",
+        category: "",
+        teams: [teamName],
+        team_usage: t.purpose ? { [teamName]: t.purpose } : {},
+        status: "Active",
+      });
+    }
   }
 
   const parts: string[] = [];
@@ -636,4 +677,238 @@ async function handleDeleteGoal(
   const { error } = await supabase.from("goals").delete().eq("id", goalId);
   if (error) return { success: false, message: `Failed to delete goal: ${error.message}` };
   return { success: true, message: `Deleted goal "${goalName}" and all its sub-goals` };
+}
+
+/* ══════════════════════════════════════════════════════════
+   TOOL CATALOG & STACK HANDLERS
+   ══════════════════════════════════════════════════════════ */
+
+async function handleSearchToolCatalog(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const query = input.query as string;
+  const category = input.category as string | undefined;
+
+  if (!query) return { success: false, message: "query is required" };
+
+  /* Split query into individual keywords for broader matching */
+  const keywords = query
+    .split(/[\s,/+&]+/)
+    .map((k) => k.trim().toLowerCase())
+    .filter((k) => k.length >= 2);
+
+  /* Strategy 1: try the full query string */
+  let baseQ = supabase
+    .from("tool_catalog")
+    .select("name, category, subcategory, description, key_features, pricing, best_for, integrations, pros, cons, website")
+    .or(`name.ilike.%${query}%,subcategory.ilike.%${query}%,description.ilike.%${query}%,best_for.ilike.%${query}%`);
+
+  if (category) {
+    baseQ = baseQ.ilike("category", `%${category}%`);
+  }
+
+  let { data, error } = await baseQ.limit(20);
+  if (error) return { success: false, message: `Search failed: ${error.message}` };
+
+  /* Strategy 2: if no results, try each keyword separately */
+  if ((!data || data.length === 0) && keywords.length > 0) {
+    const orClauses = keywords
+      .flatMap((kw) => [
+        `name.ilike.%${kw}%`,
+        `subcategory.ilike.%${kw}%`,
+        `description.ilike.%${kw}%`,
+        `best_for.ilike.%${kw}%`,
+      ])
+      .join(",");
+
+    let kwQ = supabase
+      .from("tool_catalog")
+      .select("name, category, subcategory, description, key_features, pricing, best_for, integrations, pros, cons, website")
+      .or(orClauses);
+
+    if (category) {
+      kwQ = kwQ.ilike("category", `%${category}%`);
+    }
+
+    const kwResult = await kwQ.limit(20);
+    if (!kwResult.error) {
+      data = kwResult.data;
+    }
+  }
+
+  /* Strategy 3: if still nothing, try category match */
+  if ((!data || data.length === 0) && !category) {
+    const catQ = await supabase
+      .from("tool_catalog")
+      .select("name, category, subcategory, description, key_features, pricing, best_for, integrations, pros, cons, website")
+      .ilike("category", `%${query}%`)
+      .limit(20);
+
+    if (!catQ.error && catQ.data && catQ.data.length > 0) {
+      data = catQ.data;
+    }
+  }
+
+  if (!data || data.length === 0) {
+    /* Return available subcategories to help refine */
+    const { data: subs } = await supabase
+      .from("tool_catalog")
+      .select("subcategory")
+      .order("subcategory");
+
+    const uniqueSubs = [...new Set((subs ?? []).map((s) => s.subcategory as string).filter(Boolean))];
+    return {
+      success: true,
+      message: `No tools found matching "${query}". Try searching by subcategory:\n${uniqueSubs.join(", ")}`,
+    };
+  }
+
+  const results = data.map((t) => {
+    let entry = `**${t.name}** (${t.category}${t.subcategory ? ` > ${t.subcategory}` : ""})`;
+    if (t.pricing) entry += ` — ${t.pricing}`;
+    entry += `\n${t.description}`;
+    if (t.best_for) entry += `\nBest for: ${t.best_for}`;
+    if (t.key_features?.length > 0) entry += `\nKey features: ${t.key_features.join(", ")}`;
+    if (t.pros?.length > 0) entry += `\nPros: ${t.pros.join(", ")}`;
+    if (t.cons?.length > 0) entry += `\nCons: ${t.cons.join(", ")}`;
+    if (t.integrations?.length > 0) entry += `\nIntegrations: ${t.integrations.join(", ")}`;
+    return entry;
+  });
+
+  return { success: true, message: `Found ${data.length} tool(s):\n\n${results.join("\n\n---\n\n")}` };
+}
+
+async function handleAddStackTool(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name) return { success: false, message: "Tool name is required" };
+
+  /* Check if already in stack */
+  const { data: existing } = await supabase
+    .from("user_stack_tools")
+    .select("id")
+    .ilike("name", name)
+    .limit(1);
+
+  if (existing && existing.length > 0) {
+    return { success: false, message: `"${name}" is already in your tech stack` };
+  }
+
+  /* Try to find in catalog for extra data */
+  const { data: catalogMatch } = await supabase
+    .from("tool_catalog")
+    .select("id, description, category")
+    .ilike("name", name)
+    .limit(1);
+
+  const cat = catalogMatch?.[0];
+
+  const row = {
+    user_id: userId,
+    catalog_id: cat?.id ?? null,
+    name,
+    description: (input.description as string) ?? cat?.description ?? "",
+    category: (input.category as string) ?? cat?.category ?? "",
+    teams: (input.teams as string[]) ?? [],
+    team_usage: (input.team_usage as Record<string, string>) ?? {},
+    status: (input.status as string) ?? "Active",
+  };
+
+  const { data, error } = await supabase
+    .from("user_stack_tools")
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to add to stack: ${error.message}` };
+
+  const teamList = (data.teams as string[])?.length > 0 ? ` for teams: ${(data.teams as string[]).join(", ")}` : "";
+  return { success: true, message: `Added "${data.name}" to your tech stack (${data.status})${teamList}` };
+}
+
+async function handleRemoveStackTool(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name) return { success: false, message: "Tool name is required" };
+
+  /* Find matching tools in stack */
+  const { data: allStack } = await supabase
+    .from("user_stack_tools")
+    .select("id, name");
+
+  const matches = (allStack ?? []).filter(
+    (t) => t.name.toLowerCase() === name.toLowerCase()
+  );
+  if (matches.length === 0) {
+    /* Try fuzzy match */
+    const fuzzy = (allStack ?? []).filter(
+      (t) => t.name.toLowerCase().includes(name.toLowerCase()) ||
+             name.toLowerCase().includes(t.name.toLowerCase())
+    );
+    if (fuzzy.length > 0) {
+      for (const m of fuzzy) {
+        await supabase.from("user_stack_tools").delete().eq("id", m.id);
+      }
+      return { success: true, message: `Removed "${fuzzy.map((m) => m.name).join(", ")}" from your tech stack` };
+    }
+    return { success: false, message: `"${name}" not found in your tech stack` };
+  }
+
+  for (const m of matches) {
+    await supabase.from("user_stack_tools").delete().eq("id", m.id);
+  }
+  return { success: true, message: `Removed "${name}" from your tech stack` };
+}
+
+async function handleCompareTools(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const toolNames = input.tool_names as string[];
+  if (!toolNames || toolNames.length < 2) {
+    return { success: false, message: "Provide at least 2 tool names to compare" };
+  }
+
+  const results: string[] = [];
+  const notFound: string[] = [];
+
+  for (const name of toolNames.slice(0, 3)) {
+    const { data } = await supabase
+      .from("tool_catalog")
+      .select("*")
+      .ilike("name", `%${name}%`)
+      .limit(1);
+
+    if (data && data.length > 0) {
+      const t = data[0];
+      let entry = `## ${t.name}\n`;
+      entry += `**Category:** ${t.category}${t.subcategory ? ` > ${t.subcategory}` : ""}\n`;
+      if (t.pricing) entry += `**Pricing:** ${t.pricing}\n`;
+      if (t.description) entry += `**Description:** ${t.description}\n`;
+      if (t.best_for) entry += `**Best for:** ${t.best_for}\n`;
+      if (t.key_features?.length > 0) entry += `**Key features:** ${t.key_features.join(", ")}\n`;
+      if (t.pros?.length > 0) entry += `**Pros:** ${t.pros.join(", ")}\n`;
+      if (t.cons?.length > 0) entry += `**Cons:** ${t.cons.join(", ")}\n`;
+      if (t.integrations?.length > 0) entry += `**Integrations:** ${t.integrations.join(", ")}\n`;
+      results.push(entry);
+    } else {
+      notFound.push(name);
+    }
+  }
+
+  if (results.length === 0) {
+    return { success: false, message: `None of the tools (${toolNames.join(", ")}) were found in the catalog` };
+  }
+
+  let message = results.join("\n---\n\n");
+  if (notFound.length > 0) {
+    message += `\n\n(Not found in catalog: ${notFound.join(", ")})`;
+  }
+  return { success: true, message };
 }

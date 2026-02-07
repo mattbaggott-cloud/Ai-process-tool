@@ -321,5 +321,88 @@ export function getToolDefinitions(): Tool[] {
         required: ["goal_name"],
       },
     },
+
+    /* ── Stack & Catalog tools ────────────────────────────── */
+    {
+      name: "search_tool_catalog",
+      description:
+        "Search the user's tool catalog (knowledge base) by name, category, or keyword. Use this to look up tool details, compare options, or answer questions about specific tools. Returns matching tools with full details (description, features, pricing, pros/cons, integrations).",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query — a tool name, category, subcategory, or keyword (e.g. 'CRM', 'HubSpot', 'sales engagement', 'LLM')",
+          },
+          category: {
+            type: "string",
+            description: "Optional category filter (e.g. 'GTM', 'AI/ML', 'Product Management')",
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "add_stack_tool",
+      description:
+        "Add a tool to the user's tech stack. Use when the user says they use a tool, want to add a tool to their stack, or want to start evaluating a tool.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string", description: "Tool name (e.g. 'HubSpot', 'Salesforce')" },
+          description: { type: "string", description: "What this tool does" },
+          category: {
+            type: "string",
+            description: "Category (e.g. 'GTM', 'Product Management', 'AI/ML')",
+          },
+          teams: {
+            type: "array",
+            items: { type: "string" },
+            description: "Team names that use this tool (e.g. ['Sales', 'Marketing'])",
+          },
+          team_usage: {
+            type: "object",
+            description: "How each team uses this tool. Keys are team names, values are usage descriptions. E.g. {\"Sales\": \"Pipeline tracking\", \"Marketing\": \"Lead scoring\"}",
+          },
+          status: {
+            type: "string",
+            enum: ["Active", "Evaluating", "Deprecated"],
+            description: "Tool status. Defaults to 'Active'.",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "remove_stack_tool",
+      description:
+        "Remove a tool from the user's tech stack. Use when the user wants to remove or deprecate a tool.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "The name of the tool to remove from the stack",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "compare_tools",
+      description:
+        "Compare 2 or 3 tools from the catalog side by side. Use when the user asks to compare tools, evaluate options, or wants a recommendation between specific tools. Returns full details for each tool.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          tool_names: {
+            type: "array",
+            items: { type: "string" },
+            description: "Names of the tools to compare (2-3 tool names)",
+          },
+        },
+        required: ["tool_names"],
+      },
+    },
   ];
 }

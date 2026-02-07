@@ -115,3 +115,36 @@ export interface TeamFile {
   text_content: string | null;
   added_at: string;
 }
+
+// Phase 8: Tool Catalog + Stack
+export type ToolStatus = "Active" | "Evaluating" | "Deprecated";
+
+export interface ToolCatalogItem {
+  id: string;
+  user_id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  description: string;
+  key_features: string[];
+  pricing: string;
+  best_for: string;
+  integrations: string[];
+  pros: string[];
+  cons: string[];
+  website: string;
+  created_at: string;
+}
+
+export interface UserStackTool {
+  id: string;
+  user_id: string;
+  catalog_id: string | null;
+  name: string;
+  description: string;
+  category: string;
+  teams: string[];
+  team_usage: Record<string, string>;
+  status: ToolStatus;
+  created_at: string;
+}
