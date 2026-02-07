@@ -177,3 +177,29 @@ export interface UserStackTool {
   status: ToolStatus;
   created_at: string;
 }
+
+// Phase 10: Projects (unified workspace)
+export type ProjectMode = "canvas" | "workflow" | "chat";
+export type CanvasBlockType = "text" | "heading" | "image" | "divider";
+
+export interface CanvasBlock {
+  id: string;
+  type: CanvasBlockType;
+  content?: string;
+  level?: 1 | 2 | 3;
+  url?: string;
+  alt?: string;
+}
+
+export interface Project {
+  id: string;
+  user_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  active_mode: ProjectMode;
+  canvas_blocks: CanvasBlock[];
+  workflow_nodes: Record<string, unknown>[];
+  created_at: string;
+  updated_at: string;
+}

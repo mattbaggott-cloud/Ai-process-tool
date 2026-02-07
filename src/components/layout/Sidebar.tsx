@@ -11,14 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
   { label: "Library",    href: "/library",     icon: "book" },
-  { label: "Brainstorm", href: "/brainstorm",  icon: "zap" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
-];
-
-const projects = [
-  { label: "SDR → AE Pipeline",      href: "/projects/sdr-pipeline" },
-  { label: "Outbound Prospecting",   href: "/projects/outbound" },
-  { label: "Lead Qualification",     href: "/projects/lead-qualification" },
 ];
 
 /* ── tiny SVG icons (no dependency needed) ───────────────── */
@@ -77,8 +70,9 @@ export default function Sidebar() {
   const router = useRouter();
   const { user } = useAuth();
 
-  /* ── Load teams + org name dynamically ── */
+  /* ── Load teams, org name, and projects dynamically ── */
   const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
+  const [sidebarProjects, setSidebarProjects] = useState<{ slug: string; name: string }[]>([]);
   const [orgName, setOrgName] = useState<string>("");
   const loadSidebarData = useCallback(() => {
     if (!user) return;
@@ -97,6 +91,13 @@ export default function Sidebar() {
       .single()
       .then(({ data }) => {
         if (data?.name) setOrgName(data.name);
+      });
+    supabase
+      .from("projects")
+      .select("slug, name")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) setSidebarProjects(data.map((p) => ({ slug: p.slug, name: p.name })));
       });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -188,21 +189,21 @@ export default function Sidebar() {
         <div className="nav-section">
           <div className="nav-section-title">Workspace</div>
           <Link
-            href="/projects"
+            href="/brainstorm"
             prefetch={false}
-            className={`nav-item ${pathname === "/projects" ? "active" : ""}`}
+            className={`nav-item ${pathname === "/brainstorm" ? "active" : ""}`}
           >
             <span className="nav-icon">{icons.layout}</span>
             Projects
           </Link>
-          {projects.map((p) => (
+          {sidebarProjects.map((p) => (
             <Link
-              key={p.href}
-              href={p.href}
+              key={p.slug}
+              href={`/projects/${p.slug}`}
               prefetch={false}
-              className={`nav-item-sub ${isActive(p.href) ? "active" : ""}`}
+              className={`nav-item-sub ${isActive(`/projects/${p.slug}`) ? "active" : ""}`}
             >
-              {p.label}
+              {p.name}
             </Link>
           ))}
         </div>

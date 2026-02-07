@@ -429,5 +429,78 @@ export function getToolDefinitions(): Tool[] {
         required: ["tool_names"],
       },
     },
+
+    /* ── Project tools ──────────────────────────────────── */
+    {
+      name: "create_project",
+      description:
+        "Create a new project in the user's workspace. Use when the user wants to create a project, start a new initiative, or set up a workspace for something.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Project name (e.g. 'Q2 Planning', 'Product Launch')",
+          },
+          description: {
+            type: "string",
+            description: "Brief description of the project",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "update_canvas",
+      description:
+        "Add or replace content blocks on a project's canvas. Use when the user asks to write a brief, add content, create an outline, or populate a project's canvas with text, headings, images, or dividers.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          project_name: {
+            type: "string",
+            description: "The name of the project (must match an existing project)",
+          },
+          blocks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["text", "heading", "image", "divider"],
+                  description: "Block type",
+                },
+                content: {
+                  type: "string",
+                  description: "Text content (for text and heading blocks)",
+                },
+                level: {
+                  type: "number",
+                  enum: [1, 2, 3],
+                  description: "Heading level (1=H1, 2=H2, 3=H3). Only for heading blocks.",
+                },
+                url: {
+                  type: "string",
+                  description: "Image URL (only for image blocks)",
+                },
+                alt: {
+                  type: "string",
+                  description: "Image alt text (only for image blocks)",
+                },
+              },
+              required: ["type"],
+            },
+            description: "Array of content blocks to add to the canvas",
+          },
+          action: {
+            type: "string",
+            enum: ["append", "replace"],
+            description: "Whether to append blocks to existing content or replace all content. Defaults to 'append'.",
+          },
+        },
+        required: ["project_name", "blocks"],
+      },
+    },
   ];
 }

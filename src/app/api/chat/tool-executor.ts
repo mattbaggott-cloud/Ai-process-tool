@@ -53,6 +53,10 @@ export async function executeTool(
         return await handleRemoveStackTool(input, supabase);
       case "compare_tools":
         return await handleCompareTools(input, supabase);
+      case "create_project":
+        return await handleCreateProject(input, supabase, userId);
+      case "update_canvas":
+        return await handleUpdateCanvas(input, supabase);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -907,6 +911,99 @@ async function handleRemoveStackTool(
     await supabase.from("user_stack_tools").delete().eq("id", m.id);
   }
   return { success: true, message: `Removed "${name}" from your tech stack` };
+}
+
+/* ══════════════════════════════════════════════════════════
+   PROJECT HANDLERS
+   ══════════════════════════════════════════════════════════ */
+
+async function handleCreateProject(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name) return { success: false, message: "Project name is required" };
+
+  const description = (input.description as string) ?? "";
+  const slug = name
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+
+  const { data, error } = await supabase
+    .from("projects")
+    .insert({
+      user_id: userId,
+      name,
+      slug,
+      description,
+      active_mode: "canvas",
+      canvas_blocks: [],
+      workflow_nodes: [],
+    })
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to create project: ${error.message}` };
+  return { success: true, message: `Created project "${data.name}" — open it at /projects/${data.slug}` };
+}
+
+async function handleUpdateCanvas(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const projectName = input.project_name as string;
+  const blocks = input.blocks as Array<{
+    type: string;
+    content?: string;
+    level?: number;
+    url?: string;
+    alt?: string;
+  }>;
+  const action = (input.action as string) ?? "append";
+
+  if (!projectName || !blocks?.length) {
+    return { success: false, message: "project_name and blocks are required" };
+  }
+
+  /* Resolve project by name */
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, canvas_blocks")
+    .ilike("name", projectName)
+    .single();
+
+  if (!project) return { success: false, message: `Project "${projectName}" not found` };
+
+  /* Generate IDs for new blocks */
+  const newBlocks = blocks.map((b) => ({
+    id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+    type: b.type,
+    ...(b.content !== undefined && { content: b.content }),
+    ...(b.level !== undefined && { level: b.level }),
+    ...(b.url !== undefined && { url: b.url }),
+    ...(b.alt !== undefined && { alt: b.alt }),
+  }));
+
+  let finalBlocks;
+  if (action === "replace") {
+    finalBlocks = newBlocks;
+  } else {
+    /* Append to existing */
+    const existing = (project.canvas_blocks as unknown[]) ?? [];
+    finalBlocks = [...existing, ...newBlocks];
+  }
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ canvas_blocks: finalBlocks })
+    .eq("id", project.id);
+
+  if (error) return { success: false, message: `Failed to update canvas: ${error.message}` };
+
+  const verb = action === "replace" ? "Replaced canvas with" : "Added";
+  return { success: true, message: `${verb} ${newBlocks.length} block(s) on "${projectName}" canvas` };
 }
 
 async function handleCompareTools(

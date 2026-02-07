@@ -35,6 +35,7 @@ function buildSystemPrompt(data: {
   libraryItems: Record<string, unknown>[];
   libraryFiles: Record<string, unknown>[];
   stackTools: Record<string, unknown>[];
+  projects: Record<string, unknown>[];
   catalogSummary: { category: string; count: number }[];
   catalogSubcategories: { category: string; subcategory: string; count: number }[];
   chatFileContents: { name: string; content: string }[];
@@ -44,7 +45,7 @@ function buildSystemPrompt(data: {
     email, organization, organizationFiles,
     teams, teamRoles, teamKpis, teamTools, teamFiles,
     goals, subGoals, libraryItems, libraryFiles,
-    stackTools, catalogSummary, catalogSubcategories,
+    stackTools, projects, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage,
   } = data;
 
@@ -108,6 +109,8 @@ You can take actions in the user's workspace using tools:
 - Search the tool catalog for tool details, features, pricing, and comparisons
 - Add or remove tools from the user's tech stack
 - Compare 2-3 tools side by side from the catalog
+- Create new projects in the workspace
+- Add content to project canvases (text, headings, images, dividers)
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
@@ -298,6 +301,17 @@ ${currentPage}
     prompt += `\nWhen searching the catalog, use subcategory names or keywords for best results. For example: "AI SDR", "CRM", "Email Marketing", "LLM Provider".\n`;
   }
 
+  /* ── Projects ── */
+  if (projects.length > 0) {
+    prompt += `\n## Projects\n`;
+    for (const p of projects) {
+      const blocks = p.canvas_blocks as unknown[];
+      const blockCount = blocks?.length ?? 0;
+      prompt += `- **${p.name}** (mode: ${p.active_mode}, ${blockCount} canvas block${blockCount !== 1 ? "s" : ""}) — /projects/${p.slug}\n`;
+      if (p.description) prompt += `  ${truncate(p.description as string, 200)}\n`;
+    }
+  }
+
   /* ── Session files ── */
   if (chatFileContents.length > 0) {
     prompt += `\n## Session Files (uploaded for this conversation)\n`;
@@ -353,6 +367,7 @@ export async function POST(req: Request) {
     { data: libraryFiles },
     { data: stackTools },
     { data: catalogCategories },
+    { data: projects },
   ] = await Promise.all([
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
     supabase.from("organization_files").select("id, name, text_content").order("added_at", { ascending: false }),
@@ -367,6 +382,7 @@ export async function POST(req: Request) {
     supabase.from("library_files").select("id, name, text_content").order("added_at", { ascending: false }),
     supabase.from("user_stack_tools").select("*").order("created_at", { ascending: false }),
     supabase.from("tool_catalog").select("category, subcategory"),
+    supabase.from("projects").select("*").order("created_at", { ascending: false }),
   ]);
 
   /* Build catalog category summary */
@@ -405,6 +421,7 @@ export async function POST(req: Request) {
     libraryItems: libraryItems ?? [],
     libraryFiles: libraryFiles ?? [],
     stackTools: stackTools ?? [],
+    projects: projects ?? [],
     catalogSummary,
     catalogSubcategories,
     chatFileContents: chatFileContents ?? [],
