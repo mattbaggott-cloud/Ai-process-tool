@@ -95,6 +95,10 @@ export default function AIChat() {
             return updated;
           });
         }
+        /* Notify other components to refresh their data */
+        window.dispatchEvent(new Event("workspace-updated"));
+        /* Dispatch again after a short delay to catch any DB propagation lag */
+        setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
       } catch {
         setMessages((prev) => [
           ...prev,

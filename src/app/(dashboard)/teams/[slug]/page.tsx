@@ -220,6 +220,13 @@ export default function TeamPage() {
 
   useEffect(() => { loadTeam(); }, [loadTeam]);
 
+  /* Listen for AI-triggered data changes */
+  useEffect(() => {
+    const handler = () => loadTeam();
+    window.addEventListener("workspace-updated", handler);
+    return () => window.removeEventListener("workspace-updated", handler);
+  }, [loadTeam]);
+
   /* ══════════════════════════════════════════════════════════
      DESCRIPTION — auto-save on blur
      ══════════════════════════════════════════════════════════ */

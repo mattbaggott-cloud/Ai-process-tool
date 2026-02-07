@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getToolDefinitions } from "./tools";
+import { executeTool } from "./tool-executor";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -87,6 +89,18 @@ function buildSystemPrompt(data: {
 - Be concise and actionable — reference the user's real data when relevant
 - When the user is on a specific page, prioritize context about that area
 - Format responses with clear structure (use bullet points, headers, etc.)
+
+## Your Capabilities
+You can take actions in the user's workspace using tools:
+- Create teams and add roles, KPIs, and tools to them
+- Delete roles, KPIs, and tools from teams
+- Create goals and sub-goals, update their status
+- Delete goals (and all their sub-goals)
+- Create library items (notes, documents, templates)
+
+When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
+If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
+The UI updates automatically after changes — no need to tell the user to refresh.
 
 ## User's Current Page
 ${currentPage}
@@ -276,25 +290,30 @@ export async function POST(req: Request) {
     currentPage: currentPage ?? "/",
   });
 
-  /* 6. Call Claude with streaming */
+  /* 6. Call Claude with streaming + tool use */
   const anthropic = new Anthropic();
+  const tools = getToolDefinitions();
+  const encoder = new TextEncoder();
 
   try {
-    const stream = anthropic.messages.stream({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages: messages.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-    });
-
-    const encoder = new TextEncoder();
+    const apiMessages: Anthropic.Messages.MessageParam[] = messages.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
 
     const readable = new ReadableStream({
       async start(controller) {
         try {
+          /* ── First API call (may trigger tool use) ── */
+          const stream = anthropic.messages.stream({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 4096,
+            system: systemPrompt,
+            messages: apiMessages,
+            tools,
+          });
+
+          /* Stream any text from the first call */
           for await (const event of stream) {
             if (
               event.type === "content_block_delta" &&
@@ -303,6 +322,60 @@ export async function POST(req: Request) {
               controller.enqueue(encoder.encode(event.delta.text));
             }
           }
+
+          /* Check if Claude wants to use tools */
+          const finalMessage = await stream.finalMessage();
+
+          if (finalMessage.stop_reason === "tool_use") {
+            /* Extract tool_use blocks */
+            const toolUseBlocks = finalMessage.content.filter(
+              (block): block is Anthropic.Messages.ToolUseBlock =>
+                block.type === "tool_use"
+            );
+
+            /* Execute all tools */
+            const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+            for (const toolBlock of toolUseBlocks) {
+              const result = await executeTool(
+                toolBlock.name,
+                toolBlock.input as Record<string, unknown>,
+                supabase,
+                user.id
+              );
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: toolBlock.id,
+                content: result.message,
+                is_error: !result.success,
+              });
+            }
+
+            /* ── Second API call with tool results ── */
+            const secondMessages: Anthropic.Messages.MessageParam[] = [
+              ...apiMessages,
+              { role: "assistant", content: finalMessage.content },
+              { role: "user", content: toolResults },
+            ];
+
+            const secondStream = anthropic.messages.stream({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 4096,
+              system: systemPrompt,
+              messages: secondMessages,
+              tools,
+            });
+
+            /* Stream the follow-up response */
+            for await (const event of secondStream) {
+              if (
+                event.type === "content_block_delta" &&
+                event.delta.type === "text_delta"
+              ) {
+                controller.enqueue(encoder.encode(event.delta.text));
+              }
+            }
+          }
+
           controller.close();
         } catch (err) {
           controller.error(err);

@@ -278,6 +278,13 @@ export default function GoalsPage() {
 
   useEffect(() => { loadGoals(); }, [loadGoals]);
 
+  /* Listen for AI-triggered data changes */
+  useEffect(() => {
+    const handler = () => loadGoals();
+    window.addEventListener("workspace-updated", handler);
+    return () => window.removeEventListener("workspace-updated", handler);
+  }, [loadGoals]);
+
   /* ── Toggle expand ── */
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {

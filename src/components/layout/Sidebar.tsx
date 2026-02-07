@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
@@ -73,7 +73,7 @@ export default function Sidebar() {
 
   /* ── Load teams dynamically ── */
   const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
-  useEffect(() => {
+  const loadSidebarTeams = useCallback(() => {
     if (!user) return;
     const supabase = createClient();
     supabase
@@ -84,6 +84,15 @@ export default function Sidebar() {
         if (data) setSidebarTeams(data.map((t) => ({ slug: t.slug, name: t.name || t.slug })));
       });
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadSidebarTeams(); }, [loadSidebarTeams]);
+
+  /* Listen for AI-triggered data changes */
+  useEffect(() => {
+    const handler = () => loadSidebarTeams();
+    window.addEventListener("workspace-updated", handler);
+    return () => window.removeEventListener("workspace-updated", handler);
+  }, [loadSidebarTeams]);
 
   const handleSignOut = async () => {
     const supabase = createClient();

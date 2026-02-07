@@ -62,7 +62,7 @@ export default function LibraryPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Load notes from Supabase ── */
-  useEffect(() => {
+  const loadItems = useCallback(() => {
     if (!user) { setItemsLoading(false); return; }
 
     setItemsLoading(true);
@@ -76,6 +76,15 @@ export default function LibraryPage() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  /* Listen for AI-triggered data changes */
+  useEffect(() => {
+    const handler = () => loadItems();
+    window.addEventListener("workspace-updated", handler);
+    return () => window.removeEventListener("workspace-updated", handler);
+  }, [loadItems]);
 
   /* ── Drag & drop handlers ── */
 

@@ -103,6 +103,13 @@ export default function TeamsPage() {
     loadTeams();
   }, [loadTeams]);
 
+  /* Listen for AI-triggered data changes */
+  useEffect(() => {
+    const handler = () => loadTeams();
+    window.addEventListener("workspace-updated", handler);
+    return () => window.removeEventListener("workspace-updated", handler);
+  }, [loadTeams]);
+
   /* ══════════════════════════════════════════════════════
      ADD team
      ══════════════════════════════════════════════════════ */
