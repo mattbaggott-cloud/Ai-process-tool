@@ -180,7 +180,16 @@ export interface UserStackTool {
 
 // Phase 10: Projects (unified workspace)
 export type ProjectMode = "canvas" | "workflow" | "chat";
-export type CanvasBlockType = "text" | "heading" | "image" | "divider";
+export type CanvasBlockType =
+  "text" | "heading" | "image" | "divider" |
+  "bullet_list" | "numbered_list" | "checklist" | "table" | "code" | "chart" |
+  "column_group";
+
+export interface ListItem {
+  id: string;
+  text: string;
+  checked?: boolean;
+}
 
 export interface CanvasBlock {
   id: string;
@@ -189,6 +198,18 @@ export interface CanvasBlock {
   level?: 1 | 2 | 3;
   url?: string;
   alt?: string;
+  items?: ListItem[];
+  rows?: string[][];
+  language?: string;
+  chartType?: "bar" | "line" | "pie" | "area";
+  chartData?: Record<string, unknown>[];
+  chartConfig?: {
+    title?: string;
+    xKey?: string;
+    yKeys?: string[];
+    colors?: string[];
+  };
+  columns?: CanvasBlock[][];
 }
 
 export interface Project {

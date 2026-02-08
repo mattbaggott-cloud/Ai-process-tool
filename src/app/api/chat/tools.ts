@@ -468,12 +468,12 @@ export function getToolDefinitions(): Tool[] {
               properties: {
                 type: {
                   type: "string",
-                  enum: ["text", "heading", "image", "divider"],
+                  enum: ["text", "heading", "image", "divider", "bullet_list", "numbered_list", "checklist", "table", "code", "chart", "column_group"],
                   description: "Block type",
                 },
                 content: {
                   type: "string",
-                  description: "Text content (for text and heading blocks)",
+                  description: "Text content (for text, heading, and code blocks)",
                 },
                 level: {
                   type: "number",
@@ -487,6 +487,66 @@ export function getToolDefinitions(): Tool[] {
                 alt: {
                   type: "string",
                   description: "Image alt text (only for image blocks)",
+                },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string", description: "Item text" },
+                      checked: { type: "boolean", description: "Checked state (checklist only)" },
+                    },
+                    required: ["text"],
+                  },
+                  description: "List items (for bullet_list, numbered_list, checklist blocks)",
+                },
+                rows: {
+                  type: "array",
+                  items: { type: "array", items: { type: "string" } },
+                  description: "Table rows as 2D string array. First row = column headers. Example: [[\"Name\",\"Value\"],[\"Alpha\",\"10\"]]",
+                },
+                language: {
+                  type: "string",
+                  description: "Programming language label (for code blocks, e.g. 'javascript', 'python')",
+                },
+                chartType: {
+                  type: "string",
+                  enum: ["bar", "line", "pie", "area"],
+                  description: "Chart type (for chart blocks). Defaults to 'bar'.",
+                },
+                chartData: {
+                  type: "array",
+                  items: { type: "object" },
+                  description: "Chart data points array. Each object should have keys matching xKey and yKeys. Example: [{\"month\":\"Jan\",\"visitors\":400},{\"month\":\"Feb\",\"visitors\":600}]",
+                },
+                chartConfig: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string", description: "Chart title" },
+                    xKey: { type: "string", description: "Key for X axis (e.g. 'month')" },
+                    yKeys: { type: "array", items: { type: "string" }, description: "Keys for Y axis data series (e.g. ['visitors', 'conversions'])" },
+                    colors: { type: "array", items: { type: "string" }, description: "Optional hex colors for each series (e.g. ['#2563eb', '#16a34a'])" },
+                  },
+                  description: "Chart configuration (for chart blocks)",
+                },
+                columns: {
+                  type: "array",
+                  items: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        type: { type: "string", description: "Block type" },
+                        content: { type: "string" },
+                        level: { type: "number" },
+                        items: { type: "array", items: { type: "object", properties: { text: { type: "string" }, checked: { type: "boolean" } }, required: ["text"] } },
+                        rows: { type: "array", items: { type: "array", items: { type: "string" } } },
+                        language: { type: "string" },
+                      },
+                      required: ["type"],
+                    },
+                  },
+                  description: "For column_group blocks: array of columns, each column is an array of blocks. Example: [[{\"type\":\"text\",\"content\":\"Left\"}],[{\"type\":\"text\",\"content\":\"Right\"}]]",
                 },
               },
               required: ["type"],

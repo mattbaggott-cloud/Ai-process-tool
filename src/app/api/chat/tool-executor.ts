@@ -960,6 +960,20 @@ async function handleUpdateCanvas(
     level?: number;
     url?: string;
     alt?: string;
+    items?: Array<{ text: string; checked?: boolean }>;
+    rows?: string[][];
+    language?: string;
+    chartType?: string;
+    chartData?: Record<string, unknown>[];
+    chartConfig?: Record<string, unknown>;
+    columns?: Array<Array<{
+      type: string;
+      content?: string;
+      level?: number;
+      items?: Array<{ text: string; checked?: boolean }>;
+      rows?: string[][];
+      language?: string;
+    }>>;
   }>;
   const action = (input.action as string) ?? "append";
 
@@ -976,15 +990,39 @@ async function handleUpdateCanvas(
 
   if (!project) return { success: false, message: `Project "${projectName}" not found` };
 
-  /* Generate IDs for new blocks */
-  const newBlocks = blocks.map((b) => ({
-    id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
-    type: b.type,
-    ...(b.content !== undefined && { content: b.content }),
-    ...(b.level !== undefined && { level: b.level }),
-    ...(b.url !== undefined && { url: b.url }),
-    ...(b.alt !== undefined && { alt: b.alt }),
-  }));
+  const genId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+  /* Map a single raw block to a block with generated IDs */
+  function mapBlock(b: typeof blocks[0]): Record<string, unknown> {
+    return {
+      id: genId(),
+      type: b.type,
+      ...(b.content !== undefined && { content: b.content }),
+      ...(b.level !== undefined && { level: b.level }),
+      ...(b.url !== undefined && { url: b.url }),
+      ...(b.alt !== undefined && { alt: b.alt }),
+      ...(b.items && {
+        items: b.items.map((item) => ({
+          id: genId(),
+          text: item.text,
+          ...(item.checked !== undefined && { checked: item.checked }),
+        })),
+      }),
+      ...(b.rows && { rows: b.rows }),
+      ...(b.language !== undefined && { language: b.language }),
+      ...(b.chartType && { chartType: b.chartType }),
+      ...(b.chartData && { chartData: b.chartData }),
+      ...(b.chartConfig && { chartConfig: b.chartConfig }),
+      ...(b.columns && {
+        columns: b.columns.map((col) =>
+          col.map((innerBlock) => mapBlock(innerBlock as typeof blocks[0]))
+        ),
+      }),
+    };
+  }
+
+  /* Generate IDs for new blocks (and list items, and nested column blocks) */
+  const newBlocks = blocks.map(mapBlock);
 
   let finalBlocks;
   if (action === "replace") {

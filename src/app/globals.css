@@ -2356,60 +2356,503 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   CANVAS BLOCK EDITOR
+   CANVAS BLOCK EDITOR — Notion-style clean layout
    ═══════════════════════════════════════════════════════════ */
 
 .canvas-editor {
   max-width: 720px;
   margin: 0 auto;
+  padding: 0 40px;          /* room for left controls to sit outside */
 }
+
+/* ── Individual block row ─────────────────────────────── */
 
 .canvas-block {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 4px 0;
-  border-radius: 6px;
-  transition: background 0.15s;
   position: relative;
+  padding: 2px 0;
+  border-radius: 4px;
+  margin-left: -40px;        /* controls sit in the left margin */
+  padding-left: 40px;        /* push content back to grid */
+  transition: background 0.1s;
 }
 
-.canvas-block:hover {
-  background: var(--color-gray-50);
-}
+/* ── Drag drop zone indicators ──────────────────────────── */
 
 .canvas-block-drag-over {
-  border-top: 2px solid var(--color-primary-500);
+  border-top: 2px solid var(--color-primary-500, #2563eb);
 }
 
-.canvas-drag-handle {
+.canvas-block-dragging {
+  opacity: 0.4;
+}
+
+.canvas-drop-top {
+  border-top: 3px solid var(--color-primary-500, #2563eb);
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.06) 0%, transparent 40%);
+}
+
+.canvas-drop-bottom {
+  border-bottom: 3px solid var(--color-primary-500, #2563eb);
+  background: linear-gradient(0deg, rgba(37, 99, 235, 0.06) 0%, transparent 40%);
+}
+
+.canvas-drop-left {
+  border-left: 3px solid var(--color-primary-500, #2563eb);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.08) 0%, transparent 40%);
+}
+
+.canvas-drop-right {
+  border-right: 3px solid var(--color-primary-500, #2563eb);
+  background: linear-gradient(270deg, rgba(37, 99, 235, 0.08) 0%, transparent 40%);
+}
+
+/* ── Notion-style left controls (+ and ⋮⋮) ── */
+
+.canvas-block-controls {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+
+.canvas-block:hover .canvas-block-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.canvas-control-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  min-height: 32px;
-  cursor: grab;
-  opacity: 0;
-  transition: opacity 0.15s;
+  width: 18px;
+  height: 24px;
+  border: none;
+  background: none;
+  color: var(--color-gray-400, #9ca3af);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s, color 0.1s;
+  padding: 0;
   flex-shrink: 0;
-  padding-top: 4px;
 }
 
-.canvas-block:hover .canvas-drag-handle {
-  opacity: 1;
+.canvas-control-btn:hover {
+  background: var(--color-gray-100, #f3f4f6);
+  color: var(--color-gray-600, #4b5563);
 }
 
-.canvas-drag-handle:active {
+.canvas-control-grip {
+  cursor: grab;
+}
+
+.canvas-control-grip:active {
   cursor: grabbing;
 }
+
+/* ── Block content ──────────────────────────────────────── */
 
 .canvas-block-content {
   flex: 1;
   min-width: 0;
 }
 
+/* ── Text input ─────────────────────────────────────────── */
+
 .canvas-text-input {
   width: 100%;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-family: inherit;
+  color: var(--color-gray-800, #1f2937);
+  line-height: 1.65;
+  background: transparent;
+  padding: 3px 0;
+  min-height: 1.65em;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.canvas-text-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-gray-400, #9ca3af);
+  pointer-events: none;
+}
+
+.canvas-text-input strong,
+.canvas-text-input b { font-weight: 600; }
+.canvas-text-input em,
+.canvas-text-input i { font-style: italic; }
+.canvas-text-input u { text-decoration: underline; }
+
+/* ── Heading blocks (contentEditable, no dropdown) ────── */
+
+.canvas-heading {
+  width: 100%;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  color: var(--color-gray-900, #111827);
+  background: transparent;
+  word-break: break-word;
+  white-space: pre-wrap;
+  font-weight: 600;
+}
+
+.canvas-heading:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-gray-400, #9ca3af);
+  pointer-events: none;
+  font-weight: 400;
+}
+
+.canvas-heading-1 {
+  font-size: 28px;
+  line-height: 1.3;
+  padding: 6px 0 2px;
+  letter-spacing: -0.02em;
+}
+
+.canvas-heading-2 {
+  font-size: 22px;
+  line-height: 1.35;
+  padding: 4px 0 1px;
+  letter-spacing: -0.01em;
+}
+
+.canvas-heading-3 {
+  font-size: 18px;
+  line-height: 1.4;
+  padding: 3px 0 1px;
+}
+
+.canvas-heading strong,
+.canvas-heading b { font-weight: 700; }
+.canvas-heading em,
+.canvas-heading i { font-style: italic; }
+.canvas-heading u { text-decoration: underline; }
+
+/* ── Divider ────────────────────────────────────────────── */
+
+.canvas-divider {
+  border: none;
+  border-top: 1px solid var(--color-gray-200, #e5e7eb);
+  margin: 6px 0;
+}
+
+/* ── Image block ────────────────────────────────────────── */
+
+.canvas-image-block {
+  padding: 3px 0;
+}
+
+.canvas-image-block img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+/* ── Insert line (between blocks, hover-to-reveal) ─────── */
+
+.canvas-insert-line {
+  height: 4px;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: -40px;
+  padding-left: 40px;
+}
+
+.canvas-insert-line::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 40px;
+  right: 0;
+  height: 2px;
+  background: transparent;
+  transition: background 0.12s;
+  transform: translateY(-50%);
+}
+
+.canvas-insert-line:hover::before {
+  background: var(--color-primary-500, #2563eb);
+  opacity: 0.35;
+}
+
+.canvas-insert-line-plus {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-primary-500, #2563eb);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.canvas-insert-line:hover .canvas-insert-line-plus {
+  display: block;
+}
+
+/* ── Trailing add zone (bottom of canvas) ──────────────── */
+
+.canvas-trailing-add {
+  padding: 12px 0;
+  cursor: text;
+  color: transparent;
+  font-size: 14px;
+  font-family: inherit;
+  transition: color 0.12s;
+  border: none;
+  background: none;
+  text-align: left;
+}
+
+.canvas-trailing-add:hover {
+  color: var(--color-gray-400, #9ca3af);
+}
+
+.canvas-trailing-add-label {
+  font-size: 14px;
+}
+
+/* ── Column group ─────────────────────────────────────── */
+
+.canvas-column-group {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.canvas-column {
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1.5px solid transparent;
+  transition: border-color 0.12s;
+}
+
+.canvas-column:hover {
+  border-color: var(--color-gray-150, #eaedf0);
+}
+
+/* Column header with delete button */
+.canvas-column-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 2px 2px;
+  min-height: 18px;
+}
+
+.canvas-column-delete {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  color: var(--color-gray-300, #d1d5db);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+  line-height: 1;
+}
+
+.canvas-column:hover .canvas-column-delete {
+  opacity: 1;
+}
+
+.canvas-column-delete:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+/* In-column blocks: no left-margin trick (narrower context) */
+.canvas-block-in-column {
+  margin-left: 0;
+  padding-left: 36px;
+}
+
+.canvas-block-in-column .canvas-block-controls {
+  left: 0;
+}
+
+/* Column insert lines */
+.canvas-column .canvas-insert-line {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.canvas-column .canvas-insert-line::before {
+  left: 0;
+}
+
+/* Column trailing add */
+.canvas-column > .canvas-trailing-add {
+  padding: 6px 0;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Add-column button */
+.canvas-column-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-height: 40px;
+  border: 1.5px dashed transparent;
+  border-radius: 4px;
+  color: var(--color-gray-300, #d1d5db);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, border-color 0.12s, color 0.12s;
+  background: transparent;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.canvas-column-group:hover .canvas-column-add {
+  opacity: 1;
+  border-color: var(--color-gray-200, #e5e7eb);
+}
+
+.canvas-column-add:hover {
+  border-color: var(--color-primary-500, #2563eb);
+  color: var(--color-primary-500, #2563eb);
+}
+
+@media (max-width: 600px) {
+  .canvas-editor {
+    padding: 0 12px;
+  }
+  .canvas-block {
+    margin-left: -28px;
+    padding-left: 28px;
+  }
+  .canvas-block-controls {
+    left: 0;
+  }
+  .canvas-insert-line {
+    margin-left: -28px;
+    padding-left: 28px;
+  }
+  .canvas-insert-line::before {
+    left: 28px;
+  }
+  .canvas-column-group {
+    flex-direction: column;
+  }
+  .canvas-column-add {
+    width: 100%;
+    min-height: 20px;
+  }
+}
+
+/* ── Slash Command Menu ────────────────────────────────── */
+
+.slash-menu {
+  position: fixed;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  z-index: 50;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.slash-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-gray-700);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.slash-menu-item:hover,
+.slash-menu-item.active {
+  background: var(--color-primary-50);
+  color: var(--color-primary-700, #1d4ed8);
+}
+
+.slash-menu-icon {
+  width: 24px;
+  text-align: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--color-gray-500);
+}
+
+.slash-menu-item.active .slash-menu-icon,
+.slash-menu-item:hover .slash-menu-icon {
+  color: var(--color-primary-500);
+}
+
+.slash-menu-empty {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--color-gray-400);
+  text-align: center;
+}
+
+/* ── List Blocks (bullet + numbered) ───────────────────── */
+
+.canvas-list {
+  padding: 2px 0;
+}
+
+.canvas-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 28px;
+}
+
+.canvas-list-marker {
+  width: 24px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-gray-500);
+  user-select: none;
+  padding-top: 4px;
+}
+
+.canvas-list-text {
+  flex: 1;
   border: none;
   outline: none;
   font-size: 14px;
@@ -2423,175 +2866,331 @@ body {
   white-space: pre-wrap;
 }
 
-/* Placeholder for contentEditable (no native placeholder attr) */
-.canvas-text-input:empty::before {
+.canvas-list-text:empty::before {
   content: attr(data-placeholder);
   color: var(--color-gray-400);
   pointer-events: none;
 }
 
-/* Rich text formatting styles */
-.canvas-text-input strong,
-.canvas-text-input b {
+.canvas-list-text strong,
+.canvas-list-text b { font-weight: 600; }
+.canvas-list-text em,
+.canvas-list-text i { font-style: italic; }
+.canvas-list-text u { text-decoration: underline; }
+
+/* ── Checklist Block ───────────────────────────────────── */
+
+.canvas-checklist {
+  padding: 2px 0;
+}
+
+.canvas-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.canvas-checklist-checkbox {
+  width: 16px;
+  height: 16px;
+  margin-top: 7px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: var(--color-primary-500);
+}
+
+.canvas-checklist-text {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--color-gray-700);
+  line-height: 1.6;
+  background: transparent;
+  padding: 4px 0;
+  min-height: 1.6em;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.canvas-checklist-text:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-gray-400);
+  pointer-events: none;
+}
+
+.canvas-checklist-text.checked {
+  text-decoration: line-through;
+  color: var(--color-gray-400);
+}
+
+/* ── Table Block ───────────────────────────────────────── */
+
+.canvas-table-wrapper {
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.canvas-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.canvas-table th {
+  background: var(--color-gray-50);
   font-weight: 600;
+  color: var(--color-gray-700);
+  text-align: left;
+  border-bottom: 1px solid var(--color-gray-200);
+  padding: 0;
+  position: relative;
 }
 
-.canvas-text-input em,
-.canvas-text-input i {
-  font-style: italic;
+.canvas-table td {
+  border-bottom: 1px solid var(--color-gray-100);
+  padding: 0;
+  position: relative;
 }
 
-.canvas-text-input u {
-  text-decoration: underline;
+.canvas-table-cell-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: none;
+  outline: none;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-gray-700);
+  background: transparent;
 }
 
-.canvas-heading-select {
+.canvas-table-cell-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-gray-300);
+}
+
+.canvas-table-cell-input:focus {
+  background: var(--color-primary-50);
+}
+
+.canvas-table-delete-col {
+  position: absolute;
+  top: -1px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: var(--color-gray-400);
+  font-size: 14px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+
+.canvas-table th:hover .canvas-table-delete-col {
+  display: flex;
+}
+
+.canvas-table-delete-col:hover {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.canvas-table-add-col-cell {
+  width: 32px;
+  background: transparent !important;
+  border: none !important;
+}
+
+.canvas-table-add-col {
+  width: 24px;
+  height: 24px;
+  border: 1px dashed var(--color-gray-300);
+  background: none;
+  color: var(--color-gray-400);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.canvas-table-wrapper:hover .canvas-table-add-col {
+  opacity: 1;
+}
+
+.canvas-table-add-col:hover {
+  border-color: var(--color-primary-500);
+  color: var(--color-primary-500);
+}
+
+.canvas-table-row-actions {
+  width: 24px;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.canvas-table-delete-row {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  color: var(--color-gray-400);
+  font-size: 14px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+
+.canvas-table tr:hover .canvas-table-delete-row {
+  display: flex;
+}
+
+.canvas-table-delete-row:hover {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.canvas-table-add-row {
+  width: 100%;
+  padding: 6px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-gray-400);
+  cursor: pointer;
+  text-align: center;
+  border-top: 1px dashed var(--color-gray-200);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.canvas-table-wrapper:hover .canvas-table-add-row {
+  opacity: 1;
+}
+
+.canvas-table-add-row:hover {
+  color: var(--color-primary-500);
+  background: var(--color-primary-50);
+}
+
+/* ── Code Block ────────────────────────────────────────── */
+
+.canvas-code-block {
+  background: #1e1e2e;
+  border-radius: 8px;
+  padding: 12px 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.canvas-code-language {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 11px;
+  font-family: inherit;
+  color: #6c7086;
+  text-align: right;
+  width: 80px;
+}
+
+.canvas-code-language::placeholder {
+  color: #45475a;
+}
+
+.canvas-code-content {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cdd6f4;
+  background: transparent;
+  border: none;
+  outline: none;
+  margin: 0;
+  padding: 4px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  min-height: 40px;
+  tab-size: 2;
+}
+
+.canvas-code-content:empty::before {
+  content: attr(data-placeholder);
+  color: #45475a;
+}
+
+/* ── Chart Block ───────────────────────────────────────── */
+
+.canvas-chart-block {
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.canvas-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+
+.canvas-chart-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-gray-900);
+  outline: none;
+  border: none;
+  min-height: 1.4em;
+}
+
+.canvas-chart-title:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-gray-400);
+  font-weight: 400;
+}
+
+.canvas-chart-type-select {
   border: 1px solid var(--color-gray-200);
   border-radius: 4px;
-  padding: 2px 4px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: 4px 8px;
+  font-size: 12px;
   font-family: inherit;
-  color: var(--color-gray-500);
+  color: var(--color-gray-600);
   background: var(--color-gray-50);
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
 }
 
-.canvas-heading-input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-family: inherit;
-  color: var(--color-gray-900);
-  background: transparent;
-  min-width: 0;
-}
-
-.canvas-heading-input::placeholder {
-  color: var(--color-gray-400);
-}
-
-.canvas-divider {
-  border: none;
-  border-top: 1px solid var(--color-gray-200);
-  margin: 8px 0;
-}
-
-.canvas-image-block {
-  padding: 4px 0;
-}
-
-.canvas-image-block img {
-  max-width: 100%;
-  border-radius: 8px;
-}
-
-.canvas-block-delete {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  border: none;
-  background: none;
-  color: var(--color-gray-400);
-  font-size: 18px;
-  cursor: pointer;
+.canvas-chart-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.canvas-block:hover .canvas-block-delete {
-  opacity: 1;
-}
-
-.canvas-block-delete:hover {
-  background: var(--color-error);
-  color: #fff;
-}
-
-/* ── Add block row (between blocks) ─────────────────────── */
-
-.canvas-add-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 12px;
-  position: relative;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.canvas-editor:hover .canvas-add-row {
-  opacity: 1;
-}
-
-.canvas-add-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid var(--color-gray-300);
-  background: #fff;
+  padding: 40px 20px;
   color: var(--color-gray-400);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-}
-
-.canvas-add-btn:hover {
-  border-color: var(--color-primary-500);
-  color: var(--color-primary-500);
-  background: var(--color-primary-50);
-}
-
-.canvas-add-menu {
-  position: absolute;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  border: 1px solid var(--color-gray-200);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  padding: 4px;
-  z-index: 20;
-  min-width: 140px;
-}
-
-.canvas-add-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: none;
-  background: none;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--color-gray-700);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s;
-}
-
-.canvas-add-menu-item:hover {
-  background: var(--color-gray-100);
-}
-
-.canvas-add-menu-icon {
-  width: 20px;
   text-align: center;
   font-size: 14px;
-  flex-shrink: 0;
 }
 
 /* ═══════════════════════════════════════════════════════════
