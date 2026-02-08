@@ -2462,6 +2462,7 @@ body {
 .canvas-block-content {
   flex: 1;
   min-width: 0;
+  position: relative;
 }
 
 /* ── Text input ─────────────────────────────────────────── */
@@ -2548,15 +2549,122 @@ body {
   margin: 6px 0;
 }
 
+/* ── Alignment toolbar (shown on block hover) ──────────── */
+
+.canvas-align-toolbar {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  position: absolute;
+  top: -30px;
+  right: 4px;
+  z-index: 12;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 6px;
+  padding: 2px 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.canvas-block:hover > .canvas-block-content > .canvas-align-toolbar,
+.canvas-block-in-column:hover > .canvas-block-content > .canvas-align-toolbar {
+  display: flex;
+}
+
+.canvas-align-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--color-gray-400);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.canvas-align-btn:hover {
+  background: var(--color-gray-100);
+  color: var(--color-gray-700);
+}
+
+.canvas-align-btn.active {
+  background: var(--color-primary-50, #eff6ff);
+  color: var(--color-primary-500, #2563eb);
+}
+
+.canvas-align-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--color-gray-200);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.canvas-width-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.canvas-width-slider {
+  width: 60px;
+  height: 4px;
+  accent-color: var(--color-primary-500, #2563eb);
+  cursor: pointer;
+}
+
+.canvas-width-label {
+  font-size: 11px;
+  color: var(--color-gray-500);
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Image block ────────────────────────────────────────── */
 
 .canvas-image-block {
   padding: 3px 0;
+  position: relative;
+  transition: width 0.1s ease;
 }
 
 .canvas-image-block img {
-  max-width: 100%;
+  width: 100%;
   border-radius: 6px;
+  display: block;
+}
+
+/* Resize handle on image right edge */
+.canvas-image-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 5;
+}
+
+.canvas-image-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--color-primary-500, #2563eb);
+}
+
+.canvas-image-block:hover .canvas-image-resize-handle {
+  opacity: 1;
 }
 
 /* ── Insert line (between blocks, hover-to-reveal) ─────── */

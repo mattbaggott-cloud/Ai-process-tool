@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import type { CanvasBlock, CanvasBlockType, ListItem } from "@/lib/types/database";
+import type { CanvasBlock, CanvasBlockType, ListItem, BlockAlign } from "@/lib/types/database";
 import SlashCommandMenu from "./SlashCommandMenu";
 import ListBlock from "./blocks/ListBlock";
 import ChecklistBlock from "./blocks/ChecklistBlock";
@@ -172,8 +172,118 @@ function RichTextBlock({ content, blockId, placeholder, className, style, onChan
 }
 
 /* ══════════════════════════════════════════════════════════
+   ALIGN TOOLBAR — small bar for left/center/right + width
+   ══════════════════════════════════════════════════════════ */
+
+const ALIGN_ICONS: Record<BlockAlign, React.ReactNode> = {
+  left: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="1" y1="2" x2="13" y2="2"/><line x1="1" y1="5.5" x2="9" y2="5.5"/><line x1="1" y1="9" x2="13" y2="9"/><line x1="1" y1="12.5" x2="9" y2="12.5"/>
+    </svg>
+  ),
+  center: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="1" y1="2" x2="13" y2="2"/><line x1="3" y1="5.5" x2="11" y2="5.5"/><line x1="1" y1="9" x2="13" y2="9"/><line x1="3" y1="12.5" x2="11" y2="12.5"/>
+    </svg>
+  ),
+  right: (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <line x1="1" y1="2" x2="13" y2="2"/><line x1="5" y1="5.5" x2="13" y2="5.5"/><line x1="1" y1="9" x2="13" y2="9"/><line x1="5" y1="12.5" x2="13" y2="12.5"/>
+    </svg>
+  ),
+};
+
+function AlignToolbar({ align, onAlign, showWidth, width, onWidth }: {
+  align: BlockAlign;
+  onAlign: (a: BlockAlign) => void;
+  showWidth?: boolean;
+  width?: number;
+  onWidth?: (w: number) => void;
+}) {
+  return (
+    <div className="canvas-align-toolbar">
+      {(["left", "center", "right"] as BlockAlign[]).map((a) => (
+        <button key={a} className={`canvas-align-btn${align === a ? " active" : ""}`}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onAlign(a); }}
+          title={`Align ${a}`}>
+          {ALIGN_ICONS[a]}
+        </button>
+      ))}
+      {showWidth && onWidth && (
+        <>
+          <span className="canvas-align-sep" />
+          <div className="canvas-width-control">
+            <input type="range" min="25" max="100" step="5" value={width ?? 100}
+              onChange={(e) => onWidth(Number(e.target.value))}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="canvas-width-slider" />
+            <span className="canvas-width-label">{width ?? 100}%</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   IMAGE BLOCK — with resize handle
+   ══════════════════════════════════════════════════════════ */
+
+function ImageBlock({ block, updateBlock }: { block: CanvasBlock; updateBlock: (id: string, patch: Partial<CanvasBlock>) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDragging.current = true;
+    const startX = e.clientX;
+    const startWidth = block.width ?? 100;
+    const parentWidth = containerRef.current?.parentElement?.getBoundingClientRect().width ?? 600;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = ev.clientX - startX;
+      const deltaPercent = (delta / parentWidth) * 100;
+      const newWidth = Math.max(20, Math.min(100, startWidth + deltaPercent));
+      updateBlock(block.id, { width: Math.round(newWidth) });
+    };
+    const onUp = () => {
+      isDragging.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [block.id, block.width, updateBlock]);
+
+  if (!block.url) {
+    return (
+      <div className="canvas-image-block">
+        <input className="input" placeholder="Paste an image URL\u2026" value={block.url ?? ""}
+          onChange={(e) => updateBlock(block.id, { url: e.target.value })} />
+      </div>
+    );
+  }
+
+  const widthPct = block.width ?? 100;
+
+  return (
+    <div className="canvas-image-block" ref={containerRef}
+      style={{ width: `${widthPct}%` }}>
+      <img src={block.url} alt={block.alt || ""} style={{ width: "100%", borderRadius: 8 }} />
+      <div className="canvas-image-resize-handle" onMouseDown={handleResizeStart}
+        title="Drag to resize" />
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
    BLOCK RENDERER
    ══════════════════════════════════════════════════════════ */
+
+/* Block types that support alignment */
+const ALIGNABLE_TYPES: CanvasBlockType[] = ["text", "heading", "image", "chart", "code", "table"];
 
 interface BlockRendererProps {
   block: CanvasBlock;
@@ -197,10 +307,38 @@ function BlockRenderer({
   onGlobalDragStart, onGlobalDragOver, onGlobalDrop, onGlobalDragEnd,
   dragBlockId, dropTarget,
 }: BlockRendererProps) {
+  const alignable = ALIGNABLE_TYPES.includes(block.type);
+  const align = block.align ?? "left";
+  const isImage = block.type === "image" && !!block.url;
+
+  /* Alignment wrapper style */
+  const alignStyle: React.CSSProperties | undefined = align !== "left" ? {
+    display: "flex",
+    justifyContent: align === "center" ? "center" : "flex-end",
+  } : undefined;
+
+  /* For text/heading blocks, use text-align instead of flex */
+  const textAlignStyle: React.CSSProperties | undefined =
+    (block.type === "text" || block.type === "heading") && align !== "left"
+      ? { textAlign: align }
+      : undefined;
+
   return (
     <>
+      {/* Alignment toolbar — shown on hover via CSS */}
+      {alignable && (
+        <AlignToolbar
+          align={align}
+          onAlign={(a) => updateBlock(block.id, { align: a })}
+          showWidth={isImage}
+          width={block.width}
+          onWidth={isImage ? (w) => updateBlock(block.id, { width: w }) : undefined}
+        />
+      )}
+
       {block.type === "text" && (
         <RichTextBlock content={block.content ?? ""} blockId={block.id}
+          style={textAlignStyle}
           onChange={(html) => updateBlock(block.id, { content: html })}
           onDelete={() => deleteBlock(block.id)}
           onSlashOpen={handleSlashOpen} onSlashFilter={setSlashFilter} onSlashDismiss={handleSlashDismiss} />
@@ -209,25 +347,35 @@ function BlockRenderer({
         <RichTextBlock content={block.content ?? ""} blockId={block.id}
           className={`canvas-heading canvas-heading-${block.level ?? 2}`}
           placeholder={`Heading ${block.level ?? 2}`}
+          style={textAlignStyle}
           onChange={(html) => updateBlock(block.id, { content: html })}
           onDelete={() => deleteBlock(block.id)}
           onSlashOpen={handleSlashOpen} onSlashFilter={setSlashFilter} onSlashDismiss={handleSlashDismiss} />
       )}
       {block.type === "divider" && <hr className="canvas-divider" />}
       {block.type === "image" && (
-        <div className="canvas-image-block">
-          {block.url ? <img src={block.url} alt={block.alt || ""} style={{ maxWidth: "100%", borderRadius: 8 }} /> : (
-            <input className="input" placeholder="Paste an image URL\u2026" value={block.url ?? ""}
-              onChange={(e) => updateBlock(block.id, { url: e.target.value })} />
-          )}
+        <div style={alignStyle}>
+          <ImageBlock block={block} updateBlock={updateBlock} />
         </div>
       )}
       {block.type === "bullet_list" && <ListBlock items={block.items ?? []} ordered={false} onChange={(items: ListItem[]) => updateBlock(block.id, { items })} />}
       {block.type === "numbered_list" && <ListBlock items={block.items ?? []} ordered={true} onChange={(items: ListItem[]) => updateBlock(block.id, { items })} />}
       {block.type === "checklist" && <ChecklistBlock items={block.items ?? []} onChange={(items: ListItem[]) => updateBlock(block.id, { items })} />}
-      {block.type === "table" && <TableBlock rows={block.rows ?? [["", ""], ["", ""]]} onChange={(rows: string[][]) => updateBlock(block.id, { rows })} />}
-      {block.type === "code" && <CodeBlock content={block.content ?? ""} language={block.language ?? ""} onChange={(content: string, language: string) => updateBlock(block.id, { content, language })} />}
-      {block.type === "chart" && <ChartBlock chartType={block.chartType ?? "bar"} chartData={block.chartData ?? []} chartConfig={block.chartConfig ?? {}} onChange={(patch) => updateBlock(block.id, patch)} />}
+      {block.type === "table" && (
+        <div style={alignStyle}>
+          <TableBlock rows={block.rows ?? [["", ""], ["", ""]]} onChange={(rows: string[][]) => updateBlock(block.id, { rows })} />
+        </div>
+      )}
+      {block.type === "code" && (
+        <div style={alignStyle}>
+          <CodeBlock content={block.content ?? ""} language={block.language ?? ""} onChange={(content: string, language: string) => updateBlock(block.id, { content, language })} />
+        </div>
+      )}
+      {block.type === "chart" && (
+        <div style={alignStyle}>
+          <ChartBlock chartType={block.chartType ?? "bar"} chartData={block.chartData ?? []} chartConfig={block.chartConfig ?? {}} onChange={(patch) => updateBlock(block.id, patch)} />
+        </div>
+      )}
       {block.type === "column_group" && (
         <ColumnGroup
           colGroupId={block.id}
@@ -339,20 +487,25 @@ function ColumnGroup({
                     "canvas-block canvas-block-in-column" +
                     (zone === "top" ? " canvas-drop-top" : "") +
                     (zone === "bottom" ? " canvas-drop-bottom" : "") +
+                    (zone === "left" ? " canvas-drop-left" : "") +
+                    (zone === "right" ? " canvas-drop-right" : "") +
                     (dragBlockId === block.id ? " canvas-block-dragging" : "")
                   }
-                  draggable
                   onDragStart={(e) => { e.stopPropagation(); onGlobalDragStart(e, block.id); }}
                   onDragOver={(e) => { e.stopPropagation(); onGlobalDragOver(e, block.id, { colGroupId, colIdx }); }}
                   onDrop={(e) => { e.stopPropagation(); onGlobalDrop(e, block.id, { colGroupId, colIdx }); }}
-                  onDragEnd={onGlobalDragEnd}
+                  onDragEnd={(e) => { (e.currentTarget as HTMLElement).draggable = false; onGlobalDragEnd(); }}
                   onDragLeave={(e) => { e.stopPropagation(); }}
                 >
                   <div className="canvas-block-controls">
                     <button className="canvas-control-btn canvas-control-add" onClick={() => insertInCol(colIdx, blockIdx)} title="Add block below">
                       <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1v12M1 7h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none"/></svg>
                     </button>
-                    <div className="canvas-control-btn canvas-control-grip" title="Drag to reorder">
+                    <div className="canvas-control-btn canvas-control-grip" title="Drag to reorder"
+                      onMouseDown={(e) => {
+                        const blockEl = (e.currentTarget as HTMLElement).closest(".canvas-block") as HTMLElement;
+                        if (blockEl) blockEl.draggable = true;
+                      }}>
                       <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
                         <circle cx="3" cy="2" r="1.2"/><circle cx="7" cy="2" r="1.2"/>
                         <circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/>
@@ -563,8 +716,12 @@ export default function CanvasEditor({ blocks, onChange }: CanvasEditorProps) {
 
     let zone: DropZone;
     if (colTarget) {
-      // Inside a column — only top/bottom reordering
-      zone = yRatio < 0.5 ? "top" : "bottom";
+      // Inside a column:
+      // - left/right edges = move to adjacent column
+      // - top/bottom = reorder within the same column
+      if (xRatio < 0.25) zone = "left";
+      else if (xRatio > 0.75) zone = "right";
+      else zone = yRatio < 0.5 ? "top" : "bottom";
     } else {
       // Top-level — full directional detection
       if (xRatio < 0.22) zone = "left";
@@ -587,21 +744,59 @@ export default function CanvasEditor({ blocks, onChange }: CanvasEditorProps) {
 
     // 2. Find the target in the post-removal tree
     const tgtLoc = findBlock(afterRemove, targetId);
-    if (!tgtLoc) { trackedOnChange(afterRemove, true); setDragBlockId(null); setDropTarget(null); return; }
+    if (!tgtLoc) {
+      // Target disappeared (e.g. column cleaned up) — just put block back at end
+      afterRemove.push(movedBlock);
+      trackedOnChange(afterRemove, true);
+      setDragBlockId(null); setDropTarget(null);
+      return;
+    }
 
     let result = [...afterRemove];
 
-    if (colTarget && tgtLoc.kind === "column") {
-      // Dropping INTO a column
+    if (colTarget && (zone === "top" || zone === "bottom") && tgtLoc.kind === "column") {
+      // Column block with top/bottom → reorder WITHIN the same column
       const cg = result[tgtLoc.colGroupIdx];
       const cols = cg.columns!.map((c) => [...c]);
-      const insertAt = zone === "bottom" ? tgtLoc.blockIdx + 1 : tgtLoc.blockIdx;
+      const insertAt = zone === "top" ? tgtLoc.blockIdx : tgtLoc.blockIdx + 1;
       cols[tgtLoc.colIdx].splice(insertAt, 0, movedBlock);
       result[tgtLoc.colGroupIdx] = { ...cg, columns: cols };
-    } else if (colTarget) {
-      // Target was in a column but after removal it's now top-level — treat as top-level
+    } else if (colTarget && (zone === "top" || zone === "bottom") && tgtLoc.kind === "top") {
+      // Target was in a column but column group was cleaned up after removal
+      // (e.g. removing the block emptied the column group) — insert at top level
       const insertAt = zone === "bottom" ? tgtLoc.blockIdx + 1 : tgtLoc.blockIdx;
-      result.splice(insertAt, 0, movedBlock);
+      result.splice(Math.min(insertAt, result.length), 0, movedBlock);
+    } else if (colTarget && (zone === "left" || zone === "right") && tgtLoc.kind === "column") {
+      // Column block with left/right → move to adjacent column
+      const cg = result[tgtLoc.colGroupIdx];
+      const cols = cg.columns!.map((c) => [...c]);
+      const targetColIdx = zone === "left"
+        ? Math.max(0, tgtLoc.colIdx - 1)
+        : Math.min(cols.length - 1, tgtLoc.colIdx + 1);
+
+      if (targetColIdx === tgtLoc.colIdx) {
+        // No adjacent column in that direction — create a new column
+        const newCol = [movedBlock];
+        if (zone === "left") {
+          cols.splice(tgtLoc.colIdx, 0, newCol);
+        } else {
+          cols.splice(tgtLoc.colIdx + 1, 0, newCol);
+        }
+      } else {
+        // Insert into adjacent column (at end)
+        cols[targetColIdx].push(movedBlock);
+      }
+      result[tgtLoc.colGroupIdx] = { ...cg, columns: cols };
+    } else if (colTarget) {
+      // Fallback for column targets — insert into the column
+      if (tgtLoc.kind === "column") {
+        const cg = result[tgtLoc.colGroupIdx];
+        const cols = cg.columns!.map((c) => [...c]);
+        cols[tgtLoc.colIdx].push(movedBlock);
+        result[tgtLoc.colGroupIdx] = { ...cg, columns: cols };
+      } else {
+        result.splice(tgtLoc.blockIdx + 1, 0, movedBlock);
+      }
     } else if (tgtLoc.kind === "top") {
       // Top-level target
       if (zone === "left" || zone === "right") {
@@ -662,18 +857,22 @@ export default function CanvasEditor({ blocks, onChange }: CanvasEditorProps) {
                 (zone === "right" ? " canvas-drop-right" : "") +
                 (dragBlockId === block.id ? " canvas-block-dragging" : "")
               }
-              draggable
               onDragStart={(e) => onGlobalDragStart(e, block.id)}
               onDragOver={(e) => onGlobalDragOver(e, block.id)}
               onDrop={(e) => onGlobalDrop(e, block.id)}
-              onDragEnd={onGlobalDragEnd}
+              onDragEnd={(e) => { (e.currentTarget as HTMLElement).draggable = false; onGlobalDragEnd(); }}
               onDragLeave={() => { if (dropTarget?.targetId === block.id) setDropTarget(null); }}
             >
               <div className="canvas-block-controls">
                 <button className="canvas-control-btn canvas-control-add" onClick={() => insertBlockAt(idx)} title="Add block below">
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1v12M1 7h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none"/></svg>
                 </button>
-                <div className="canvas-control-btn canvas-control-grip" title="Drag to reorder">
+                <div className="canvas-control-btn canvas-control-grip" title="Drag to reorder"
+                  onMouseDown={(e) => {
+                    /* Enable draggable on the block only when grabbing the grip */
+                    const blockEl = (e.currentTarget as HTMLElement).closest(".canvas-block") as HTMLElement;
+                    if (blockEl) blockEl.draggable = true;
+                  }}>
                   <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
                     <circle cx="3" cy="2" r="1.2"/><circle cx="7" cy="2" r="1.2"/>
                     <circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/>

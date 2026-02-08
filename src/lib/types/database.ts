@@ -191,11 +191,15 @@ export interface ListItem {
   checked?: boolean;
 }
 
+export type BlockAlign = "left" | "center" | "right";
+
 export interface CanvasBlock {
   id: string;
   type: CanvasBlockType;
   content?: string;
   level?: 1 | 2 | 3;
+  align?: BlockAlign;
+  width?: number;       // percentage width (e.g. 50 = 50%), used mainly for images
   url?: string;
   alt?: string;
   items?: ListItem[];
