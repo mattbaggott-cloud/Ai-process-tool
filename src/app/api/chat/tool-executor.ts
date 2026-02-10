@@ -57,6 +57,8 @@ export async function executeTool(
         return await handleCreateProject(input, supabase, userId);
       case "update_canvas":
         return await handleUpdateCanvas(input, supabase);
+      case "generate_workflow":
+        return await handleGenerateWorkflow(input, supabase);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -1042,6 +1044,132 @@ async function handleUpdateCanvas(
 
   const verb = action === "replace" ? "Replaced canvas with" : "Added";
   return { success: true, message: `${verb} ${newBlocks.length} block(s) on "${projectName}" canvas` };
+}
+
+/* ── Generate Workflow ─────────────────────────────────── */
+
+const WF_DEFAULT_PORTS: Record<string, string[]> = {
+  start:    ["bottom"],
+  end:      ["top"],
+  process:  ["top", "bottom", "left", "right"],
+  decision: ["top", "bottom", "left", "right"],
+  ai_agent: ["top", "bottom", "left", "right"],
+  note:     [],
+};
+
+const WF_DEFAULT_SIZES: Record<string, { w: number; h: number }> = {
+  start:    { w: 140, h: 48 },
+  end:      { w: 140, h: 48 },
+  process:  { w: 220, h: 96 },
+  decision: { w: 140, h: 140 },
+  ai_agent: { w: 220, h: 96 },
+  note:     { w: 180, h: 100 },
+};
+
+async function handleGenerateWorkflow(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const projectName = input.project_name as string;
+  const rawNodes = input.nodes as Array<{
+    temp_id: string;
+    type: string;
+    title: string;
+    description?: string;
+    x: number;
+    y: number;
+    properties?: Record<string, string>;
+  }>;
+  const rawEdges = input.edges as Array<{
+    source_id: string;
+    target_id: string;
+    source_side?: string;
+    target_side?: string;
+    label?: string;
+  }>;
+
+  if (!projectName || !rawNodes?.length) {
+    return { success: false, message: "project_name and nodes are required" };
+  }
+
+  /* Resolve project by name */
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id")
+    .ilike("name", projectName)
+    .single();
+
+  if (!project) return { success: false, message: `Project "${projectName}" not found` };
+
+  const genId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+  /* Build temp_id → real ID map and create full WorkflowNode objects */
+  const idMap = new Map<string, string>();
+  const portMap = new Map<string, Map<string, string>>(); // nodeRealId → side → portId
+
+  const nodes = rawNodes.map((n) => {
+    const nodeType = n.type || "process";
+    const realId = genId();
+    idMap.set(n.temp_id, realId);
+
+    const size = WF_DEFAULT_SIZES[nodeType] ?? WF_DEFAULT_SIZES.process;
+    const portSides = WF_DEFAULT_PORTS[nodeType] ?? WF_DEFAULT_PORTS.process;
+
+    const ports = portSides.map((side) => {
+      const portId = genId();
+      if (!portMap.has(realId)) portMap.set(realId, new Map());
+      portMap.get(realId)!.set(side, portId);
+      return { id: portId, side };
+    });
+
+    return {
+      id: realId,
+      type: nodeType,
+      x: n.x ?? 400,
+      y: n.y ?? 0,
+      width: size.w,
+      height: size.h,
+      title: n.title,
+      description: n.description ?? "",
+      properties: n.properties ?? {},
+      ports,
+    };
+  });
+
+  /* Build full WorkflowEdge objects */
+  const edges = (rawEdges ?? []).map((e) => {
+    const sourceRealId = idMap.get(e.source_id) ?? e.source_id;
+    const targetRealId = idMap.get(e.target_id) ?? e.target_id;
+    const sourceSide = e.source_side ?? "bottom";
+    const targetSide = e.target_side ?? "top";
+
+    const sourcePortId = portMap.get(sourceRealId)?.get(sourceSide) ?? genId();
+    const targetPortId = portMap.get(targetRealId)?.get(targetSide) ?? genId();
+
+    return {
+      id: genId(),
+      sourceNodeId: sourceRealId,
+      sourcePortId,
+      targetNodeId: targetRealId,
+      targetPortId,
+      ...(e.label && { label: e.label }),
+    };
+  });
+
+  /* Store as WorkflowData wrapped in array (matches project page convention) */
+  const workflowData = [{ nodes, edges, viewport: { x: 0, y: 0, zoom: 1 } }];
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ workflow_nodes: workflowData as unknown as Record<string, unknown>[] })
+    .eq("id", project.id);
+
+  if (error) return { success: false, message: `Failed to generate workflow: ${error.message}` };
+
+  return {
+    success: true,
+    message: `Generated workflow with ${nodes.length} node(s) and ${edges.length} connection(s) in "${projectName}". Switch to the Builder tab to view it.`,
+  };
 }
 
 async function handleCompareTools(

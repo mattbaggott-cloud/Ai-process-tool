@@ -13,21 +13,49 @@ const TYPE_LABELS: Record<WorkflowNode["type"], { label: string; accent: string 
 };
 
 /* Type-specific property definitions */
-const TYPE_FIELDS: Record<string, { key: string; label: string; multiline?: boolean }[]> = {
-  process:  [{ key: "assignee", label: "Assignee" }, { key: "duration", label: "Duration" }],
+interface FieldDef {
+  key: string;
+  label: string;
+  multiline?: boolean;
+  type?: "text" | "select" | "number";
+  options?: { value: string; label: string }[];
+  step?: string;
+}
+
+const MODEL_OPTIONS = [
+  { value: "", label: "Select model..." },
+  { value: "claude-sonnet-4", label: "Claude Sonnet 4" },
+  { value: "claude-opus-4", label: "Claude Opus 4" },
+  { value: "gpt-4o", label: "GPT-4o" },
+  { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+  { value: "gemini-pro", label: "Gemini Pro" },
+];
+
+const TYPE_FIELDS: Record<string, FieldDef[]> = {
+  process: [
+    { key: "assignee", label: "Assignee" },
+    { key: "duration", label: "Duration (min)", type: "number" },
+    { key: "cost", label: "Cost ($)", type: "number", step: "0.01" },
+  ],
   decision: [{ key: "condition", label: "Condition", multiline: true }],
-  ai_agent: [{ key: "prompt", label: "Prompt", multiline: true }, { key: "model", label: "Model" }],
+  ai_agent: [
+    { key: "prompt", label: "Instructions", multiline: true },
+    { key: "model", label: "Model", type: "select", options: MODEL_OPTIONS },
+    { key: "duration", label: "Duration (min)", type: "number" },
+    { key: "cost", label: "Cost ($)", type: "number", step: "0.01" },
+  ],
 };
 
 interface Props {
   node: WorkflowNode;
+  stackTools: { id: string; name: string; category: string }[];
   onUpdate: (id: string, patch: Partial<WorkflowNode>) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
   onClose: () => void;
 }
 
-export default function WorkflowNodeEditor({ node, onUpdate, onDelete, onDuplicate, onClose }: Props) {
+export default function WorkflowNodeEditor({ node, stackTools, onUpdate, onDelete, onDuplicate, onClose }: Props) {
   const cfg = TYPE_LABELS[node.type];
   const fields = TYPE_FIELDS[node.type] ?? [];
 
@@ -59,6 +87,36 @@ export default function WorkflowNodeEditor({ node, onUpdate, onDelete, onDuplica
           onChange={(e) => onUpdate(node.id, { description: e.target.value })} />
       </div>
 
+      {/* Tool Assignment (process nodes only) */}
+      {node.type === "process" && stackTools.length > 0 && (
+        <>
+          <div className="wf-editor-divider" />
+          <div className="wf-editor-field">
+            <label className="wf-editor-label">Assigned Tool</label>
+            <select
+              className="wf-editor-input wf-editor-select"
+              value={node.properties.tool_id ?? ""}
+              onChange={(e) => {
+                const selected = stackTools.find(t => t.id === e.target.value);
+                onUpdate(node.id, {
+                  properties: {
+                    ...node.properties,
+                    tool_id: e.target.value,
+                    tool_name: selected?.name ?? "",
+                    tool_category: selected?.category ?? "",
+                  },
+                });
+              }}
+            >
+              <option value="">No tool assigned</option>
+              {stackTools.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}{t.category ? ` (${t.category})` : ""}</option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
+
       {/* Type-specific fields */}
       {fields.length > 0 && (
         <>
@@ -66,12 +124,23 @@ export default function WorkflowNodeEditor({ node, onUpdate, onDelete, onDuplica
           {fields.map((f) => (
             <div key={f.key} className="wf-editor-field">
               <label className="wf-editor-label">{f.label}</label>
-              {f.multiline ? (
+              {f.type === "select" ? (
+                <select className="wf-editor-input wf-editor-select"
+                  value={node.properties[f.key] ?? ""}
+                  onChange={(e) => setProp(f.key, e.target.value)}>
+                  {f.options?.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              ) : f.multiline ? (
                 <textarea className="wf-editor-input wf-editor-textarea" rows={3}
                   value={node.properties[f.key] ?? ""}
                   onChange={(e) => setProp(f.key, e.target.value)} />
               ) : (
                 <input className="wf-editor-input"
+                  type={f.type === "number" ? "number" : "text"}
+                  min={f.type === "number" ? "0" : undefined}
+                  step={f.step ?? (f.type === "number" ? "1" : undefined)}
                   value={node.properties[f.key] ?? ""}
                   onChange={(e) => setProp(f.key, e.target.value)} />
               )}

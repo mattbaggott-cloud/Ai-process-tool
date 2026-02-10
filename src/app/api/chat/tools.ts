@@ -562,5 +562,107 @@ export function getToolDefinitions(): Tool[] {
         required: ["project_name", "blocks"],
       },
     },
+
+    /* ── Generate Workflow ─────────────────────────────────── */
+    {
+      name: "generate_workflow",
+      description:
+        `Generate a visual workflow/flow diagram in a project's workflow builder. Use when the user asks to create a workflow, process flow, automation diagram, or pipeline.
+
+You provide simplified node and edge data — the system auto-generates IDs, ports, and sizes.
+
+Node types and their purposes:
+- "start": Green oval entry point (1 per flow)
+- "end": Red oval terminal state (1+ per flow)
+- "process": Blue rectangle for manual/automated steps. Set properties.tool_name if a tool is used (e.g. "Salesforce"). Set properties.duration (minutes) and properties.cost (dollars) for simulation.
+- "decision": Orange diamond for branching logic. Use edges with labels "Yes"/"No".
+- "ai_agent": Purple rectangle for AI-powered steps. Set properties.model (e.g. "claude-sonnet-4") and properties.prompt for instructions.
+- "note": Yellow sticky note for annotations (no connections).
+
+Layout tips: Place nodes vertically with ~160px Y spacing. Start at y:0, each row y+160. Branch decisions horizontally with ~280px X offset. Center the main path at x:400.
+
+Edge conventions: Connect "bottom" port of source to "top" port of target for vertical flows. Use "right"/"left" ports for decision branches.`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          project_name: {
+            type: "string",
+            description: "The name of the project to add the workflow to (must match an existing project)",
+          },
+          nodes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                temp_id: {
+                  type: "string",
+                  description: "Temporary ID for referencing in edges (e.g. 'n1', 'n2'). Will be replaced with a real ID.",
+                },
+                type: {
+                  type: "string",
+                  enum: ["start", "end", "process", "decision", "ai_agent", "note"],
+                  description: "The node type",
+                },
+                title: {
+                  type: "string",
+                  description: "Display title for the node",
+                },
+                description: {
+                  type: "string",
+                  description: "Optional description text shown on the node",
+                },
+                x: {
+                  type: "number",
+                  description: "X position on canvas (center main path at ~400)",
+                },
+                y: {
+                  type: "number",
+                  description: "Y position on canvas (start at 0, increment by ~160 per row)",
+                },
+                properties: {
+                  type: "object",
+                  description: "Key-value properties. For process: tool_name, duration, cost, assignee. For ai_agent: model, prompt, duration, cost. For decision: condition.",
+                },
+              },
+              required: ["temp_id", "type", "title", "x", "y"],
+            },
+            description: "Array of workflow nodes to create",
+          },
+          edges: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                source_id: {
+                  type: "string",
+                  description: "temp_id of the source node",
+                },
+                target_id: {
+                  type: "string",
+                  description: "temp_id of the target node",
+                },
+                source_side: {
+                  type: "string",
+                  enum: ["top", "right", "bottom", "left"],
+                  description: "Which port side on the source node (default: 'bottom')",
+                },
+                target_side: {
+                  type: "string",
+                  enum: ["top", "right", "bottom", "left"],
+                  description: "Which port side on the target node (default: 'top')",
+                },
+                label: {
+                  type: "string",
+                  description: "Optional label (e.g. 'Yes', 'No' for decision branches)",
+                },
+              },
+              required: ["source_id", "target_id"],
+            },
+            description: "Array of edges connecting nodes",
+          },
+        },
+        required: ["project_name", "nodes", "edges"],
+      },
+    },
   ];
 }

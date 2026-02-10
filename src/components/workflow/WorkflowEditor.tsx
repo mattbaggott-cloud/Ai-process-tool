@@ -2,10 +2,13 @@
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { WorkflowData, WorkflowNode, WorkflowEdge, WorkflowNodeType, WorkflowPort } from "@/lib/types/database";
+import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/context/AuthContext";
 import WorkflowNodeComponent from "./WorkflowNode";
 import WorkflowEdgeComponent, { TempEdge, getPortPosition } from "./WorkflowEdge";
 import WorkflowToolbar from "./WorkflowToolbar";
 import WorkflowNodeEditor from "./WorkflowNodeEditor";
+import WorkflowSimulationModal from "./WorkflowSimulationModal";
 
 /* ── Helpers ───────────────────────────────────────────── */
 
@@ -35,9 +38,9 @@ const DEFAULT_PORTS: Record<WorkflowNodeType, WorkflowPort["side"][]> = {
 const DEFAULT_SIZES: Record<WorkflowNodeType, { w: number; h: number }> = {
   start:    { w: 140, h: 48 },
   end:      { w: 140, h: 48 },
-  process:  { w: 220, h: 80 },
+  process:  { w: 220, h: 96 },
   decision: { w: 140, h: 140 },
-  ai_agent: { w: 220, h: 80 },
+  ai_agent: { w: 220, h: 96 },
   note:     { w: 180, h: 100 },
 };
 
@@ -75,12 +78,33 @@ export default function WorkflowEditor({ data, onChange }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<{ nodeId: string; portId: string; side: string } | null>(null);
   const [mouseWorld, setMouseWorld] = useState<{ x: number; y: number } | null>(null);
+  const [showSimulation, setShowSimulation] = useState(false);
   const isPanning = useRef(false);
   const vpRef = useRef(viewport);
   const vpSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep vpRef in sync
   useEffect(() => { vpRef.current = viewport; }, [viewport]);
+
+  /* ── Fetch user's stack tools for tool assignment ── */
+  const { user } = useAuth();
+  const [stackTools, setStackTools] = useState<{ id: string; name: string; category: string }[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    const supabase = createClient();
+    supabase
+      .from("user_stack_tools")
+      .select("id, name, category")
+      .order("name")
+      .then(({ data: tools }) => {
+        setStackTools((tools ?? []).map(t => ({
+          id: t.id,
+          name: t.name,
+          category: t.category ?? "",
+        })));
+      });
+  }, [user]);
 
   /* ── Viewport helpers ── */
   const setViewport = useCallback((vp: typeof viewport) => {
@@ -342,16 +366,27 @@ export default function WorkflowEditor({ data, onChange }: Props) {
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
         onFit={fitToView}
+        onSimulate={() => setShowSimulation(true)}
+        hasNodes={data.nodes.length > 0}
       />
 
       {/* Node editor panel */}
       {selectedNode && (
         <WorkflowNodeEditor
           node={selectedNode}
+          stackTools={stackTools}
           onUpdate={updateNode}
           onDelete={deleteNode}
           onDuplicate={duplicateNode}
           onClose={() => setSelectedId(null)}
+        />
+      )}
+
+      {/* Simulation modal */}
+      {showSimulation && (
+        <WorkflowSimulationModal
+          data={data}
+          onClose={() => setShowSimulation(false)}
         />
       )}
     </>

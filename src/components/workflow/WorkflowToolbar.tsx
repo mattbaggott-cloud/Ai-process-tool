@@ -39,9 +39,11 @@ interface Props {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  onSimulate?: () => void;
+  hasNodes?: boolean;
 }
 
-export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit }: Props) {
+export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit, onSimulate, hasNodes }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +85,25 @@ export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, 
           </div>
         )}
       </div>
+
+      {/* Simulate */}
+      {onSimulate && (
+        <>
+          <div className="wf-toolbar-sep" />
+          <button
+            className={`wf-toolbar-btn wf-toolbar-simulate${hasNodes ? "" : " wf-toolbar-btn-disabled"}`}
+            onClick={hasNodes ? onSimulate : undefined}
+            title={hasNodes ? "Analyze flow for time, cost & bottlenecks" : "Add nodes to simulate"}
+          >
+            <span className="wf-toolbar-btn-icon" style={{ color: "#10b981" }}>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                <polygon points="3,2 12,7 3,12" fill="currentColor" stroke="none" />
+              </svg>
+            </span>
+            Simulate
+          </button>
+        </>
+      )}
 
       <div className="wf-toolbar-sep" />
 

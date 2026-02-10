@@ -134,6 +134,36 @@ export default function WorkflowNodeComponent({ node, selected, connecting, view
         {node.description && !isDecision && (
           <div className="wf-node-desc">{node.description}</div>
         )}
+
+        {/* Tool badge (process nodes with a tool assigned) */}
+        {node.type === "process" && node.properties.tool_name && (
+          <div className="wf-node-tool-badge">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="1" y="1" width="8" height="8" rx="2" />
+            </svg>
+            <span>{node.properties.tool_name}</span>
+          </div>
+        )}
+
+        {/* Model badge (AI agent nodes) */}
+        {node.type === "ai_agent" && node.properties.model && (
+          <div className="wf-node-model-badge">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M5 1l1 2.5L8.5 4.5 6 5.5 5 8 4 5.5 1.5 4.5 4 3.5Z" />
+            </svg>
+            <span>{node.properties.model.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</span>
+          </div>
+        )}
+
+        {/* Duration + Cost metadata */}
+        {(node.type === "process" || node.type === "ai_agent") &&
+         (node.properties.duration || node.properties.cost) && (
+          <div className="wf-node-meta">
+            {node.properties.duration && <span>~{node.properties.duration}min</span>}
+            {node.properties.duration && node.properties.cost && <span className="wf-node-meta-sep">|</span>}
+            {node.properties.cost && <span>${node.properties.cost}</span>}
+          </div>
+        )}
       </div>
 
       {/* Ports */}
