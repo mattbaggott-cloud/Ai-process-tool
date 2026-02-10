@@ -135,6 +135,20 @@ export default function WorkflowNodeComponent({ node, selected, connecting, view
           <div className="wf-node-desc">{node.description}</div>
         )}
 
+        {/* Role badge (process + ai_agent nodes with a role assigned) */}
+        {(node.type === "process" || node.type === "ai_agent") && node.properties.role_name && (
+          <div className="wf-node-role-badge">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <circle cx="5" cy="3.5" r="2" />
+              <path d="M1.5 9.5a3.5 3.5 0 017 0" />
+            </svg>
+            <span>{node.properties.role_name}</span>
+            {node.properties.role_team && (
+              <span className="wf-node-role-team">{node.properties.role_team}</span>
+            )}
+          </div>
+        )}
+
         {/* Tool badge (process nodes with a tool assigned) */}
         {node.type === "process" && node.properties.tool_name && (
           <div className="wf-node-tool-badge">

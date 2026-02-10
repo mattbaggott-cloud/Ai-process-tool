@@ -3953,6 +3953,35 @@ body {
   color: #2563eb;
 }
 
+/* ── Role badge on process + AI agent nodes ──────────── */
+
+.wf-node-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0d9488;
+  background: rgba(13, 148, 136, 0.08);
+  border-radius: 9999px;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wf-node-role-badge svg {
+  flex-shrink: 0;
+  color: #0d9488;
+}
+.wf-node-role-team {
+  font-weight: 500;
+  color: rgba(13, 148, 136, 0.5);
+  font-size: 9px;
+  margin-left: 2px;
+}
+
 /* ── Model badge on AI agent nodes ────────────────────── */
 
 .wf-node-model-badge {

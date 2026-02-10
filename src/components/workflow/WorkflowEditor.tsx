@@ -89,6 +89,7 @@ export default function WorkflowEditor({ data, onChange }: Props) {
   /* ── Fetch user's stack tools for tool assignment ── */
   const { user } = useAuth();
   const [stackTools, setStackTools] = useState<{ id: string; name: string; category: string }[]>([]);
+  const [teamRoles, setTeamRoles] = useState<{ id: string; name: string; teamName: string }[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -102,6 +103,27 @@ export default function WorkflowEditor({ data, onChange }: Props) {
           id: t.id,
           name: t.name,
           category: t.category ?? "",
+        })));
+      });
+
+    /* Fetch team roles grouped by team */
+    supabase
+      .from("teams")
+      .select("id, name")
+      .order("name")
+      .then(async ({ data: teams }) => {
+        if (!teams?.length) return;
+        const { data: roles } = await supabase
+          .from("team_roles")
+          .select("id, name, team_id")
+          .in("team_id", teams.map(t => t.id))
+          .order("name");
+        if (!roles) return;
+        const teamMap = new Map(teams.map(t => [t.id, t.name]));
+        setTeamRoles(roles.map(r => ({
+          id: r.id,
+          name: r.name,
+          teamName: teamMap.get(r.team_id) ?? "",
         })));
       });
   }, [user]);
@@ -375,6 +397,7 @@ export default function WorkflowEditor({ data, onChange }: Props) {
         <WorkflowNodeEditor
           node={selectedNode}
           stackTools={stackTools}
+          teamRoles={teamRoles}
           onUpdate={updateNode}
           onDelete={deleteNode}
           onDuplicate={duplicateNode}

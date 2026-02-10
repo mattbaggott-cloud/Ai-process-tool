@@ -49,13 +49,14 @@ const TYPE_FIELDS: Record<string, FieldDef[]> = {
 interface Props {
   node: WorkflowNode;
   stackTools: { id: string; name: string; category: string }[];
+  teamRoles: { id: string; name: string; teamName: string }[];
   onUpdate: (id: string, patch: Partial<WorkflowNode>) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
   onClose: () => void;
 }
 
-export default function WorkflowNodeEditor({ node, stackTools, onUpdate, onDelete, onDuplicate, onClose }: Props) {
+export default function WorkflowNodeEditor({ node, stackTools, teamRoles, onUpdate, onDelete, onDuplicate, onClose }: Props) {
   const cfg = TYPE_LABELS[node.type];
   const fields = TYPE_FIELDS[node.type] ?? [];
 
@@ -111,6 +112,41 @@ export default function WorkflowNodeEditor({ node, stackTools, onUpdate, onDelet
               <option value="">No tool assigned</option>
               {stackTools.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}{t.category ? ` (${t.category})` : ""}</option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
+
+      {/* Role Assignment (process + ai_agent nodes) */}
+      {(node.type === "process" || node.type === "ai_agent") && teamRoles.length > 0 && (
+        <>
+          <div className="wf-editor-divider" />
+          <div className="wf-editor-field">
+            <label className="wf-editor-label">Assigned Role</label>
+            <select
+              className="wf-editor-input wf-editor-select"
+              value={node.properties.role_id ?? ""}
+              onChange={(e) => {
+                const selected = teamRoles.find(r => r.id === e.target.value);
+                onUpdate(node.id, {
+                  properties: {
+                    ...node.properties,
+                    role_id: e.target.value,
+                    role_name: selected?.name ?? "",
+                    role_team: selected?.teamName ?? "",
+                  },
+                });
+              }}
+            >
+              <option value="">No role assigned</option>
+              {/* Group roles by team */}
+              {Array.from(new Set(teamRoles.map(r => r.teamName))).map(teamName => (
+                <optgroup key={teamName} label={teamName}>
+                  {teamRoles.filter(r => r.teamName === teamName).map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
