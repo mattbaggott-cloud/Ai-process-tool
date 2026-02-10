@@ -13,6 +13,21 @@ interface PathInfo {
   label: string;
 }
 
+interface RoleBreakdown {
+  role: string;
+  team: string;
+  nodeCount: number;
+  totalDuration: number;
+  totalCost: number;
+}
+
+interface Handoff {
+  from: WorkflowNode;
+  to: WorkflowNode;
+  fromRole: string;
+  toRole: string;
+}
+
 interface SimulationResult {
   totalNodes: number;
   totalEdges: number;
@@ -28,6 +43,8 @@ interface SimulationResult {
   missingStart: boolean;
   missingEnd: boolean;
   suggestions: string[];
+  roleBreakdown: RoleBreakdown[];
+  handoffs: Handoff[];
 }
 
 /* ── Graph analysis ───────────────────────────────────── */
@@ -157,6 +174,46 @@ function analyzeWorkflow(data: WorkflowData): SimulationResult {
     suggestions.push("Your flow looks well-structured! Add duration estimates to all steps for more accurate simulation.");
   }
 
+  /* ── Role breakdown ── */
+  const roleMap = new Map<string, RoleBreakdown>();
+  for (const n of [...processNodes, ...aiNodes]) {
+    const roleName = n.properties.role_name;
+    if (!roleName) continue;
+    const key = `${roleName}|${n.properties.role_team || ""}`;
+    if (!roleMap.has(key)) {
+      roleMap.set(key, { role: roleName, team: n.properties.role_team || "", nodeCount: 0, totalDuration: 0, totalCost: 0 });
+    }
+    const entry = roleMap.get(key)!;
+    entry.nodeCount++;
+    entry.totalDuration += parseFloat(n.properties.duration || "0") || 0;
+    entry.totalCost += parseFloat(n.properties.cost || "0") || 0;
+  }
+  const roleBreakdown = Array.from(roleMap.values()).sort((a, b) => b.totalDuration - a.totalDuration);
+
+  /* ── Handoff detection (role changes along edges) ── */
+  const handoffs: Handoff[] = [];
+  for (const e of edges) {
+    const src = nodes.find((n) => n.id === e.sourceNodeId);
+    const tgt = nodes.find((n) => n.id === e.targetNodeId);
+    if (!src || !tgt) continue;
+    const srcRole = src.properties.role_name;
+    const tgtRole = tgt.properties.role_name;
+    if (srcRole && tgtRole && srcRole !== tgtRole) {
+      handoffs.push({ from: src, to: tgt, fromRole: srcRole, toRole: tgtRole });
+    }
+  }
+
+  /* Role-based suggestions */
+  if (handoffs.length > 3) {
+    suggestions.push(`${handoffs.length} handoffs between different roles — consider reducing cross-team dependencies to speed up the flow.`);
+  }
+  if (roleBreakdown.length > 0) {
+    const topRole = roleBreakdown[0];
+    if (topRole.totalDuration > totalDuration * 0.5 && topRole.totalDuration > 5) {
+      suggestions.push(`"${topRole.role}" owns ${topRole.totalDuration}min of work (${Math.round(topRole.totalDuration / totalDuration * 100)}% of total). Consider distributing load across roles.`);
+    }
+  }
+
   return {
     totalNodes: nodes.length,
     totalEdges: edges.length,
@@ -172,6 +229,8 @@ function analyzeWorkflow(data: WorkflowData): SimulationResult {
     missingStart,
     missingEnd,
     suggestions,
+    roleBreakdown,
+    handoffs,
   };
 }
 
@@ -322,6 +381,49 @@ export default function WorkflowSimulationModal({ data, onClose }: Props) {
               <div className="wf-sim-bn-list">
                 {result.bottlenecks.map((n) => (
                   <BottleneckBar key={n.id} node={n} maxDuration={maxBnDuration} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Role breakdown */}
+          {result.roleBreakdown.length > 0 && (
+            <div className="wf-sim-section">
+              <h3 className="wf-sim-section-title wf-sim-st-teal">Team / Role Breakdown</h3>
+              <div className="wf-sim-role-list">
+                {result.roleBreakdown.map((r) => (
+                  <div key={`${r.role}-${r.team}`} className="wf-sim-role-row">
+                    <div className="wf-sim-role-info">
+                      <span className="wf-sim-role-name">{r.role}</span>
+                      {r.team && <span className="wf-sim-role-team">{r.team}</span>}
+                    </div>
+                    <div className="wf-sim-role-stats">
+                      <span>{r.nodeCount} step{r.nodeCount !== 1 ? "s" : ""}</span>
+                      {r.totalDuration > 0 && <span>~{r.totalDuration}m</span>}
+                      {r.totalCost > 0 && <span>${r.totalCost.toFixed(2)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Handoffs */}
+          {result.handoffs.length > 0 && (
+            <div className="wf-sim-section">
+              <h3 className="wf-sim-section-title wf-sim-st-amber">
+                Handoffs ({result.handoffs.length})
+              </h3>
+              <div className="wf-sim-handoff-list">
+                {result.handoffs.map((h, i) => (
+                  <div key={i} className="wf-sim-handoff-row">
+                    <span className="wf-sim-handoff-role">{h.fromRole}</span>
+                    <span className="wf-sim-handoff-arrow">&rarr;</span>
+                    <span className="wf-sim-handoff-role">{h.toRole}</span>
+                    <span className="wf-sim-handoff-context">
+                      {h.from.title} &rarr; {h.to.title}
+                    </span>
+                  </div>
                 ))}
               </div>
             </div>

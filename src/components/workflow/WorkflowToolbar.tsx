@@ -40,10 +40,11 @@ interface Props {
   onZoomOut: () => void;
   onFit: () => void;
   onSimulate?: () => void;
+  onHistory?: () => void;
   hasNodes?: boolean;
 }
 
-export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit, onSimulate, hasNodes }: Props) {
+export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit, onSimulate, onHistory, hasNodes }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
@@ -103,6 +104,19 @@ export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, 
             Simulate
           </button>
         </>
+      )}
+
+      {/* History */}
+      {onHistory && (
+        <button className="wf-toolbar-btn" onClick={onHistory} title="Version history">
+          <span className="wf-toolbar-btn-icon" style={{ color: "#6366f1" }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <circle cx="7" cy="7" r="5.5" />
+              <path d="M7 4v3l2 1.5" />
+            </svg>
+          </span>
+          History
+        </button>
       )}
 
       <div className="wf-toolbar-sep" />

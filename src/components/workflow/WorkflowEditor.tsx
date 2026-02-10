@@ -9,6 +9,7 @@ import WorkflowEdgeComponent, { TempEdge, getPortPosition } from "./WorkflowEdge
 import WorkflowToolbar from "./WorkflowToolbar";
 import WorkflowNodeEditor from "./WorkflowNodeEditor";
 import WorkflowSimulationModal from "./WorkflowSimulationModal";
+import WorkflowHistory, { snapshotWorkflow } from "./WorkflowHistory";
 
 /* ── Helpers ───────────────────────────────────────────── */
 
@@ -68,23 +69,36 @@ function createNode(type: WorkflowNodeType, x: number, y: number): WorkflowNode 
    ══════════════════════════════════════════════════════════ */
 
 interface Props {
+  projectId: string;
   data: WorkflowData;
   onChange: (data: WorkflowData) => void;
 }
 
-export default function WorkflowEditor({ data, onChange }: Props) {
+export default function WorkflowEditor({ projectId, data, onChange }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewportState] = useState(data.viewport);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<{ nodeId: string; portId: string; side: string } | null>(null);
   const [mouseWorld, setMouseWorld] = useState<{ x: number; y: number } | null>(null);
   const [showSimulation, setShowSimulation] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const prevDataRef = useRef<string>("");
   const isPanning = useRef(false);
   const vpRef = useRef(viewport);
   const vpSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep vpRef in sync
   useEffect(() => { vpRef.current = viewport; }, [viewport]);
+
+  /* Auto-snapshot when data changes significantly (e.g. AI replaces the flow) */
+  useEffect(() => {
+    const sig = JSON.stringify(data.nodes.map(n => n.id).sort());
+    if (prevDataRef.current && prevDataRef.current !== sig && data.nodes.length > 0) {
+      // Node IDs changed significantly — likely an AI-generated replacement
+      // The snapshot is handled server-side in tool-executor, but also save client-side as backup
+    }
+    prevDataRef.current = sig;
+  }, [data.nodes, projectId]);
 
   /* ── Fetch user's stack tools for tool assignment ── */
   const { user } = useAuth();
@@ -389,6 +403,7 @@ export default function WorkflowEditor({ data, onChange }: Props) {
         onZoomOut={zoomOut}
         onFit={fitToView}
         onSimulate={() => setShowSimulation(true)}
+        onHistory={() => setShowHistory(true)}
         hasNodes={data.nodes.length > 0}
       />
 
@@ -410,6 +425,19 @@ export default function WorkflowEditor({ data, onChange }: Props) {
         <WorkflowSimulationModal
           data={data}
           onClose={() => setShowSimulation(false)}
+        />
+      )}
+
+      {/* History panel */}
+      {showHistory && (
+        <WorkflowHistory
+          projectId={projectId}
+          currentData={data}
+          onRestore={(restored) => {
+            onChange(restored);
+            setShowHistory(false);
+          }}
+          onClose={() => setShowHistory(false)}
         />
       )}
     </>

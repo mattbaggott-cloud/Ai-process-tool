@@ -4199,6 +4199,8 @@ body {
 .wf-sim-st-orange { color: #ea580c; }
 .wf-sim-st-red { color: #dc2626; }
 .wf-sim-st-purple { color: #7c3aed; }
+.wf-sim-st-teal { color: #0d9488; }
+.wf-sim-st-amber { color: #d97706; }
 
 /* Path display */
 .wf-sim-path {
@@ -4324,4 +4326,277 @@ body {
   font-size: 13px;
   line-height: 1.5;
   color: #6b21a8;
+}
+
+/* ── Role breakdown in simulation ─────────────────────── */
+
+.wf-sim-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wf-sim-role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  border-radius: 8px;
+}
+.wf-sim-role-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wf-sim-role-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f766e;
+}
+.wf-sim-role-team {
+  font-size: 11px;
+  font-weight: 500;
+  color: #5eead4;
+  background: rgba(13, 148, 136, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.wf-sim-role-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-gray-500);
+}
+
+/* ── Handoffs in simulation ──────────────────────────── */
+
+.wf-sim-handoff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wf-sim-handoff-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.wf-sim-handoff-role {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  background: rgba(217, 119, 6, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.wf-sim-handoff-arrow {
+  color: #d97706;
+  font-size: 12px;
+}
+.wf-sim-handoff-context {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  margin-left: auto;
+}
+
+/* ── Version History panel ───────────────────────────── */
+
+.wf-hist-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: wf-sim-fade 0.18s ease-out;
+}
+
+.wf-hist-panel {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: wf-sim-slide 0.22s ease-out;
+}
+
+.wf-hist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 24px 0;
+}
+.wf-hist-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.wf-hist-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  margin: 0;
+  line-height: 1.2;
+}
+.wf-hist-subtitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-gray-400);
+  margin: 2px 0 0;
+}
+.wf-hist-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: var(--color-gray-400);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.wf-hist-close:hover {
+  background: var(--color-gray-100);
+  color: var(--color-gray-700);
+}
+
+.wf-hist-save-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 16px 24px 0;
+  padding: 10px;
+  border: 1px dashed var(--color-gray-300);
+  border-radius: 10px;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.wf-hist-save-btn:hover {
+  background: var(--color-gray-50);
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
+.wf-hist-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-hist-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--color-gray-400);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.wf-hist-empty-sub {
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--color-gray-300);
+}
+
+.wf-hist-item {
+  padding: 12px 14px;
+  border: 1px solid var(--color-gray-100);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.wf-hist-item:hover {
+  background: var(--color-gray-50);
+  border-color: var(--color-gray-200);
+}
+.wf-hist-item-active {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.wf-hist-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wf-hist-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-gray-800);
+}
+.wf-hist-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-gray-400);
+}
+.wf-hist-item-sep {
+  color: var(--color-gray-200);
+}
+
+.wf-hist-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.wf-hist-restore-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  background: #6366f1;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.wf-hist-restore-btn:hover {
+  background: #4f46e5;
+}
+.wf-hist-delete-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.wf-hist-delete-btn:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
 }

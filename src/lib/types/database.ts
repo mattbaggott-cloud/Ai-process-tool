@@ -225,8 +225,16 @@ export interface Project {
   active_mode: ProjectMode;
   canvas_blocks: CanvasBlock[];
   workflow_nodes: Record<string, unknown>[];
+  workflow_history?: WorkflowVersion[];
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkflowVersion {
+  snapshot: Record<string, unknown>[];
+  timestamp: string;
+  label: string;
+  nodeCount: number;
 }
 
 /* ── Workflow Builder types ────────────────────────────── */

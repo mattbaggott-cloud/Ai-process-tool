@@ -115,6 +115,7 @@ You can take actions in the user's workspace using tools:
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 When the user asks to create a workflow, process, flow, or pipeline, use generate_workflow to build it visually with proper nodes and connections. Assign tools from their tech stack to process steps when mentioned.
+When the user is on a project page with an existing workflow, you can see all the nodes, connections, roles, tools, durations, and costs. Use this to answer questions about the flow, suggest optimizations, identify bottlenecks, or restructure the workflow when asked. If the user asks you to modify or redo the flow, use generate_workflow — their current version is automatically saved to version history before any AI changes.
 If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
 The UI updates automatically after changes — no need to tell the user to refresh.
 When the user asks about tools, use search_tool_catalog to look up details. When comparing tools, use compare_tools to get full data.
@@ -311,6 +312,38 @@ ${currentPage}
       const blockCount = blocks?.length ?? 0;
       prompt += `- **${p.name}** (mode: ${p.active_mode}, ${blockCount} canvas block${blockCount !== 1 ? "s" : ""}) — /projects/${p.slug}\n`;
       if (p.description) prompt += `  ${truncate(p.description as string, 200)}\n`;
+
+      /* Include workflow details for the project the user is currently viewing */
+      const wfNodes = p.workflow_nodes as unknown[];
+      if (wfNodes?.length > 0 && currentPage.includes(`/projects/${p.slug}`)) {
+        const wf = wfNodes[0] as { nodes?: Record<string, unknown>[]; edges?: Record<string, unknown>[] };
+        if (wf.nodes && wf.nodes.length > 0) {
+          prompt += `\n  **Current Workflow (${wf.nodes.length} nodes, ${wf.edges?.length ?? 0} edges):**\n`;
+          for (const node of wf.nodes) {
+            const props = node.properties as Record<string, string> | undefined;
+            prompt += `  - [${node.type}] "${node.title}"`;
+            if (node.description) prompt += ` — ${truncate(node.description as string, 100)}`;
+            if (props?.role_name) prompt += ` (Role: ${props.role_name}${props.role_team ? ` / ${props.role_team}` : ""})`;
+            if (props?.tool_name) prompt += ` [Tool: ${props.tool_name}]`;
+            if (props?.model) prompt += ` [Model: ${props.model}]`;
+            if (props?.duration) prompt += ` ~${props.duration}min`;
+            if (props?.cost) prompt += ` $${props.cost}`;
+            prompt += `\n`;
+          }
+          if (wf.edges && wf.edges.length > 0) {
+            prompt += `  Connections:\n`;
+            for (const edge of wf.edges) {
+              const srcNode = wf.nodes.find(n => n.id === edge.sourceNodeId);
+              const tgtNode = wf.nodes.find(n => n.id === edge.targetNodeId);
+              if (srcNode && tgtNode) {
+                prompt += `  - "${srcNode.title}" → "${tgtNode.title}"`;
+                if (edge.label) prompt += ` [${edge.label}]`;
+                prompt += `\n`;
+              }
+            }
+          }
+        }
+      }
     }
   }
 

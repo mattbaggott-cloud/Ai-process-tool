@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import CanvasEditor from "@/components/canvas/CanvasEditor";
 import FullChat from "@/components/layout/FullChat";
 import WorkflowEditor from "@/components/workflow/WorkflowEditor";
+import { snapshotWorkflow } from "@/components/workflow/WorkflowHistory";
 import type { Project, ProjectMode, CanvasBlock, WorkflowData } from "@/lib/types/database";
 
 /* ── Mode config ─────────────────────────────────────── */
@@ -112,6 +113,15 @@ export default function ProjectWorkspacePage() {
   useEffect(() => {
     const handler = () => {
       if (!user) return;
+
+      /* Snapshot current workflow before AI overwrites it */
+      if (project?.id && project.workflow_nodes?.[0]) {
+        const currentWf = project.workflow_nodes[0] as unknown as WorkflowData;
+        if (currentWf.nodes?.length > 0) {
+          snapshotWorkflow(project.id, currentWf, "Before AI update");
+        }
+      }
+
       const supabase = createClient();
       supabase
         .from("projects")
@@ -127,7 +137,7 @@ export default function ProjectWorkspacePage() {
     };
     window.addEventListener("workspace-updated", handler);
     return () => window.removeEventListener("workspace-updated", handler);
-  }, [slug, user]);
+  }, [slug, user, project]);
 
   if (loading) {
     return (
@@ -213,6 +223,7 @@ export default function ProjectWorkspacePage() {
       {activeMode === "workflow" && (
         <div className="whiteboard">
           <WorkflowEditor
+            projectId={project.id}
             data={
               project.workflow_nodes?.[0]
                 ? (project.workflow_nodes[0] as unknown as WorkflowData)

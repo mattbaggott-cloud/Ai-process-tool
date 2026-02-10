@@ -1101,6 +1101,33 @@ async function handleGenerateWorkflow(
 
   if (!project) return { success: false, message: `Project "${projectName}" not found` };
 
+  /* ── Snapshot current workflow before overwriting ── */
+  const { data: currentProject } = await supabase
+    .from("projects")
+    .select("workflow_nodes, workflow_history")
+    .eq("id", project.id)
+    .single();
+
+  if (currentProject?.workflow_nodes && Array.isArray(currentProject.workflow_nodes) && currentProject.workflow_nodes.length > 0) {
+    const existingFlow = currentProject.workflow_nodes[0] as Record<string, unknown>;
+    const hasNodes = Array.isArray(existingFlow?.nodes) && (existingFlow.nodes as unknown[]).length > 0;
+    if (hasNodes) {
+      const history = Array.isArray(currentProject.workflow_history) ? [...currentProject.workflow_history] : [];
+      history.unshift({
+        snapshot: currentProject.workflow_nodes,
+        timestamp: new Date().toISOString(),
+        label: "Before AI generation",
+        nodeCount: (existingFlow.nodes as unknown[]).length,
+      });
+      // Keep last 10 versions
+      if (history.length > 10) history.length = 10;
+      await supabase
+        .from("projects")
+        .update({ workflow_history: history as unknown as Record<string, unknown>[] })
+        .eq("id", project.id);
+    }
+  }
+
   const genId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
   /* Build temp_id → real ID map and create full WorkflowNode objects */
