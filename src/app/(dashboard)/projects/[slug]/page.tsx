@@ -6,7 +6,8 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/context/AuthContext";
 import CanvasEditor from "@/components/canvas/CanvasEditor";
 import FullChat from "@/components/layout/FullChat";
-import type { Project, ProjectMode, CanvasBlock } from "@/lib/types/database";
+import WorkflowEditor from "@/components/workflow/WorkflowEditor";
+import type { Project, ProjectMode, CanvasBlock, WorkflowData } from "@/lib/types/database";
 
 /* ── Mode config ─────────────────────────────────────── */
 const modes: { key: ProjectMode; label: string }[] = [
@@ -73,6 +74,26 @@ export default function ProjectWorkspacePage() {
         await supabase
           .from("projects")
           .update({ canvas_blocks: blocks as unknown as Record<string, unknown>[] })
+          .eq("id", project.id);
+        setSaved(true);
+      }, 1000);
+    },
+    [project]
+  );
+
+  /* ── Save workflow data (debounced 1s) ── */
+  const handleWorkflowChange = useCallback(
+    (wfData: WorkflowData) => {
+      if (!project) return;
+      const serialized = [wfData] as unknown as Record<string, unknown>[];
+      setProject((prev) => (prev ? { ...prev, workflow_nodes: serialized } : prev));
+      setSaved(false);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(async () => {
+        const supabase = createClient();
+        await supabase
+          .from("projects")
+          .update({ workflow_nodes: serialized })
           .eq("id", project.id);
         setSaved(true);
       }, 1000);
@@ -191,39 +212,14 @@ export default function ProjectWorkspacePage() {
       {/* Workflow mode */}
       {activeMode === "workflow" && (
         <div className="whiteboard">
-          {/* Empty state */}
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ textAlign: "center" }}>
-              <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 8 }}>
-                Drag and drop nodes to build your process flow
-              </p>
-              <p style={{ fontSize: 12, color: "#d1d5db" }}>
-                Use the toolbar below to add steps, decisions, and AI agents
-              </p>
-            </div>
-          </div>
-
-          {/* Floating Toolbar */}
-          <div className="floating-toolbar">
-            <button className="toolbar-btn">
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M10 1l3 3-8.5 8.5H1.5V9.5L10 1z" /></svg>
-              Edit
-            </button>
-            <div className="toolbar-divider" />
-            <button className="toolbar-btn">
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="1" width="12" height="12" rx="2" /><path d="M7 4v6M4 7h6" /></svg>
-              Add Node
-            </button>
-            <button className="toolbar-btn">
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="1" width="12" height="12" rx="1" fill="#fef3c7" stroke="#d1d5db" /><path d="M4 5h6M4 8h4" /></svg>
-              Add Note
-            </button>
-            <div className="toolbar-divider" />
-            <button className="toolbar-btn toolbar-btn-accent">
-              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><polygon points="3,1 13,7 3,13" /></svg>
-              Simulate
-            </button>
-          </div>
+          <WorkflowEditor
+            data={
+              project.workflow_nodes?.[0]
+                ? (project.workflow_nodes[0] as unknown as WorkflowData)
+                : { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }
+            }
+            onChange={handleWorkflowChange}
+          />
         </div>
       )}
     </div>

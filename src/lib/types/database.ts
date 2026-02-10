@@ -228,3 +228,40 @@ export interface Project {
   created_at: string;
   updated_at: string;
 }
+
+/* ── Workflow Builder types ────────────────────────────── */
+
+export type WorkflowNodeType = "start" | "end" | "process" | "decision" | "ai_agent" | "note";
+
+export interface WorkflowPort {
+  id: string;
+  side: "top" | "right" | "bottom" | "left";
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowNodeType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  title: string;
+  description: string;
+  properties: Record<string, string>;
+  ports: WorkflowPort[];
+}
+
+export interface WorkflowEdge {
+  id: string;
+  sourceNodeId: string;
+  sourcePortId: string;
+  targetNodeId: string;
+  targetPortId: string;
+  label?: string;
+}
+
+export interface WorkflowData {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  viewport: { x: number; y: number; zoom: number };
+}
