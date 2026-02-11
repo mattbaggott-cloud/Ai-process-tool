@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
+  { label: "Dashboards", href: "/dashboards",  icon: "chart" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
 ];
@@ -60,6 +61,11 @@ const icons: Record<string, React.ReactNode> = {
   layout: (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="2" width="12" height="12" rx="1.5" /><path d="M2 6h12M6 6v8" />
+    </svg>
+  ),
+  chart: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 13V8M7 13V5M11 13V2" />
     </svg>
   ),
 };

@@ -38,6 +38,7 @@ function buildSystemPrompt(data: {
   libraryFiles: Record<string, unknown>[];
   stackTools: Record<string, unknown>[];
   projects: Record<string, unknown>[];
+  dashboards: Record<string, unknown>[];
   catalogSummary: { category: string; count: number }[];
   catalogSubcategories: { category: string; subcategory: string; count: number }[];
   chatFileContents: { name: string; content: string }[];
@@ -47,7 +48,7 @@ function buildSystemPrompt(data: {
     email, userProfile, organization, organizationFiles,
     teams, teamRoles, teamKpis, teamTools, teamFiles,
     goals, subGoals, painPoints, libraryItems, libraryFiles,
-    stackTools, projects, catalogSummary, catalogSubcategories,
+    stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage,
   } = data;
 
@@ -345,6 +346,16 @@ ${currentPage}
     prompt += `\nWhen searching the catalog, use subcategory names or keywords for best results. For example: "AI SDR", "CRM", "Email Marketing", "LLM Provider".\n`;
   }
 
+  /* ── Dashboards ── */
+  if (dashboards.length > 0) {
+    prompt += `\n## Dashboards\n`;
+    for (const d of dashboards) {
+      const widgets = d.widgets as unknown[];
+      const widgetCount = widgets?.length ?? 0;
+      prompt += `- **${d.name}** (${widgetCount} widget${widgetCount !== 1 ? "s" : ""})\n`;
+    }
+  }
+
   /* ── Projects ── */
   if (projects.length > 0) {
     prompt += `\n## Projects\n`;
@@ -446,6 +457,7 @@ export async function POST(req: Request) {
     { data: stackTools },
     { data: catalogCategories },
     { data: projects },
+    { data: dashboardsData },
   ] = await Promise.all([
     supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
@@ -463,6 +475,7 @@ export async function POST(req: Request) {
     supabase.from("user_stack_tools").select("*").order("created_at", { ascending: false }),
     supabase.from("tool_catalog").select("category, subcategory"),
     supabase.from("projects").select("*").order("created_at", { ascending: false }),
+    supabase.from("dashboards").select("id, name, widgets").eq("user_id", user.id).order("created_at"),
   ]);
 
   /* Build catalog category summary */
@@ -504,6 +517,7 @@ export async function POST(req: Request) {
     libraryFiles: libraryFiles ?? [],
     stackTools: stackTools ?? [],
     projects: projects ?? [],
+    dashboards: dashboardsData ?? [],
     catalogSummary,
     catalogSubcategories,
     chatFileContents: chatFileContents ?? [],

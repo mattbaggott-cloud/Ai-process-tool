@@ -100,6 +100,30 @@ export interface PainPoint {
   created_at: string;
 }
 
+// Dashboards
+export type WidgetType = "metric" | "bar" | "pie" | "line" | "table" | "progress";
+
+export interface WidgetConfig {
+  id: string;
+  type: WidgetType;
+  title: string;
+  data_source: string;
+  metric: string;
+  group_by?: string;
+  filters?: Record<string, string>;
+  size: { cols: 1 | 2; height: "sm" | "md" | "lg" };
+}
+
+export interface Dashboard {
+  id: string;
+  user_id: string;
+  name: string;
+  widgets: WidgetConfig[];
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // Phase 6: Teams
 export type KpiPeriod = "Day" | "Week" | "Month" | "Quarter" | "Year";
 
