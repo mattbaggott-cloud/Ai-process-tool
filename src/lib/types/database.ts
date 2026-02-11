@@ -65,6 +65,23 @@ export interface SubGoal {
   created_at: string;
 }
 
+// Pain Points
+export type PainPointSeverity = "Low" | "Medium" | "High" | "Critical";
+
+export interface PainPoint {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  severity: PainPointSeverity;
+  status: GoalStatus;
+  teams: string[];
+  owner: string;
+  impact_metric: string;
+  linked_goal_id: string | null;
+  created_at: string;
+}
+
 // Phase 6: Teams
 export type KpiPeriod = "Day" | "Week" | "Month" | "Quarter" | "Year";
 
@@ -216,6 +233,12 @@ export interface CanvasBlock {
   columns?: CanvasBlock[][];
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
 export interface Project {
   id: string;
   user_id: string;
@@ -226,6 +249,7 @@ export interface Project {
   canvas_blocks: CanvasBlock[];
   workflow_nodes: Record<string, unknown>[];
   workflow_history?: WorkflowVersion[];
+  chat_messages?: ChatMessage[];
   created_at: string;
   updated_at: string;
 }

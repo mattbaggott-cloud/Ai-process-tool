@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useLayout } from "@/context/LayoutContext";
 import { createClient } from "@/lib/supabase/client";
 
 /* ── navigation data ─────────────────────────────────────── */
@@ -65,10 +66,24 @@ const icons: Record<string, React.ReactNode> = {
 
 /* ── component ───────────────────────────────────────────── */
 
+/* ── collapse toggle icon ─────────────────────────────────── */
+const CollapseIcon = ({ collapsed }: { collapsed: boolean }) => (
+  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    {collapsed ? (
+      /* chevron-right → expand */
+      <path d="M6 3l5 5-5 5" />
+    ) : (
+      /* chevron-left → collapse */
+      <path d="M10 3l-5 5 5 5" />
+    )}
+  </svg>
+);
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
+  const { sidebarCollapsed, toggleSidebar } = useLayout();
 
   /* ── Load teams, org name, and projects dynamically ── */
   const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
@@ -121,10 +136,17 @@ export default function Sidebar() {
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
-    <aside className="sidebar">
-      {/* ─── Logo ─── */}
+    <aside className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      {/* ─── Header ─── */}
       <div className="sidebar-header">
-        <span className="logo">AI Workspace</span>
+        {!sidebarCollapsed && <span className="logo">AI Workspace</span>}
+        <button
+          className="sidebar-toggle-btn"
+          onClick={toggleSidebar}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <CollapseIcon collapsed={sidebarCollapsed} />
+        </button>
       </div>
 
       {/* ─── Main nav ─── */}
@@ -136,76 +158,84 @@ export default function Sidebar() {
               href={item.href}
               prefetch={false}
               className={`nav-item ${isActive(item.href) ? "active" : ""}`}
+              title={sidebarCollapsed ? item.label : undefined}
             >
               <span className="nav-icon">{icons[item.icon]}</span>
-              {item.label}
+              {!sidebarCollapsed && item.label}
             </Link>
           ))}
         </div>
 
         {/* ─── Business Model ─── */}
         <div className="nav-section">
-          <div className="nav-section-title">Business Model</div>
+          {!sidebarCollapsed && <div className="nav-section-title">Business Model</div>}
 
           {/* Organization */}
           <Link
             href="/organization"
             prefetch={false}
             className={`nav-item ${pathname === "/organization" ? "active" : ""}`}
+            title={sidebarCollapsed ? (orgName || "Organization") : undefined}
           >
             <span className="nav-icon">{icons.building}</span>
-            {orgName || "Organization"}
+            {!sidebarCollapsed && (orgName || "Organization")}
           </Link>
-          <Link
-            href="/organization/goals"
-            prefetch={false}
-            className={`nav-item-sub ${isActive("/organization/goals") ? "active" : ""}`}
-          >
-            Goals
-          </Link>
+          {!sidebarCollapsed && (
+            <Link
+              href="/organization/goals"
+              prefetch={false}
+              className={`nav-item-sub ${isActive("/organization/goals") ? "active" : ""}`}
+            >
+              Goals & Pain Points
+            </Link>
+          )}
 
           {/* Teams */}
           <Link
             href="/teams"
             prefetch={false}
             className={`nav-item ${pathname === "/teams" ? "active" : ""}`}
+            title={sidebarCollapsed ? "Teams" : undefined}
           >
             <span className="nav-icon">{icons.users}</span>
-            Teams
+            {!sidebarCollapsed && "Teams"}
           </Link>
-          {sidebarTeams.map((t) => (
-            <Link
-              key={t.slug}
-              href={`/teams/${t.slug}`}
-              prefetch={false}
-              className={`nav-item-sub ${isActive(`/teams/${t.slug}`) ? "active" : ""}`}
-            >
-              {t.name}
-            </Link>
-          ))}
+          {!sidebarCollapsed &&
+            sidebarTeams.map((t) => (
+              <Link
+                key={t.slug}
+                href={`/teams/${t.slug}`}
+                prefetch={false}
+                className={`nav-item-sub ${isActive(`/teams/${t.slug}`) ? "active" : ""}`}
+              >
+                {t.name}
+              </Link>
+            ))}
         </div>
 
         {/* ─── Workspace ─── */}
         <div className="nav-section">
-          <div className="nav-section-title">Workspace</div>
+          {!sidebarCollapsed && <div className="nav-section-title">Workspace</div>}
           <Link
             href="/brainstorm"
             prefetch={false}
             className={`nav-item ${pathname === "/brainstorm" ? "active" : ""}`}
+            title={sidebarCollapsed ? "Projects" : undefined}
           >
             <span className="nav-icon">{icons.layout}</span>
-            Projects
+            {!sidebarCollapsed && "Projects"}
           </Link>
-          {sidebarProjects.map((p) => (
-            <Link
-              key={p.slug}
-              href={`/projects/${p.slug}`}
-              prefetch={false}
-              className={`nav-item-sub ${isActive(`/projects/${p.slug}`) ? "active" : ""}`}
-            >
-              {p.name}
-            </Link>
-          ))}
+          {!sidebarCollapsed &&
+            sidebarProjects.map((p) => (
+              <Link
+                key={p.slug}
+                href={`/projects/${p.slug}`}
+                prefetch={false}
+                className={`nav-item-sub ${isActive(`/projects/${p.slug}`) ? "active" : ""}`}
+              >
+                {p.name}
+              </Link>
+            ))}
         </div>
       </nav>
 
@@ -213,20 +243,24 @@ export default function Sidebar() {
       <div className="sidebar-footer">
         {user && (
           <div className="sidebar-user">
-            <div className="sidebar-user-avatar">
+            <div className="sidebar-user-avatar" title={sidebarCollapsed ? user.email : undefined}>
               {(user.email ?? "U")[0].toUpperCase()}
             </div>
-            <div className="sidebar-user-info">
-              <div className="sidebar-user-email">{user.email}</div>
-            </div>
+            {!sidebarCollapsed && (
+              <div className="sidebar-user-info">
+                <div className="sidebar-user-email">{user.email}</div>
+              </div>
+            )}
           </div>
         )}
-        <button
-          className="btn btn-secondary btn-full"
-          onClick={handleSignOut}
-        >
-          Sign Out
-        </button>
+        {!sidebarCollapsed && (
+          <button
+            className="btn btn-secondary btn-full"
+            onClick={handleSignOut}
+          >
+            Sign Out
+          </button>
+        )}
       </div>
     </aside>
   );

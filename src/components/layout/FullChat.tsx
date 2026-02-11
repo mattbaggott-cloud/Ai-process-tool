@@ -4,28 +4,45 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useLayout } from "@/context/LayoutContext";
+import { createClient } from "@/lib/supabase/client";
+import type { ChatMessage } from "@/lib/types/database";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
 
-export default function FullChat() {
+const WELCOME_MESSAGE: Message = {
+  role: "assistant",
+  content:
+    "Hi! I'm your AI copilot for this project. I have full context of your workspace — ask me anything about your business, tools, teams, or projects.",
+};
+
+interface Props {
+  projectId: string;
+  initialMessages?: ChatMessage[];
+}
+
+export default function FullChat({ projectId, initialMessages }: Props) {
   const { setHideRightPanel } = useLayout();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content:
-        "Hi! I'm your AI copilot in full chat mode. I have full context of your workspace — ask me anything about your business, tools, teams, or projects.",
-    },
-  ]);
+
+  /* Hydrate from saved messages or show welcome */
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (initialMessages && initialMessages.length > 0) {
+      return initialMessages.map((m) => ({ role: m.role, content: m.content }));
+    }
+    return [WELCOME_MESSAGE];
+  });
+
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [saved, setSaved] = useState(true);
   const pathname = usePathname();
 
   const { chatFiles, addChatFiles, removeChatFile, clearChatFiles } = useFiles();
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* Hide the right AI panel on mount, restore on unmount */
   useEffect(() => {
@@ -37,6 +54,42 @@ export default function FullChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  /* Cleanup save timer */
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, []);
+
+  /* ── Save messages to Supabase (debounced 1s) ── */
+  const saveMessages = useCallback(
+    (msgs: Message[]) => {
+      setSaved(false);
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(async () => {
+        const supabase = createClient();
+        const chatMessages: ChatMessage[] = msgs.map((m) => ({
+          role: m.role,
+          content: m.content,
+          timestamp: new Date().toISOString(),
+        }));
+        await supabase
+          .from("projects")
+          .update({ chat_messages: chatMessages as unknown as Record<string, unknown>[] })
+          .eq("id", projectId);
+        setSaved(true);
+      }, 1000);
+    },
+    [projectId]
+  );
+
+  /* ── New Chat ── */
+  const handleNewChat = useCallback(() => {
+    const fresh = [WELCOME_MESSAGE];
+    setMessages(fresh);
+    saveMessages(fresh);
+  }, [saveMessages]);
 
   const handleChatFileInput = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -76,10 +129,12 @@ export default function FullChat() {
 
         if (!res.ok) {
           const errText = await res.text();
-          setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: `Error: ${errText}` },
-          ]);
+          const errorMsgs = [
+            ...updatedMessages,
+            { role: "assistant" as const, content: `Error: ${errText}` },
+          ];
+          setMessages(errorMsgs);
+          saveMessages(errorMsgs);
           setSending(false);
           return;
         }
@@ -88,6 +143,7 @@ export default function FullChat() {
 
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
+        let finalMessages: Message[] = [];
 
         while (true) {
           const { done, value } = await reader.read();
@@ -100,29 +156,51 @@ export default function FullChat() {
               ...last,
               content: last.content + chunk,
             };
+            finalMessages = updated;
             return updated;
           });
+        }
+
+        /* Save after streaming completes */
+        if (finalMessages.length > 0) {
+          saveMessages(finalMessages);
         }
 
         window.dispatchEvent(new Event("workspace-updated"));
         setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
       } catch {
-        setMessages((prev) => [
-          ...prev,
+        const errorMsgs = [
+          ...updatedMessages,
           {
-            role: "assistant",
+            role: "assistant" as const,
             content: "Sorry, something went wrong. Please try again.",
           },
-        ]);
+        ];
+        setMessages(errorMsgs);
+        saveMessages(errorMsgs);
       } finally {
         setSending(false);
       }
     },
-    [input, messages, sending, chatFiles, pathname]
+    [input, messages, sending, chatFiles, pathname, saveMessages]
   );
 
   return (
     <div className="full-chat">
+      {/* Chat header */}
+      <div className="full-chat-header">
+        <span className="full-chat-header-title">Project Chat</span>
+        <div className="full-chat-header-right">
+          <span className="project-save-status">{saved ? "Auto-saved" : "Saving…"}</span>
+          <button className="full-chat-new-btn" onClick={handleNewChat} disabled={sending}>
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M7 1v12M1 7h12" />
+            </svg>
+            New Chat
+          </button>
+        </div>
+      </div>
+
       {/* Messages */}
       <div className="full-chat-messages">
         {messages.map((msg, i) => (

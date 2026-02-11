@@ -32,6 +32,7 @@ function buildSystemPrompt(data: {
   teamFiles: Record<string, unknown>[];
   goals: Record<string, unknown>[];
   subGoals: Record<string, unknown>[];
+  painPoints: Record<string, unknown>[];
   libraryItems: Record<string, unknown>[];
   libraryFiles: Record<string, unknown>[];
   stackTools: Record<string, unknown>[];
@@ -44,7 +45,7 @@ function buildSystemPrompt(data: {
   const {
     email, organization, organizationFiles,
     teams, teamRoles, teamKpis, teamTools, teamFiles,
-    goals, subGoals, libraryItems, libraryFiles,
+    goals, subGoals, painPoints, libraryItems, libraryFiles,
     stackTools, projects, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage,
   } = data;
@@ -105,6 +106,8 @@ You can take actions in the user's workspace using tools:
 - Delete roles, KPIs, and tools from teams
 - Create goals and sub-goals, update their status
 - Delete goals (and all their sub-goals)
+- Create pain points, update their status/severity, and delete them
+- Link pain points to existing goals
 - Create library items (notes, documents, templates)
 - Search the tool catalog for tool details, features, pricing, and comparisons
 - Add or remove tools from the user's tech stack
@@ -112,9 +115,11 @@ You can take actions in the user's workspace using tools:
 - Create new projects in the workspace
 - Add content to project canvases (text, headings, images, dividers)
 - Generate workflow flows from natural language descriptions (process flows, pipelines, automation diagrams)
+- Generate workflows from uploaded documents (SOPs, process docs, playbooks, PDFs) — parse the document and extract steps, decisions, and automations into a visual flow
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 When the user asks to create a workflow, process, flow, or pipeline, use generate_workflow to build it visually with proper nodes and connections. Assign tools from their tech stack to process steps when mentioned.
+When the user uploads a document (SOP, process doc, playbook, PDF, etc.) and asks to generate a workflow from it, use generate_workflow_from_document. Parse the document text to identify process steps, decision points, and automation opportunities. Create a comprehensive workflow with proper node types and connections. Include the document text in the document_text parameter so it's recorded.
 When the user is on a project page with an existing workflow, you can see all the nodes, connections, roles, tools, durations, and costs. Use this to answer questions about the flow, suggest optimizations, identify bottlenecks, or restructure the workflow when asked. If the user asks you to modify or redo the flow, use generate_workflow — their current version is automatically saved to version history before any AI changes.
 If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
 The UI updates automatically after changes — no need to tell the user to refresh.
@@ -230,6 +235,22 @@ ${currentPage}
           if (s.end_date) prompt += ` - Due: ${s.end_date}`;
           prompt += `\n`;
         }
+      }
+    }
+  }
+
+  /* ── Pain Points ── */
+  if (painPoints.length > 0) {
+    prompt += `\n## Pain Points\n`;
+    for (const pp of painPoints) {
+      prompt += `\n### ${pp.name} [${pp.severity} | ${pp.status}]\n`;
+      if (pp.description) prompt += `Description: ${pp.description}\n`;
+      if (pp.owner) prompt += `Owner: ${pp.owner}\n`;
+      if (pp.impact_metric) prompt += `Impact Metric: ${pp.impact_metric}\n`;
+      if (pp.teams && (pp.teams as string[]).length > 0) prompt += `Teams: ${(pp.teams as string[]).join(", ")}\n`;
+      if (pp.linked_goal_id) {
+        const linkedGoal = goals.find((g) => g.id === pp.linked_goal_id);
+        if (linkedGoal) prompt += `Linked Goal: ${linkedGoal.name}\n`;
       }
     }
   }
@@ -398,6 +419,7 @@ export async function POST(req: Request) {
     { data: teamFiles },
     { data: goals },
     { data: subGoals },
+    { data: painPoints },
     { data: libraryItems },
     { data: libraryFiles },
     { data: stackTools },
@@ -413,6 +435,7 @@ export async function POST(req: Request) {
     supabase.from("team_files").select("id, team_id, name, text_content").order("added_at"),
     supabase.from("goals").select("*").order("created_at", { ascending: false }),
     supabase.from("sub_goals").select("*").order("created_at"),
+    supabase.from("pain_points").select("*").order("created_at", { ascending: false }),
     supabase.from("library_items").select("*").order("updated_at", { ascending: false }),
     supabase.from("library_files").select("id, name, text_content").order("added_at", { ascending: false }),
     supabase.from("user_stack_tools").select("*").order("created_at", { ascending: false }),
@@ -453,6 +476,7 @@ export async function POST(req: Request) {
     teamFiles: teamFiles ?? [],
     goals: goals ?? [],
     subGoals: subGoals ?? [],
+    painPoints: painPoints ?? [],
     libraryItems: libraryItems ?? [],
     libraryFiles: libraryFiles ?? [],
     stackTools: stackTools ?? [],

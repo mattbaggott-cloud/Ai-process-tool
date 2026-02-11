@@ -322,6 +322,73 @@ export function getToolDefinitions(): Tool[] {
       },
     },
 
+    /* ── Pain Point tools ─────────────────────────────────── */
+    {
+      name: "create_pain_point",
+      description:
+        "Create a new pain point, bottleneck, or challenge in the user's workspace. Use when the user mentions a problem, blocker, friction, challenge, or pain point they're facing.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string", description: "Pain point name (e.g. 'High customer churn in first 90 days')" },
+          description: { type: "string", description: "Detailed description of the pain point" },
+          severity: {
+            type: "string",
+            enum: ["Low", "Medium", "High", "Critical"],
+            description: "How severe this pain point is. Defaults to 'Medium'.",
+          },
+          status: {
+            type: "string",
+            enum: ["Backlog", "To Do", "In Progress", "In Review", "Done"],
+            description: "Tracking status. Defaults to 'Backlog'.",
+          },
+          owner: { type: "string", description: "Person responsible for addressing this" },
+          teams: {
+            type: "array",
+            items: { type: "string" },
+            description: "Affected team names",
+          },
+          impact_metric: { type: "string", description: "Quantified impact (e.g. 'Customer churn: 15%', '$50K/month lost revenue')" },
+          linked_goal_name: { type: "string", description: "Name of an existing goal to link this pain point to (optional)" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "update_pain_point_status",
+      description:
+        "Update the status or severity of a pain point. Use when the user says a pain point is resolved, in progress, etc.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          pain_point_name: { type: "string", description: "The name of the pain point to update" },
+          status: {
+            type: "string",
+            enum: ["Backlog", "To Do", "In Progress", "In Review", "Done"],
+            description: "The new status",
+          },
+          severity: {
+            type: "string",
+            enum: ["Low", "Medium", "High", "Critical"],
+            description: "Updated severity level",
+          },
+        },
+        required: ["pain_point_name"],
+      },
+    },
+    {
+      name: "delete_pain_point",
+      description:
+        "Delete a pain point. Use when the user wants to remove a pain point entirely.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          pain_point_name: { type: "string", description: "The name of the pain point to delete" },
+        },
+        required: ["pain_point_name"],
+      },
+    },
+
     /* ── Organization tools ──────────────────────────────── */
     {
       name: "update_organization",
@@ -662,6 +729,94 @@ Edge conventions: Connect "bottom" port of source to "top" port of target for ve
           },
         },
         required: ["project_name", "nodes", "edges"],
+      },
+    },
+    /* ── Generate Workflow from Document ───────────────────── */
+    {
+      name: "generate_workflow_from_document",
+      description:
+        `Generate a workflow from uploaded document content (SOPs, process docs, playbooks, etc.). Use this when the user uploads a document and asks to turn it into a workflow, or when they say "generate a flow from this document".
+
+You will receive the document text. Analyze it to extract:
+1. Process steps (→ process nodes)
+2. Decision points (→ decision nodes)
+3. AI/automation steps (→ ai_agent nodes)
+4. The logical sequence and branching
+
+Then generate proper workflow nodes and edges. Follow the same layout conventions as generate_workflow.
+
+Always include a start and end node. Map document sections/steps to process nodes. Look for conditional logic ("if", "when", "depending on") to create decision nodes. Look for automation or AI mentions to create ai_agent nodes.`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          project_name: {
+            type: "string",
+            description: "The name of the project to add the workflow to",
+          },
+          document_text: {
+            type: "string",
+            description: "The full text content of the document to parse into a workflow",
+          },
+          document_name: {
+            type: "string",
+            description: "The name of the source document (for labeling)",
+          },
+          nodes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                temp_id: {
+                  type: "string",
+                  description: "Temporary ID for referencing in edges (e.g. 'n1', 'n2')",
+                },
+                type: {
+                  type: "string",
+                  enum: ["start", "end", "process", "decision", "ai_agent", "note"],
+                  description: "The node type",
+                },
+                title: {
+                  type: "string",
+                  description: "Display title for the node",
+                },
+                description: {
+                  type: "string",
+                  description: "Optional description text shown on the node",
+                },
+                x: {
+                  type: "number",
+                  description: "X position on canvas",
+                },
+                y: {
+                  type: "number",
+                  description: "Y position on canvas",
+                },
+                properties: {
+                  type: "object",
+                  description: "Key-value properties. For process: tool_name, duration, cost. For ai_agent: model, prompt. For decision: condition.",
+                },
+              },
+              required: ["temp_id", "type", "title", "x", "y"],
+            },
+            description: "Array of workflow nodes extracted from the document",
+          },
+          edges: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                source_id: { type: "string", description: "temp_id of the source node" },
+                target_id: { type: "string", description: "temp_id of the target node" },
+                source_side: { type: "string", enum: ["top", "right", "bottom", "left"] },
+                target_side: { type: "string", enum: ["top", "right", "bottom", "left"] },
+                label: { type: "string", description: "Optional label" },
+              },
+              required: ["source_id", "target_id"],
+            },
+            description: "Array of edges connecting nodes",
+          },
+        },
+        required: ["project_name", "document_text", "nodes", "edges"],
       },
     },
   ];

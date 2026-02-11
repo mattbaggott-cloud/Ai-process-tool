@@ -7,11 +7,19 @@ import { FileProvider } from "@/context/FileContext";
 import { LayoutProvider, useLayout } from "@/context/LayoutContext";
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
-  const { hideRightPanel } = useLayout();
+  const { hideRightPanel, sidebarCollapsed } = useLayout();
+
+  const containerClasses = [
+    "app-container",
+    hideRightPanel ? "app-container-no-chat" : "",
+    sidebarCollapsed ? "app-container-sidebar-collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className={`app-container ${hideRightPanel ? "app-container-no-chat" : ""}`}>
-      {/* Left Sidebar – 280 px */}
+    <div className={containerClasses}>
+      {/* Left Sidebar – 280px / 60px collapsed */}
       <Sidebar />
 
       {/* Center Canvas – fills remaining space */}

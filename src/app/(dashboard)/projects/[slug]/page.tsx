@@ -178,7 +178,7 @@ export default function ProjectWorkspacePage() {
         </div>
 
         {/* Full chat takes over */}
-        <FullChat />
+        <FullChat projectId={project.id} initialMessages={project.chat_messages} />
       </div>
     );
   }
@@ -224,6 +224,7 @@ export default function ProjectWorkspacePage() {
         <div className="whiteboard">
           <WorkflowEditor
             projectId={project.id}
+            projectName={project.name}
             data={
               project.workflow_nodes?.[0]
                 ? (project.workflow_nodes[0] as unknown as WorkflowData)

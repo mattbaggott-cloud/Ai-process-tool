@@ -83,6 +83,23 @@ function readFileAsText(file: File): Promise<string> {
   });
 }
 
+function isPdf(file: File): boolean {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+async function extractPdfText(file: File): Promise<string | null> {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/extract-text", { method: "POST", body: formData });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.text || null;
+  } catch {
+    return null;
+  }
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -165,7 +182,9 @@ export function FileProvider({ children }: { children: ReactNode }) {
 
           /* Extract text for AI context */
           let textContent: string | null = null;
-          if (isTextReadable(file)) {
+          if (isPdf(file)) {
+            textContent = await extractPdfText(file);
+          } else if (isTextReadable(file)) {
             try {
               textContent = await readFileAsText(file);
             } catch {
@@ -255,7 +274,9 @@ export function FileProvider({ children }: { children: ReactNode }) {
       for (const file of newFiles) {
         if (file.size > MAX_FILE_SIZE) continue;
         let textContent: string | null = null;
-        if (isTextReadable(file)) {
+        if (isPdf(file)) {
+          textContent = await extractPdfText(file);
+        } else if (isTextReadable(file)) {
           try {
             textContent = await readFileAsText(file);
           } catch {

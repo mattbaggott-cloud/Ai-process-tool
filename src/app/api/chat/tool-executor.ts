@@ -43,6 +43,12 @@ export async function executeTool(
         return await handleDeleteTeamTools(input, supabase);
       case "delete_goal":
         return await handleDeleteGoal(input, supabase);
+      case "create_pain_point":
+        return await handleCreatePainPoint(input, supabase, userId);
+      case "update_pain_point_status":
+        return await handleUpdatePainPointStatus(input, supabase);
+      case "delete_pain_point":
+        return await handleDeletePainPoint(input, supabase);
       case "update_organization":
         return await handleUpdateOrganization(input, supabase, userId);
       case "search_tool_catalog":
@@ -59,6 +65,8 @@ export async function executeTool(
         return await handleUpdateCanvas(input, supabase);
       case "generate_workflow":
         return await handleGenerateWorkflow(input, supabase);
+      case "generate_workflow_from_document":
+        return await handleGenerateWorkflowFromDocument(input, supabase);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -478,6 +486,107 @@ async function handleUpdateGoalStatus(
     if (error) return { success: false, message: `Failed to update goal: ${error.message}` };
     return { success: true, message: `Updated goal "${goalName}" to "${status}"` };
   }
+}
+
+/* ══════════════════════════════════════════════════════════
+   PAIN POINT HANDLERS
+   ══════════════════════════════════════════════════════════ */
+
+async function resolvePainPointId(
+  name: string,
+  supabase: SupabaseClient
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("pain_points")
+    .select("id")
+    .ilike("name", name)
+    .single();
+  return data?.id ?? null;
+}
+
+async function handleCreatePainPoint(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name) return { success: false, message: "Pain point name is required" };
+
+  let linkedGoalId: string | null = null;
+  const linkedGoalName = input.linked_goal_name as string | undefined;
+  if (linkedGoalName) {
+    linkedGoalId = await resolveGoalId(linkedGoalName, supabase);
+    if (!linkedGoalId) {
+      return { success: false, message: `Linked goal "${linkedGoalName}" not found` };
+    }
+  }
+
+  const row = {
+    user_id: userId,
+    name,
+    description: (input.description as string) ?? "",
+    severity: (input.severity as string) ?? "Medium",
+    status: (input.status as string) ?? "Backlog",
+    owner: (input.owner as string) ?? "",
+    teams: (input.teams as string[]) ?? [],
+    impact_metric: (input.impact_metric as string) ?? "",
+    linked_goal_id: linkedGoalId,
+  };
+
+  const { data, error } = await supabase
+    .from("pain_points")
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to create pain point: ${error.message}` };
+
+  const linked = linkedGoalName ? ` (linked to "${linkedGoalName}")` : "";
+  return { success: true, message: `Created pain point "${data.name}" [${data.severity}]${linked}` };
+}
+
+async function handleUpdatePainPointStatus(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const ppName = input.pain_point_name as string;
+  if (!ppName) return { success: false, message: "pain_point_name is required" };
+
+  const ppId = await resolvePainPointId(ppName, supabase);
+  if (!ppId) return { success: false, message: `Pain point "${ppName}" not found` };
+
+  const updates: Record<string, unknown> = {};
+  if (input.status) updates.status = input.status;
+  if (input.severity) updates.severity = input.severity;
+
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: "Provide at least status or severity to update" };
+  }
+
+  const { error } = await supabase
+    .from("pain_points")
+    .update(updates)
+    .eq("id", ppId);
+
+  if (error) return { success: false, message: `Failed to update pain point: ${error.message}` };
+
+  const fields = Object.entries(updates).map(([k, v]) => `${k}: ${v}`).join(", ");
+  return { success: true, message: `Updated pain point "${ppName}" — ${fields}` };
+}
+
+async function handleDeletePainPoint(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const ppName = input.pain_point_name as string;
+  if (!ppName) return { success: false, message: "pain_point_name is required" };
+
+  const ppId = await resolvePainPointId(ppName, supabase);
+  if (!ppId) return { success: false, message: `Pain point "${ppName}" not found` };
+
+  const { error } = await supabase.from("pain_points").delete().eq("id", ppId);
+  if (error) return { success: false, message: `Failed to delete pain point: ${error.message}` };
+  return { success: true, message: `Deleted pain point "${ppName}"` };
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -1197,6 +1306,39 @@ async function handleGenerateWorkflow(
     success: true,
     message: `Generated workflow with ${nodes.length} node(s) and ${edges.length} connection(s) in "${projectName}". Switch to the Builder tab to view it.`,
   };
+}
+
+/* ── Generate Workflow from Document ────────────────── */
+
+async function handleGenerateWorkflowFromDocument(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const projectName = input.project_name as string;
+  const documentText = input.document_text as string;
+  const documentName = (input.document_name as string) ?? "Document";
+
+  if (!projectName || !documentText) {
+    return { success: false, message: "project_name and document_text are required" };
+  }
+
+  // Reuse the generate_workflow handler — it does the same node/edge processing
+  const result = await handleGenerateWorkflow(
+    {
+      project_name: projectName,
+      nodes: input.nodes,
+      edges: input.edges,
+    },
+    supabase
+  );
+
+  if (result.success) {
+    return {
+      success: true,
+      message: `${result.message}\n\nGenerated from document: "${documentName}"`,
+    };
+  }
+  return result;
 }
 
 async function handleCompareTools(

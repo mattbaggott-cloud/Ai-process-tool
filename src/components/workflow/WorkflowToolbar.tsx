@@ -9,16 +9,16 @@ const NODE_TYPES: { type: WorkflowNodeType; label: string; icon: React.ReactNode
     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5" /><path d="M7 4v3l2 1.5" /></svg>,
   },
   {
-    type: "decision", label: "Add Decision", accent: "#f97316",
+    type: "decision", label: "Decision", accent: "#f97316",
     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 1L13 7L7 13L1 7Z" /></svg>,
   },
   {
-    type: "ai_agent", label: "Add AI Agent", accent: "#8b5cf6",
+    type: "ai_agent", label: "AI Agent", accent: "#8b5cf6",
     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 1l1.5 3.5L12 6l-3.5 1.5L7 11 5.5 7.5 2 6l3.5-1.5Z" /></svg>,
   },
 ];
 
-const MORE_TYPES: { type: WorkflowNodeType; label: string; icon: React.ReactNode; accent: string }[] = [
+const MORE_NODE_TYPES: { type: WorkflowNodeType; label: string; icon: React.ReactNode; accent: string }[] = [
   {
     type: "start", label: "Start", accent: "#22c55e",
     icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><polygon points="4,2 12,7 4,12" fill="currentColor" /></svg>,
@@ -41,21 +41,22 @@ interface Props {
   onFit: () => void;
   onSimulate?: () => void;
   onHistory?: () => void;
+  onGenerateFromDoc?: () => void;
   hasNodes?: boolean;
 }
 
-export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit, onSimulate, onHistory, hasNodes }: Props) {
-  const [moreOpen, setMoreOpen] = useState(false);
-  const moreRef = useRef<HTMLDivElement>(null);
+export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, onFit, onSimulate, onHistory, onGenerateFromDoc, hasNodes }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!moreOpen) return;
+    if (!menuOpen) return;
     const handler = (e: MouseEvent) => {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [moreOpen]);
+  }, [menuOpen]);
 
   return (
     <div className="wf-toolbar">
@@ -67,18 +68,18 @@ export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, 
         </button>
       ))}
 
-      {/* More dropdown */}
-      <div ref={moreRef} style={{ position: "relative" }}>
-        <button className="wf-toolbar-btn" onClick={() => setMoreOpen(!moreOpen)}>
+      {/* More nodes dropdown */}
+      <div ref={menuRef} style={{ position: "relative" }}>
+        <button className="wf-toolbar-btn" onClick={() => setMenuOpen(!menuOpen)}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
             <circle cx="3" cy="7" r="1.3" /><circle cx="7" cy="7" r="1.3" /><circle cx="11" cy="7" r="1.3" />
           </svg>
           More
         </button>
-        {moreOpen && (
+        {menuOpen && (
           <div className="wf-toolbar-dropdown">
-            {MORE_TYPES.map((nt) => (
-              <button key={nt.type} className="wf-toolbar-dropdown-item" onClick={() => { onAddNode(nt.type); setMoreOpen(false); }}>
+            {MORE_NODE_TYPES.map((nt) => (
+              <button key={nt.type} className="wf-toolbar-dropdown-item" onClick={() => { onAddNode(nt.type); setMenuOpen(false); }}>
                 <span className="wf-toolbar-dropdown-icon" style={{ color: nt.accent }}>{nt.icon}</span>
                 {nt.label}
               </button>
@@ -87,35 +88,39 @@ export default function WorkflowToolbar({ onAddNode, zoom, onZoomIn, onZoomOut, 
         )}
       </div>
 
-      {/* Simulate */}
-      {onSimulate && (
-        <>
-          <div className="wf-toolbar-sep" />
-          <button
-            className={`wf-toolbar-btn wf-toolbar-simulate${hasNodes ? "" : " wf-toolbar-btn-disabled"}`}
-            onClick={hasNodes ? onSimulate : undefined}
-            title={hasNodes ? "Analyze flow for time, cost & bottlenecks" : "Add nodes to simulate"}
-          >
-            <span className="wf-toolbar-btn-icon" style={{ color: "#10b981" }}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                <polygon points="3,2 12,7 3,12" fill="currentColor" stroke="none" />
-              </svg>
-            </span>
-            Simulate
-          </button>
-        </>
+      <div className="wf-toolbar-sep" />
+
+      {/* Icon action buttons — right side */}
+      {onGenerateFromDoc && (
+        <button className="wf-toolbar-icon-btn" onClick={onGenerateFromDoc}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#0ea5e9" strokeWidth="1.4" strokeLinecap="round">
+            <path d="M9.5 1.5H4.5A1.5 1.5 0 003 3v10a1.5 1.5 0 001.5 1.5h7A1.5 1.5 0 0013 13V5l-3.5-3.5z" />
+            <path d="M9.5 1.5V5H13" />
+            <path d="M6 9h4M6 11.5h2.5" />
+          </svg>
+          <span className="wf-toolbar-icon-tooltip">Generate from Document</span>
+        </button>
       )}
 
-      {/* History */}
+      {onSimulate && (
+        <button
+          className={`wf-toolbar-icon-btn${hasNodes ? "" : " wf-toolbar-icon-btn-disabled"}`}
+          onClick={hasNodes ? onSimulate : undefined}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <polygon points="4,2 14,8 4,14" fill="#10b981" />
+          </svg>
+          <span className="wf-toolbar-icon-tooltip">{hasNodes ? "Simulate" : "Add nodes to simulate"}</span>
+        </button>
+      )}
+
       {onHistory && (
-        <button className="wf-toolbar-btn" onClick={onHistory} title="Version history">
-          <span className="wf-toolbar-btn-icon" style={{ color: "#6366f1" }}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-              <circle cx="7" cy="7" r="5.5" />
-              <path d="M7 4v3l2 1.5" />
-            </svg>
-          </span>
-          History
+        <button className="wf-toolbar-icon-btn" onClick={onHistory}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#6366f1" strokeWidth="1.4" strokeLinecap="round">
+            <circle cx="8" cy="8" r="6" />
+            <path d="M8 4.5v3.5l2.5 1.5" />
+          </svg>
+          <span className="wf-toolbar-icon-tooltip">Version History</span>
         </button>
       )}
 

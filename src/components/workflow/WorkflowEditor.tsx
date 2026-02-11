@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import type { WorkflowData, WorkflowNode, WorkflowEdge, WorkflowNodeType, WorkflowPort } from "@/lib/types/database";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/context/AuthContext";
@@ -10,6 +11,7 @@ import WorkflowToolbar from "./WorkflowToolbar";
 import WorkflowNodeEditor from "./WorkflowNodeEditor";
 import WorkflowSimulationModal from "./WorkflowSimulationModal";
 import WorkflowHistory, { snapshotWorkflow } from "./WorkflowHistory";
+import WorkflowDocUpload from "./WorkflowDocUpload";
 
 /* ── Helpers ───────────────────────────────────────────── */
 
@@ -70,11 +72,12 @@ function createNode(type: WorkflowNodeType, x: number, y: number): WorkflowNode 
 
 interface Props {
   projectId: string;
+  projectName?: string;
   data: WorkflowData;
   onChange: (data: WorkflowData) => void;
 }
 
-export default function WorkflowEditor({ projectId, data, onChange }: Props) {
+export default function WorkflowEditor({ projectId, projectName, data, onChange }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewportState] = useState(data.viewport);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -82,6 +85,8 @@ export default function WorkflowEditor({ projectId, data, onChange }: Props) {
   const [mouseWorld, setMouseWorld] = useState<{ x: number; y: number } | null>(null);
   const [showSimulation, setShowSimulation] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showDocUpload, setShowDocUpload] = useState(false);
+  const [docGenerating, setDocGenerating] = useState(false);
   const prevDataRef = useRef<string>("");
   const isPanning = useRef(false);
   const vpRef = useRef(viewport);
@@ -334,6 +339,51 @@ export default function WorkflowEditor({ projectId, data, onChange }: Props) {
   }
 
   const selectedNode = data.nodes.find((n) => n.id === selectedId) ?? null;
+  const pathname = usePathname();
+
+  /* ── Generate workflow from document via AI chat ── */
+  const handleGenerateFromDoc = useCallback(async (docText: string, docName: string) => {
+    setDocGenerating(true);
+
+    /* Snapshot current flow before AI overwrites */
+    if (data.nodes.length > 0) {
+      snapshotWorkflow(projectId, data, "Before doc generation");
+    }
+
+    const pName = projectName || "this project";
+    const userMessage = `Generate a detailed workflow from this document "${docName}" for the project "${pName}". Parse all the steps, decisions, and automations into a visual flow with proper connections.`;
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: userMessage }],
+          currentPage: pathname,
+          chatFileContents: [{ name: docName, content: docText }],
+        }),
+      });
+
+      if (res.ok) {
+        // Read the full stream to completion
+        const reader = res.body!.getReader();
+        while (true) {
+          const { done } = await reader.read();
+          if (done) break;
+        }
+      }
+
+      /* Trigger workspace refresh to pull updated workflow */
+      window.dispatchEvent(new Event("workspace-updated"));
+      setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 1000);
+
+      setShowDocUpload(false);
+    } catch (err) {
+      console.error("Doc generation failed:", err);
+    } finally {
+      setDocGenerating(false);
+    }
+  }, [data, projectId, projectName, pathname]);
 
   return (
     <>
@@ -404,6 +454,7 @@ export default function WorkflowEditor({ projectId, data, onChange }: Props) {
         onFit={fitToView}
         onSimulate={() => setShowSimulation(true)}
         onHistory={() => setShowHistory(true)}
+        onGenerateFromDoc={() => setShowDocUpload(true)}
         hasNodes={data.nodes.length > 0}
       />
 
@@ -438,6 +489,15 @@ export default function WorkflowEditor({ projectId, data, onChange }: Props) {
             setShowHistory(false);
           }}
           onClose={() => setShowHistory(false)}
+        />
+      )}
+
+      {/* Document upload modal */}
+      {showDocUpload && (
+        <WorkflowDocUpload
+          projectName={projectName || "Project"}
+          onGenerate={handleGenerateFromDoc}
+          onClose={() => { if (!docGenerating) setShowDocUpload(false); }}
         />
       )}
     </>
