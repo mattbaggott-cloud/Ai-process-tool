@@ -23,6 +23,7 @@ function truncate(text: string | null, max: number): string {
 
 function buildSystemPrompt(data: {
   email: string;
+  userProfile: Record<string, unknown> | null;
   organization: Record<string, unknown> | null;
   organizationFiles: Record<string, unknown>[];
   teams: Record<string, unknown>[];
@@ -43,7 +44,7 @@ function buildSystemPrompt(data: {
   currentPage: string;
 }): string {
   const {
-    email, organization, organizationFiles,
+    email, userProfile, organization, organizationFiles,
     teams, teamRoles, teamKpis, teamTools, teamFiles,
     goals, subGoals, painPoints, libraryItems, libraryFiles,
     stackTools, projects, catalogSummary, catalogSubcategories,
@@ -89,7 +90,9 @@ function buildSystemPrompt(data: {
 
   /* ── Build sections ── */
 
-  let prompt = `You are an AI business operations copilot for ${email}'s workspace.
+  const userName = (userProfile?.display_name as string) || email;
+
+  let prompt = `You are an AI business operations copilot for ${userName}'s workspace.
 
 ## Your Role
 - Help model business processes, team structures, and workflows
@@ -128,6 +131,23 @@ When the user asks about tools, use search_tool_catalog to look up details. When
 ## User's Current Page
 ${currentPage}
 `;
+
+  /* ── User Profile ── */
+  if (userProfile) {
+    const p = userProfile;
+    prompt += `\n## User Profile\n`;
+    if (p.display_name) prompt += `**Name:** ${p.display_name}\n`;
+    if (p.job_title) prompt += `**Role:** ${p.job_title}\n`;
+    if (p.department) prompt += `**Department:** ${p.department}\n`;
+    if (p.bio) prompt += `**About:** ${p.bio}\n`;
+    if (p.key_responsibilities) prompt += `**Responsibilities:** ${p.key_responsibilities}\n`;
+    const expertise = p.areas_of_expertise as string[] | null;
+    if (expertise && expertise.length > 0) prompt += `**Expertise:** ${expertise.join(", ")}\n`;
+    if (p.years_of_experience) prompt += `**Experience:** ${p.years_of_experience}\n`;
+    if (p.focus_areas) prompt += `**Current Priorities:** ${p.focus_areas}\n`;
+    if (p.decision_authority) prompt += `**Decision Authority:** ${p.decision_authority}\n`;
+    if (p.communication_preferences) prompt += `**Communication Preferences:** ${p.communication_preferences}\n`;
+  }
 
   /* ── Organization ── */
   if (organization) {
@@ -410,6 +430,7 @@ export async function POST(req: Request) {
 
   /* 4. Load ALL user data in parallel */
   const [
+    { data: userProfile },
     { data: organization },
     { data: organizationFiles },
     { data: teams },
@@ -426,6 +447,7 @@ export async function POST(req: Request) {
     { data: catalogCategories },
     { data: projects },
   ] = await Promise.all([
+    supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
     supabase.from("organization_files").select("id, name, text_content").order("added_at", { ascending: false }),
     supabase.from("teams").select("*").order("created_at"),
@@ -467,6 +489,7 @@ export async function POST(req: Request) {
   /* 5. Build system prompt */
   const systemPrompt = buildSystemPrompt({
     email: user.email ?? "User",
+    userProfile: userProfile ?? null,
     organization: organization ?? null,
     organizationFiles: organizationFiles ?? [],
     teams: teams ?? [],

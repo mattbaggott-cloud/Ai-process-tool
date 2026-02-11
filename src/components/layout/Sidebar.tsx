@@ -243,12 +243,18 @@ export default function Sidebar() {
       <div className="sidebar-footer">
         {user && (
           <div className="sidebar-user">
-            <div className="sidebar-user-avatar" title={sidebarCollapsed ? user.email : undefined}>
+            <Link
+              href="/profile"
+              className={`sidebar-user-avatar ${pathname === "/profile" ? "sidebar-user-avatar-active" : ""}`}
+              title={sidebarCollapsed ? "My Profile" : "Edit profile"}
+            >
               {(user.email ?? "U")[0].toUpperCase()}
-            </div>
+            </Link>
             {!sidebarCollapsed && (
               <div className="sidebar-user-info">
-                <div className="sidebar-user-email">{user.email}</div>
+                <Link href="/profile" className="sidebar-user-email sidebar-user-email-link">
+                  {user.email}
+                </Link>
               </div>
             )}
           </div>

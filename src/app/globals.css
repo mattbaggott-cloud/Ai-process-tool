@@ -2150,6 +2150,33 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Clickable profile avatar ─────────────────────────── */
+a.sidebar-user-avatar {
+  text-decoration: none;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  border: 2px solid transparent;
+}
+
+a.sidebar-user-avatar:hover {
+  border-color: var(--color-primary-300);
+  box-shadow: 0 0 0 2px var(--color-primary-100);
+}
+
+.sidebar-user-avatar-active {
+  border-color: var(--color-primary-500) !important;
+  box-shadow: 0 0 0 2px var(--color-primary-100) !important;
+}
+
+.sidebar-user-email-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.sidebar-user-email-link:hover {
+  color: var(--color-primary-600);
+}
+
 .sidebar-user-info {
   flex: 1;
   min-width: 0;

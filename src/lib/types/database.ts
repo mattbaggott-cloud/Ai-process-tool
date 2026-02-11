@@ -11,6 +11,24 @@ export interface Profile {
   created_at: string;
 }
 
+// User Profile (extended context for AI copilot)
+export interface UserProfile {
+  id: string;
+  user_id: string;
+  display_name: string;
+  job_title: string;
+  department: string;
+  bio: string;
+  areas_of_expertise: string[];
+  years_of_experience: string;
+  decision_authority: string;
+  communication_preferences: string;
+  key_responsibilities: string;
+  focus_areas: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Phase 4: Library
 export type Category = "Note" | "Document" | "Template" | "Reference";
 
