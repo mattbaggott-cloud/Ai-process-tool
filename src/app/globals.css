@@ -5594,7 +5594,7 @@ a.sidebar-user-avatar:hover {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .add-widget-panel {
-  background: var(--card-bg);
+  background: #fff;
   border-radius: 16px;
   width: 520px;
   max-width: calc(100vw - 48px);
@@ -5665,6 +5665,16 @@ a.sidebar-user-avatar:hover {
 .add-widget-step select,
 .add-widget-step input {
   width: 100%;
+  background: #f4f5f7;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.add-widget-step select:focus,
+.add-widget-step input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+  background: #fff;
 }
 .add-widget-size-row {
   display: grid;
@@ -5678,6 +5688,107 @@ a.sidebar-user-avatar:hover {
   gap: 8px;
   padding: 16px 20px;
   border-top: 1px solid var(--border-color);
+}
+
+/* ── Mode toggle (Manual / AI Suggest) ── */
+.add-widget-mode-toggle {
+  display: flex;
+  gap: 0;
+  background: #f4f5f7;
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 18px;
+}
+.add-widget-mode-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.add-widget-mode-btn.active {
+  color: var(--text-primary);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+.add-widget-mode-btn:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+/* ── AI describe mode ── */
+.add-widget-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.add-widget-ai-textarea {
+  width: 100%;
+  min-height: 100px;
+  background: #f4f5f7;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-primary);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.add-widget-ai-textarea::placeholder {
+  color: #b5bac3;
+}
+.add-widget-ai-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+  background: #fff;
+}
+.add-widget-ai-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.add-widget-ai-generate {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.add-widget-ai-generate:hover {
+  opacity: 0.85;
+}
+.add-widget-ai-generate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.add-widget-ai-error {
+  font-size: 13px;
+  color: var(--danger);
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.06);
+  border-radius: 6px;
+}
+.add-widget-ai-success {
+  font-size: 13px;
+  color: #16a34a;
+  padding: 8px 12px;
+  background: rgba(22, 163, 74, 0.06);
+  border-radius: 6px;
 }
 
 /* ── No data state ── */
