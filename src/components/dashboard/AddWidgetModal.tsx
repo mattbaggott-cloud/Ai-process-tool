@@ -53,6 +53,8 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
     return `${sourceDef.label} ${metricLabel}`;
   }, [sourceDef, metricKey, groupBy, widgetType]);
 
+  const showGroupBy = widgetType !== "metric" && widgetType !== "table" && widgetType !== "progress";
+
   const handleAdd = () => {
     const widget: WidgetConfig = {
       id: crypto.randomUUID(),
@@ -60,7 +62,7 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
       title: title.trim() || autoTitle,
       data_source: sourceKey,
       metric: metricKey || "count",
-      group_by: (widgetType !== "metric" && widgetType !== "table" && widgetType !== "progress") ? groupBy || undefined : undefined,
+      group_by: showGroupBy ? groupBy || undefined : undefined,
       size: { cols, height },
     };
     onAdd(widget);
@@ -69,85 +71,92 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
   return (
     <div className="add-widget-overlay" onClick={onClose}>
       <div className="add-widget-panel" onClick={(e) => e.stopPropagation()}>
-        <h2>Add Widget</h2>
-
-        {/* Step 1: Data source */}
-        <div className="add-widget-step">
-          <label>Data Source</label>
-          <select
-            className="select"
-            value={sourceKey}
-            onChange={(e) => setSourceKey(e.target.value)}
-          >
-            {allSources.map((s) => (
-              <option key={s.key} value={s.key}>{s.def.label}</option>
-            ))}
-          </select>
+        {/* ── Header bar ── */}
+        <div className="add-widget-header">
+          <h2>Add Widget</h2>
+          <button className="add-widget-close" onClick={onClose} title="Close">
+            &times;
+          </button>
         </div>
 
-        {/* Step 2: Widget type */}
-        <div className="add-widget-step">
-          <label>Widget Type</label>
-          <select
-            className="select"
-            value={widgetType}
-            onChange={(e) => setWidgetType(e.target.value as WidgetType)}
-          >
-            {WIDGET_TYPES.map((wt) => (
-              <option key={wt.value} value={wt.value}>{wt.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Step 3: Metric */}
-        {sourceDef && (
-          <div className="add-widget-step">
-            <label>Metric</label>
-            <select
-              className="select"
-              value={metricKey}
-              onChange={(e) => setMetricKey(e.target.value)}
-            >
-              {sourceDef.metrics.map((m) => (
-                <option key={m.key} value={m.key}>{m.label}</option>
-              ))}
-            </select>
+        {/* ── Body ── */}
+        <div className="add-widget-body">
+          {/* Row 1: Data Source + Widget Type */}
+          <div className="add-widget-row">
+            <div className="add-widget-step">
+              <label>Data Source</label>
+              <select
+                className="select"
+                value={sourceKey}
+                onChange={(e) => setSourceKey(e.target.value)}
+              >
+                {allSources.map((s) => (
+                  <option key={s.key} value={s.key}>{s.def.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="add-widget-step">
+              <label>Widget Type</label>
+              <select
+                className="select"
+                value={widgetType}
+                onChange={(e) => setWidgetType(e.target.value as WidgetType)}
+              >
+                {WIDGET_TYPES.map((wt) => (
+                  <option key={wt.value} value={wt.value}>{wt.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
-        )}
 
-        {/* Step 4: Group by (only for chart types) */}
-        {sourceDef && widgetType !== "metric" && widgetType !== "table" && widgetType !== "progress" && (
+          {/* Row 2: Metric + Group By */}
+          {sourceDef && (
+            <div className="add-widget-row">
+              <div className="add-widget-step">
+                <label>Metric</label>
+                <select
+                  className="select"
+                  value={metricKey}
+                  onChange={(e) => setMetricKey(e.target.value)}
+                >
+                  {sourceDef.metrics.map((m) => (
+                    <option key={m.key} value={m.key}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+              {showGroupBy && (
+                <div className="add-widget-step">
+                  <label>Group By</label>
+                  <select
+                    className="select"
+                    value={groupBy}
+                    onChange={(e) => setGroupBy(e.target.value)}
+                  >
+                    {sourceDef.dimensions.map((d) => (
+                      <option key={d.key} value={d.key}>{d.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Title */}
           <div className="add-widget-step">
-            <label>Group By</label>
-            <select
-              className="select"
-              value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value)}
-            >
-              {sourceDef.dimensions.map((d) => (
-                <option key={d.key} value={d.key}>{d.label}</option>
-              ))}
-            </select>
+            <label>Title</label>
+            <input
+              className="input"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={autoTitle}
+            />
           </div>
-        )}
 
-        {/* Step 5: Title */}
-        <div className="add-widget-step">
-          <label>Title</label>
-          <input
-            className="input"
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={autoTitle}
-          />
-        </div>
-
-        {/* Step 6: Size */}
-        <div className="add-widget-step">
-          <label>Size</label>
-          <div className="add-widget-size-row">
-            <div>
+          {/* Size */}
+          <div className="add-widget-step" style={{ marginBottom: 0 }}>
+            <label>Size</label>
+            <div className="add-widget-size-row">
               <select
                 className="select"
                 value={cols}
@@ -156,8 +165,6 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
                 <option value={1}>1 Column</option>
                 <option value={2}>2 Columns (wide)</option>
               </select>
-            </div>
-            <div>
               <select
                 className="select"
                 value={height}
@@ -171,7 +178,7 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
           </div>
         </div>
 
-        {/* Actions */}
+        {/* ── Footer ── */}
         <div className="add-widget-actions">
           <button className="btn btn-secondary" onClick={onClose}>
             Cancel

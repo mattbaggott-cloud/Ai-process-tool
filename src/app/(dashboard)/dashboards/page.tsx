@@ -275,81 +275,95 @@ export default function DashboardsPage() {
   /* ── Loading state ── */
   if (pageLoading) {
     return (
-      <div className="page-container">
-        <p style={{ color: "var(--text-secondary)" }}>Loading dashboards...</p>
+      <div className="dashboard-page">
+        <div className="dashboard-content">
+          <p style={{ color: "var(--text-secondary)" }}>Loading dashboards...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="page-container">
-      {/* ── Tabs (if multiple dashboards) ── */}
-      {dashboards.length > 1 && (
-        <div className="dashboard-tabs">
-          {dashboards.map((d, i) => (
-            <button
-              key={d.id}
-              className={`dashboard-tab ${i === activeIdx ? "active" : ""}`}
-              onClick={() => setActiveIdx(i)}
-            >
-              {d.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* ── Header ── */}
-      {activeDashboard && (
-        <div className="dashboard-header">
-          <input
-            className="dashboard-title-input"
-            defaultValue={activeDashboard.name}
-            key={activeDashboard.id}
-            onBlur={handleRename}
-            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-          />
-          <div className="dashboard-actions">
-            <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
-              + Add Widget
-            </button>
-            <button className="btn btn-secondary" onClick={handleNewDashboard}>
-              New Dashboard
-            </button>
+    <div className="dashboard-page">
+      {/* ── Tab bar (Chrome-style with shaded background) ── */}
+      <div className="dashboard-tab-bar">
+        {dashboards.map((d, i) => (
+          <button
+            key={d.id}
+            className={`dashboard-tab ${i === activeIdx ? "active" : ""}`}
+            onClick={() => setActiveIdx(i)}
+          >
+            {d.name}
             {dashboards.length > 1 && (
-              <button className="btn btn-secondary" onClick={handleDeleteDashboard}>
-                Delete
+              <span
+                className="dashboard-tab-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (i === activeIdx) handleDeleteDashboard();
+                  else {
+                    supabase.from("dashboards").delete().eq("id", d.id);
+                    setDashboards((prev) => prev.filter((_, idx) => idx !== i));
+                    if (activeIdx > i) setActiveIdx((prev) => prev - 1);
+                  }
+                }}
+              >
+                &times;
+              </span>
+            )}
+          </button>
+        ))}
+        <button className="dashboard-new-tab" onClick={handleNewDashboard} title="New dashboard">
+          +
+        </button>
+      </div>
+
+      {/* ── Scrollable content area ── */}
+      <div className="dashboard-content">
+        {/* ── Header ── */}
+        {activeDashboard && (
+          <div className="dashboard-header">
+            <input
+              className="dashboard-title-input"
+              defaultValue={activeDashboard.name}
+              key={activeDashboard.id}
+              onBlur={handleRename}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            />
+            <div className="dashboard-actions">
+              <button className="dashboard-action-link" onClick={() => setShowAddModal(true)}>
+                + Add widget
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Widget grid ── */}
+        {activeDashboard && (
+          <div className="dashboard-grid">
+            {activeDashboard.widgets.length === 0 ? (
+              <div className="dashboard-grid-empty">
+                No widgets yet. Click <strong>+ Add widget</strong> above to get started.
+              </div>
+            ) : (
+              activeDashboard.widgets.map((widget, idx) => (
+                <DashboardWidget
+                  key={widget.id}
+                  widget={widget}
+                  result={widgetResults[widget.id] ?? null}
+                  loading={loadingWidgets.has(widget.id)}
+                  onRemove={() => handleRemoveWidget(widget.id)}
+                  onDragStart={handleDragStart(idx)}
+                  onDragOver={handleDragOver(idx)}
+                  onDrop={handleDrop(idx)}
+                  onDragEnd={handleDragEnd}
+                  isDragOver={dragOverIdx === idx}
+                  isDragging={dragIdx === idx}
+                />
+              ))
             )}
           </div>
-        </div>
-      )}
-
-      {/* ── Widget grid ── */}
-      {activeDashboard && (
-        <div className="dashboard-grid">
-          {activeDashboard.widgets.length === 0 ? (
-            <div className="dashboard-grid-empty">
-              No widgets yet. Click <strong>+ Add Widget</strong> to get started.
-            </div>
-          ) : (
-            activeDashboard.widgets.map((widget, idx) => (
-              <DashboardWidget
-                key={widget.id}
-                widget={widget}
-                result={widgetResults[widget.id] ?? null}
-                loading={loadingWidgets.has(widget.id)}
-                onRemove={() => handleRemoveWidget(widget.id)}
-                onDragStart={handleDragStart(idx)}
-                onDragOver={handleDragOver(idx)}
-                onDrop={handleDrop(idx)}
-                onDragEnd={handleDragEnd}
-                isDragOver={dragOverIdx === idx}
-                isDragging={dragIdx === idx}
-              />
-            ))
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ── Add widget modal ── */}
       {showAddModal && (
