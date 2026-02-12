@@ -5599,7 +5599,7 @@ a.sidebar-user-avatar:hover {
   width: 520px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 64px);
-  overflow: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   box-shadow: 0 25px 80px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
@@ -5640,8 +5640,6 @@ a.sidebar-user-avatar:hover {
 /* Modal body */
 .add-widget-body {
   padding: 20px;
-  overflow-y: auto;
-  flex: 1;
 }
 /* Two-col form grid */
 .add-widget-row {
@@ -5726,10 +5724,12 @@ a.sidebar-user-avatar:hover {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding-bottom: 4px;
 }
 .add-widget-ai-textarea {
   width: 100%;
-  min-height: 100px;
+  min-height: 80px;
+  max-height: 160px;
   background: #f4f5f7;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -5755,12 +5755,13 @@ a.sidebar-user-avatar:hover {
   line-height: 1.5;
 }
 .add-widget-ai-generate {
-  align-self: flex-start;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  width: 100%;
   gap: 6px;
-  padding: 9px 18px;
-  font-size: 13px;
+  padding: 12px 18px;
+  font-size: 14px;
   font-weight: 600;
   color: #fff;
   background: var(--accent);

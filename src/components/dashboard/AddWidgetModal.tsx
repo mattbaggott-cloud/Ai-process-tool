@@ -39,7 +39,6 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
   const [aiDescription, setAiDescription] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiGenerated, setAiGenerated] = useState(false);
 
   /* Derived: current source def */
   const sourceDef = useMemo(() => getDataSource(sourceKey), [sourceKey]);
@@ -67,12 +66,11 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
 
   const showGroupBy = widgetType !== "metric" && widgetType !== "table" && widgetType !== "progress";
 
-  /* ── AI Generate handler ── */
+  /* ── AI Generate handler — builds and adds widget directly ── */
   const handleAiGenerate = async () => {
     if (!aiDescription.trim()) return;
     setAiLoading(true);
     setAiError("");
-    setAiGenerated(false);
 
     try {
       const res = await fetch("/api/dashboard/suggest-widget", {
@@ -87,21 +85,19 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
         return;
       }
 
-      /* Pre-fill the manual form with AI suggestion */
+      /* Build widget directly and add it */
       const w = data.widget;
-      setSourceKey(w.data_source);
-      setWidgetType(w.type);
-      setMetricKey(w.metric);
-      setGroupBy(w.group_by || "");
-      setTitle(w.title || "");
-      if (w.size) {
-        setCols(w.size.cols || 1);
-        setHeight(w.size.height || "md");
-      }
-      setAiGenerated(true);
-
-      /* Switch to manual mode so user can review */
-      setMode("manual");
+      const showGb = w.type !== "metric" && w.type !== "table" && w.type !== "progress";
+      const widget: WidgetConfig = {
+        id: crypto.randomUUID(),
+        type: w.type,
+        title: w.title || "Widget",
+        data_source: w.data_source,
+        metric: w.metric || "count",
+        group_by: showGb ? w.group_by || undefined : undefined,
+        size: w.size || { cols: 1, height: "md" },
+      };
+      onAdd(widget);
     } catch {
       setAiError("Failed to connect to AI. Please try again.");
     } finally {
@@ -160,47 +156,23 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
                 placeholder="Describe the insight you want to see...&#10;&#10;Examples:&#10;• Show goals broken down by status&#10;• How many people are on each team?&#10;• KPI progress tracker&#10;• Pain points by severity as a pie chart"
                 value={aiDescription}
                 onChange={(e) => setAiDescription(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-                    e.preventDefault();
-                    handleAiGenerate();
-                  }
-                }}
               />
 
               {aiError && <div className="add-widget-ai-error">{aiError}</div>}
-
-              <button
-                className="add-widget-ai-generate"
-                onClick={handleAiGenerate}
-                disabled={aiLoading || !aiDescription.trim()}
-              >
-                {aiLoading ? "Generating..." : "Generate Widget"}
-              </button>
-
-              <div className="add-widget-ai-hint">
-                Press Enter to generate. Use Cmd+Enter for a new line.
-              </div>
             </div>
           )}
 
           {/* ── Manual Mode ── */}
           {mode === "manual" && (
             <>
-              {aiGenerated && (
-                <div className="add-widget-ai-success">
-                  AI suggestion applied — review and adjust below, then click Add Widget.
-                </div>
-              )}
-
               {/* Row 1: Data Source + Widget Type */}
-              <div className="add-widget-row" style={aiGenerated ? { marginTop: 14 } : undefined}>
+              <div className="add-widget-row">
                 <div className="add-widget-step">
                   <label>Data Source</label>
                   <select
                     className="select"
                     value={sourceKey}
-                    onChange={(e) => { setSourceKey(e.target.value); setAiGenerated(false); }}
+                    onChange={(e) => setSourceKey(e.target.value)}
                   >
                     {allSources.map((s) => (
                       <option key={s.key} value={s.key}>{s.def.label}</option>
@@ -212,7 +184,7 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
                   <select
                     className="select"
                     value={widgetType}
-                    onChange={(e) => { setWidgetType(e.target.value as WidgetType); setAiGenerated(false); }}
+                    onChange={(e) => setWidgetType(e.target.value as WidgetType)}
                   >
                     {WIDGET_TYPES.map((wt) => (
                       <option key={wt.value} value={wt.value}>{wt.label}</option>
@@ -292,7 +264,29 @@ export default function AddWidgetModal({ onAdd, onClose }: AddWidgetModalProps) 
           )}
         </div>
 
-        {/* ── Footer (only show Add Widget in manual mode) ── */}
+        {/* ── Footer ── */}
+        {mode === "ai" && (
+          <div style={{ padding: "16px 20px", borderTop: "1px solid #e5e7eb" }}>
+            <button
+              onClick={handleAiGenerate}
+              disabled={aiLoading || !aiDescription.trim()}
+              style={{
+                width: "100%",
+                padding: "12px 18px",
+                fontSize: "14px",
+                fontWeight: 600,
+                color: "#fff",
+                background: "#3b82f6",
+                border: "none",
+                borderRadius: "8px",
+                cursor: aiLoading || !aiDescription.trim() ? "not-allowed" : "pointer",
+                opacity: aiLoading || !aiDescription.trim() ? 0.5 : 1,
+              }}
+            >
+              {aiLoading ? "Generating..." : "Generate Visual"}
+            </button>
+          </div>
+        )}
         {mode === "manual" && (
           <div className="add-widget-actions">
             <button className="btn btn-secondary" onClick={onClose}>
