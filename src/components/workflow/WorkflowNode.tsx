@@ -54,9 +54,10 @@ interface Props {
   onMove: (id: string, x: number, y: number) => void;
   onPortClick: (nodeId: string, portId: string, side: string) => void;
   onTitleChange: (id: string, title: string) => void;
+  onContextMenu?: (nodeId: string, x: number, y: number) => void;
 }
 
-export default function WorkflowNodeComponent({ node, selected, connecting, viewport, onSelect, onMove, onPortClick, onTitleChange }: Props) {
+export default function WorkflowNodeComponent({ node, selected, connecting, viewport, onSelect, onMove, onPortClick, onTitleChange, onContextMenu }: Props) {
   const cfg = TYPE_CONFIG[node.type];
   const isDragging = useRef(false);
   const titleRef = useRef<HTMLDivElement>(null);
@@ -95,6 +96,13 @@ export default function WorkflowNodeComponent({ node, selected, connecting, view
     if (txt !== node.title) onTitleChange(node.id, txt || node.title);
   }, [node.id, node.title, onTitleChange]);
 
+  /* Right-click context menu */
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onContextMenu?.(node.id, e.clientX, e.clientY);
+  }, [node.id, onContextMenu]);
+
   const isDecision = node.type === "decision";
 
   return (
@@ -107,6 +115,7 @@ export default function WorkflowNodeComponent({ node, selected, connecting, view
         minHeight: node.type !== "decision" ? node.height : undefined,
       }}
       onMouseDown={handleMouseDown}
+      onContextMenu={handleContextMenu}
     >
       {/* Accent bar */}
       {node.type !== "note" && node.type !== "decision" && (

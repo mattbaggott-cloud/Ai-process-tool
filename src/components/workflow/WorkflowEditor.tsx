@@ -12,6 +12,7 @@ import WorkflowNodeEditor from "./WorkflowNodeEditor";
 import WorkflowSimulationModal from "./WorkflowSimulationModal";
 import WorkflowHistory, { snapshotWorkflow } from "./WorkflowHistory";
 import WorkflowDocUpload from "./WorkflowDocUpload";
+import WorkflowContextMenu from "./WorkflowContextMenu";
 
 /* ── Helpers ───────────────────────────────────────────── */
 
@@ -87,6 +88,7 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
   const [showHistory, setShowHistory] = useState(false);
   const [showDocUpload, setShowDocUpload] = useState(false);
   const [docGenerating, setDocGenerating] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const prevDataRef = useRef<string>("");
   const isPanning = useRef(false);
   const vpRef = useRef(viewport);
@@ -198,6 +200,11 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
     setSelectedId(dup.id);
   }, [data.nodes, updateData]);
 
+  /* ── Context menu handler ── */
+  const handleNodeContextMenu = useCallback((nodeId: string, x: number, y: number) => {
+    setContextMenu({ nodeId, x, y });
+  }, []);
+
   const deleteEdge = useCallback((id: string) => {
     updateData({ edges: data.edges.filter((e) => e.id !== id) });
   }, [data.edges, updateData]);
@@ -227,6 +234,7 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
     // Only pan if clicking empty space
     if (e.target !== canvasRef.current && !(e.target as HTMLElement).classList.contains("wf-edges-layer")) return;
+    setContextMenu(null);
     if (connecting) {
       setConnecting(null);
       setMouseWorld(null);
@@ -319,7 +327,7 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
   /* ── Escape cancels connecting ── */
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setConnecting(null); setMouseWorld(null); setSelectedId(null); }
+      if (e.key === "Escape") { setConnecting(null); setMouseWorld(null); setSelectedId(null); setContextMenu(null); }
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedId && !(document.activeElement?.getAttribute("contenteditable") === "true") && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
           deleteNode(selectedId);
@@ -440,6 +448,7 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
               onMove={moveNode}
               onPortClick={handlePortClick}
               onTitleChange={(id, title) => updateNode(id, { title })}
+              onContextMenu={handleNodeContextMenu}
             />
           ))}
         </div>
@@ -457,6 +466,26 @@ export default function WorkflowEditor({ projectId, projectName, data, onChange 
         onGenerateFromDoc={() => setShowDocUpload(true)}
         hasNodes={data.nodes.length > 0}
       />
+
+      {/* Context menu */}
+      {contextMenu && (() => {
+        const menuNode = data.nodes.find(n => n.id === contextMenu.nodeId);
+        if (!menuNode) return null;
+        const showToolRole = menuNode.type === "process" || menuNode.type === "ai_agent";
+        return (
+          <WorkflowContextMenu
+            node={menuNode}
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onEdit={() => { setSelectedId(contextMenu.nodeId); setContextMenu(null); }}
+            onAssignTool={showToolRole ? () => { setSelectedId(contextMenu.nodeId); setContextMenu(null); } : undefined}
+            onAssignRole={showToolRole ? () => { setSelectedId(contextMenu.nodeId); setContextMenu(null); } : undefined}
+            onDuplicate={() => { duplicateNode(contextMenu.nodeId); setContextMenu(null); }}
+            onDelete={() => { deleteNode(contextMenu.nodeId); setContextMenu(null); }}
+            onClose={() => setContextMenu(null)}
+          />
+        );
+      })()}
 
       {/* Node editor panel */}
       {selectedNode && (

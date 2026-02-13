@@ -132,6 +132,11 @@ export default function ProjectWorkspacePage() {
         .then(({ data }) => {
           if (data) {
             setProject(data as Project);
+            /* Auto-switch to Builder if AI generated a workflow */
+            const wf = (data.workflow_nodes as WorkflowData[] | null)?.[0];
+            if (wf?.nodes?.length) {
+              setActiveMode("workflow");
+            }
           }
         });
     };

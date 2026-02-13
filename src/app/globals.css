@@ -4349,6 +4349,69 @@ a.sidebar-user-avatar:hover {
   background-color: #fff;
 }
 
+/* ── Node right-click context menu ───────────────────── */
+
+.wf-context-menu {
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  padding: 4px;
+  animation: wf-ctx-in 0.1s ease-out;
+}
+@keyframes wf-ctx-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.wf-context-menu-header {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-gray-700);
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.wf-context-menu-item:hover {
+  background: var(--color-gray-50);
+}
+.wf-context-menu-item svg {
+  flex-shrink: 0;
+  color: var(--color-gray-400);
+}
+.wf-context-menu-delete {
+  color: #ef4444;
+}
+.wf-context-menu-delete svg {
+  color: #ef4444;
+}
+.wf-context-menu-delete:hover {
+  background: #fef2f2;
+}
+.wf-context-menu-sep {
+  height: 1px;
+  background: var(--color-gray-100);
+  margin: 4px 6px;
+}
+
 /* ── Simulation report overlay ───────────────────────── */
 
 .wf-sim-overlay {
