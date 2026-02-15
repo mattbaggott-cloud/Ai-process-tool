@@ -124,6 +124,51 @@ export interface Dashboard {
   updated_at: string;
 }
 
+// Vector Search / RAG
+export interface DocumentChunk {
+  id: string;
+  user_id: string;
+  source_table: string;
+  source_id: string;
+  source_field: string;
+  chunk_index: number;
+  chunk_text: string;
+  metadata: Record<string, unknown>;
+  embedding?: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LLMLog {
+  id: string;
+  user_id: string;
+  model: string;
+  system_prompt_tokens: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  input_cost: number;
+  output_cost: number;
+  total_cost: number;
+  latency_ms: number;
+  retrieved_chunk_ids: string[];
+  retrieved_count: number;
+  tool_calls: { name: string; success: boolean }[];
+  tool_rounds: number;
+  user_message: string | null;
+  stop_reason: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface SearchResult {
+  sourceTable: string;
+  sourceId: string;
+  chunkText: string;
+  metadata: Record<string, unknown>;
+  score: number;
+}
+
 // Phase 6: Teams
 export type KpiPeriod = "Day" | "Week" | "Month" | "Quarter" | "Year";
 

@@ -231,6 +231,16 @@ export function FileProvider({ children }: { children: ReactNode }) {
             textContent: row.text_content,
             storagePath: row.storage_path,
           });
+
+          // Trigger embedding in background (fire-and-forget)
+          fetch("/api/embed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sourceTable: "library_files",
+              sourceId: row.id,
+            }),
+          }).catch(() => {}); // silent fail — embedding is non-critical
         }
 
         if (entries.length > 0) {

@@ -2,6 +2,8 @@ import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getToolDefinitions } from "./tools";
 import { executeTool } from "./tool-executor";
+import { hybridSearch, type SearchResult } from "@/lib/embeddings/search";
+import { logInBackground, type LLMLogEntry } from "@/lib/logging/llm-logger";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -25,17 +27,13 @@ function buildSystemPrompt(data: {
   email: string;
   userProfile: Record<string, unknown> | null;
   organization: Record<string, unknown> | null;
-  organizationFiles: Record<string, unknown>[];
   teams: Record<string, unknown>[];
   teamRoles: Record<string, unknown>[];
   teamKpis: Record<string, unknown>[];
   teamTools: Record<string, unknown>[];
-  teamFiles: Record<string, unknown>[];
-  goals: Record<string, unknown>[];
-  subGoals: Record<string, unknown>[];
-  painPoints: Record<string, unknown>[];
-  libraryItems: Record<string, unknown>[];
-  libraryFiles: Record<string, unknown>[];
+  goalSummary: { total: number; byStatus: Record<string, number> };
+  painPointSummary: { total: number; byStatus: Record<string, number>; bySeverity: Record<string, number> };
+  librarySummary: { items: number; files: number };
   stackTools: Record<string, unknown>[];
   projects: Record<string, unknown>[];
   dashboards: Record<string, unknown>[];
@@ -43,13 +41,14 @@ function buildSystemPrompt(data: {
   catalogSubcategories: { category: string; subcategory: string; count: number }[];
   chatFileContents: { name: string; content: string }[];
   currentPage: string;
+  retrievedContext: SearchResult[];
 }): string {
   const {
-    email, userProfile, organization, organizationFiles,
-    teams, teamRoles, teamKpis, teamTools, teamFiles,
-    goals, subGoals, painPoints, libraryItems, libraryFiles,
+    email, userProfile, organization,
+    teams, teamRoles, teamKpis, teamTools,
+    goalSummary, painPointSummary, librarySummary,
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
-    chatFileContents, currentPage,
+    chatFileContents, currentPage, retrievedContext,
   } = data;
 
   /* Group team child data by team_id */
@@ -72,21 +71,6 @@ function buildSystemPrompt(data: {
     const tid = t.team_id as string;
     if (!toolsByTeam[tid]) toolsByTeam[tid] = [];
     toolsByTeam[tid].push(t);
-  }
-
-  const filesByTeam: Record<string, typeof teamFiles> = {};
-  for (const f of teamFiles) {
-    const tid = f.team_id as string;
-    if (!filesByTeam[tid]) filesByTeam[tid] = [];
-    filesByTeam[tid].push(f);
-  }
-
-  /* Group sub-goals by goal_id */
-  const subsByGoal: Record<string, typeof subGoals> = {};
-  for (const s of subGoals) {
-    const gid = s.goal_id as string;
-    if (!subsByGoal[gid]) subsByGoal[gid] = [];
-    subsByGoal[gid].push(s);
   }
 
   /* ── Build sections ── */
@@ -171,19 +155,6 @@ ${currentPage}
     if (totalHeadcount > 0) prompt += `**Team Size:** ${totalHeadcount} people\n`;
   }
 
-  /* ── Organization Files ── */
-  if (organizationFiles.length > 0) {
-    prompt += `\n### Company Documents\n`;
-    for (const f of organizationFiles) {
-      const content = truncate(f.text_content as string | null, 2000);
-      if (content) {
-        prompt += `- ${f.name}:\n${content}\n`;
-      } else {
-        prompt += `- ${f.name} (no text extracted)\n`;
-      }
-    }
-  }
-
   /* ── Teams ── */
   if (teams.length > 0) {
     prompt += `\n## Teams & Organization\n`;
@@ -219,90 +190,41 @@ ${currentPage}
           prompt += `\n`;
         }
       }
-
-      const files = filesByTeam[tid] ?? [];
-      if (files.length > 0) {
-        prompt += `\nTeam Documents:\n`;
-        for (const f of files) {
-          const content = truncate(f.text_content as string | null, 2000);
-          if (content) {
-            prompt += `- ${f.name}:\n${content}\n`;
-          } else {
-            prompt += `- ${f.name} (no text extracted)\n`;
-          }
-        }
-      }
     }
   }
 
-  /* ── Goals ── */
-  if (goals.length > 0) {
-    prompt += `\n## Goals\n`;
-    for (const g of goals) {
-      const gid = g.id as string;
-      prompt += `\n### ${g.name} [${g.status}]\n`;
-      if (g.description) prompt += `Description: ${g.description}\n`;
-      if (g.owner) prompt += `Owner: ${g.owner}\n`;
-      if (g.start_date || g.end_date) prompt += `Timeline: ${g.start_date ?? "?"} - ${g.end_date ?? "?"}\n`;
-      if (g.metric) prompt += `Metric: ${g.metric} / Target: ${g.metric_target}\n`;
-      if (g.teams && (g.teams as string[]).length > 0) prompt += `Teams: ${(g.teams as string[]).join(", ")}\n`;
-
-      const subs = subsByGoal[gid] ?? [];
-      if (subs.length > 0) {
-        prompt += `Sub-goals:\n`;
-        for (const s of subs) {
-          prompt += `- ${s.name} [${s.status}]`;
-          if (s.owner) prompt += ` - ${s.owner}`;
-          if (s.end_date) prompt += ` - Due: ${s.end_date}`;
-          prompt += `\n`;
-        }
-      }
-    }
+  /* ── Goals summary (counts only — details come from RAG) ── */
+  if (goalSummary.total > 0) {
+    prompt += `\n## Goals Summary\n`;
+    prompt += `Total: ${goalSummary.total} goals\n`;
+    const statuses = Object.entries(goalSummary.byStatus)
+      .map(([s, c]) => `${s}: ${c}`)
+      .join(", ");
+    if (statuses) prompt += `By status: ${statuses}\n`;
+    prompt += `(Detailed goal content is retrieved via semantic search when relevant to your question)\n`;
   }
 
-  /* ── Pain Points ── */
-  if (painPoints.length > 0) {
-    prompt += `\n## Pain Points\n`;
-    for (const pp of painPoints) {
-      prompt += `\n### ${pp.name} [${pp.severity} | ${pp.status}]\n`;
-      if (pp.description) prompt += `Description: ${pp.description}\n`;
-      if (pp.owner) prompt += `Owner: ${pp.owner}\n`;
-      if (pp.impact_metric) prompt += `Impact Metric: ${pp.impact_metric}\n`;
-      if (pp.teams && (pp.teams as string[]).length > 0) prompt += `Teams: ${(pp.teams as string[]).join(", ")}\n`;
-      if (pp.linked_goal_id) {
-        const linkedGoal = goals.find((g) => g.id === pp.linked_goal_id);
-        if (linkedGoal) prompt += `Linked Goal: ${linkedGoal.name}\n`;
-      }
-    }
+  /* ── Pain Points summary (counts only — details come from RAG) ── */
+  if (painPointSummary.total > 0) {
+    prompt += `\n## Pain Points Summary\n`;
+    prompt += `Total: ${painPointSummary.total} pain points\n`;
+    const statuses = Object.entries(painPointSummary.byStatus)
+      .map(([s, c]) => `${s}: ${c}`)
+      .join(", ");
+    if (statuses) prompt += `By status: ${statuses}\n`;
+    const severities = Object.entries(painPointSummary.bySeverity)
+      .map(([s, c]) => `${s}: ${c}`)
+      .join(", ");
+    if (severities) prompt += `By severity: ${severities}\n`;
+    prompt += `(Detailed pain point content is retrieved via semantic search when relevant to your question)\n`;
   }
 
-  /* ── Library ── */
-  if (libraryItems.length > 0 || libraryFiles.length > 0) {
-    prompt += `\n## Library\n`;
-
-    if (libraryItems.length > 0) {
-      prompt += `\n### Notes & Documents\n`;
-      for (const item of libraryItems) {
-        prompt += `- ${item.title} (${item.category})`;
-        const content = truncate(item.content as string | null, 500);
-        if (content) prompt += `: ${content}`;
-        const tags = item.tags as string[] | null;
-        if (tags && tags.length > 0) prompt += `\n  Tags: ${tags.join(", ")}`;
-        prompt += `\n`;
-      }
-    }
-
-    if (libraryFiles.length > 0) {
-      prompt += `\n### Library Files\n`;
-      for (const f of libraryFiles) {
-        const content = truncate(f.text_content as string | null, 2000);
-        if (content) {
-          prompt += `- ${f.name}:\n${content}\n`;
-        } else {
-          prompt += `- ${f.name} (no text extracted)\n`;
-        }
-      }
-    }
+  /* ── Library summary (counts only — details come from RAG) ── */
+  if (librarySummary.items > 0 || librarySummary.files > 0) {
+    prompt += `\n## Library Summary\n`;
+    if (librarySummary.items > 0) prompt += `Notes & Documents: ${librarySummary.items}\n`;
+    if (librarySummary.files > 0) prompt += `Files: ${librarySummary.files}\n`;
+    prompt += `(Detailed library content is retrieved via semantic search when relevant to your question)\n`;
   }
 
   /* ── Tech Stack ── */
@@ -407,12 +329,53 @@ ${currentPage}
     }
   }
 
+  /* ── Retrieved Context (RAG) ── */
+  if (retrievedContext.length > 0) {
+    prompt += `\n## Relevant Context (retrieved via semantic search)\n`;
+    prompt += `The following content was retrieved because it's most relevant to the user's current question.\n`;
+
+    /* Group by source table for readability */
+    const byTable = new Map<string, SearchResult[]>();
+    for (const r of retrievedContext) {
+      if (!byTable.has(r.sourceTable)) byTable.set(r.sourceTable, []);
+      byTable.get(r.sourceTable)!.push(r);
+    }
+
+    const tableLabels: Record<string, string> = {
+      goals: "Goals",
+      sub_goals: "Sub-Goals",
+      pain_points: "Pain Points",
+      library_items: "Library Items",
+      library_files: "Library Files",
+      organization_files: "Organization Documents",
+      team_files: "Team Documents",
+    };
+
+    for (const [table, results] of byTable) {
+      const label = tableLabels[table] ?? table;
+      prompt += `\n### ${label}\n`;
+      for (const r of results) {
+        const meta = r.metadata ?? {};
+        const name = (meta.name ?? meta.title ?? "") as string;
+        const status = meta.status ? ` [${meta.status}]` : "";
+        const severity = meta.severity ? ` (${meta.severity})` : "";
+
+        if (name) {
+          prompt += `**${name}**${status}${severity}\n`;
+        }
+        prompt += `${truncate(r.chunkText, 800)}\n\n`;
+      }
+    }
+  }
+
   return prompt;
 }
 
 /* ── POST handler ──────────────────────────────────────── */
 
 export async function POST(req: Request) {
+  const requestStart = Date.now();
+
   /* 1. Check API key */
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response("ANTHROPIC_API_KEY not configured", { status: 500 });
@@ -439,21 +402,36 @@ export async function POST(req: Request) {
     return new Response("Messages array is required", { status: 400 });
   }
 
-  /* 4. Load ALL user data in parallel */
+  /* 4. RAG: Embed user's last message and retrieve relevant chunks */
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  let retrievedContext: SearchResult[] = [];
+  let retrievedChunkIds: string[] = [];
+
+  // Only do RAG search if OPENAI_API_KEY is available (embeddings need it)
+  if (process.env.OPENAI_API_KEY && lastUserMessage.trim()) {
+    try {
+      retrievedContext = await hybridSearch(supabase, user.id, lastUserMessage, {
+        limit: 10,
+      });
+      retrievedChunkIds = retrievedContext.map((r) => r.id);
+    } catch (err) {
+      // RAG failure is non-fatal — proceed without context
+      console.error("RAG search failed:", err);
+    }
+  }
+
+  /* 5. Load user data in parallel — lean queries for RAG-covered tables */
   const [
     { data: userProfile },
     { data: organization },
-    { data: organizationFiles },
     { data: teams },
     { data: teamRoles },
     { data: teamKpis },
     { data: teamTools },
-    { data: teamFiles },
     { data: goals },
-    { data: subGoals },
     { data: painPoints },
-    { data: libraryItems },
-    { data: libraryFiles },
+    { data: libraryItemCount },
+    { data: libraryFileCount },
     { data: stackTools },
     { data: catalogCategories },
     { data: projects },
@@ -461,22 +439,52 @@ export async function POST(req: Request) {
   ] = await Promise.all([
     supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
-    supabase.from("organization_files").select("id, name, text_content").order("added_at", { ascending: false }),
     supabase.from("teams").select("*").order("created_at"),
     supabase.from("team_roles").select("*").order("created_at"),
     supabase.from("team_kpis").select("*").order("created_at"),
     supabase.from("team_tools").select("*").order("created_at"),
-    supabase.from("team_files").select("id, team_id, name, text_content").order("added_at"),
-    supabase.from("goals").select("*").order("created_at", { ascending: false }),
-    supabase.from("sub_goals").select("*").order("created_at"),
-    supabase.from("pain_points").select("*").order("created_at", { ascending: false }),
-    supabase.from("library_items").select("*").order("updated_at", { ascending: false }),
-    supabase.from("library_files").select("id, name, text_content").order("added_at", { ascending: false }),
+    // Lean queries: only status for summary counts
+    supabase.from("goals").select("status"),
+    supabase.from("pain_points").select("status, severity"),
+    supabase.from("library_items").select("id", { count: "exact", head: true }),
+    supabase.from("library_files").select("id", { count: "exact", head: true }),
     supabase.from("user_stack_tools").select("*").order("created_at", { ascending: false }),
     supabase.from("tool_catalog").select("category, subcategory"),
     supabase.from("projects").select("*").order("created_at", { ascending: false }),
     supabase.from("dashboards").select("id, name, widgets").eq("user_id", user.id).order("created_at"),
   ]);
+
+  /* Build goal summary */
+  const goalStatusCounts: Record<string, number> = {};
+  for (const g of goals ?? []) {
+    const s = (g.status as string) || "Backlog";
+    goalStatusCounts[s] = (goalStatusCounts[s] ?? 0) + 1;
+  }
+  const goalSummary = {
+    total: goals?.length ?? 0,
+    byStatus: goalStatusCounts,
+  };
+
+  /* Build pain point summary */
+  const ppStatusCounts: Record<string, number> = {};
+  const ppSeverityCounts: Record<string, number> = {};
+  for (const pp of painPoints ?? []) {
+    const s = (pp.status as string) || "Backlog";
+    ppStatusCounts[s] = (ppStatusCounts[s] ?? 0) + 1;
+    const sev = (pp.severity as string) || "Medium";
+    ppSeverityCounts[sev] = (ppSeverityCounts[sev] ?? 0) + 1;
+  }
+  const painPointSummary = {
+    total: painPoints?.length ?? 0,
+    byStatus: ppStatusCounts,
+    bySeverity: ppSeverityCounts,
+  };
+
+  /* Library summary */
+  const librarySummary = {
+    items: libraryItemCount?.length ?? 0,
+    files: libraryFileCount?.length ?? 0,
+  };
 
   /* Build catalog category summary */
   const catCounts: Record<string, number> = {};
@@ -499,22 +507,18 @@ export async function POST(req: Request) {
   }
   catalogSubcategories.sort((a, b) => a.category.localeCompare(b.category) || b.count - a.count);
 
-  /* 5. Build system prompt */
+  /* 6. Build system prompt */
   const systemPrompt = buildSystemPrompt({
     email: user.email ?? "User",
     userProfile: userProfile ?? null,
     organization: organization ?? null,
-    organizationFiles: organizationFiles ?? [],
     teams: teams ?? [],
     teamRoles: teamRoles ?? [],
     teamKpis: teamKpis ?? [],
     teamTools: teamTools ?? [],
-    teamFiles: teamFiles ?? [],
-    goals: goals ?? [],
-    subGoals: subGoals ?? [],
-    painPoints: painPoints ?? [],
-    libraryItems: libraryItems ?? [],
-    libraryFiles: libraryFiles ?? [],
+    goalSummary,
+    painPointSummary,
+    librarySummary,
     stackTools: stackTools ?? [],
     projects: projects ?? [],
     dashboards: dashboardsData ?? [],
@@ -522,12 +526,21 @@ export async function POST(req: Request) {
     catalogSubcategories,
     chatFileContents: chatFileContents ?? [],
     currentPage: currentPage ?? "/",
+    retrievedContext,
   });
 
-  /* 6. Call Claude with streaming + tool use */
+  /* 7. Call Claude with streaming + tool use */
   const anthropic = new Anthropic();
   const tools = getToolDefinitions();
   const encoder = new TextEncoder();
+
+  // Tracking for LLM logging
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let toolRounds = 0;
+  const allToolCalls: { name: string; success: boolean }[] = [];
+  let stopReason: string | null = null;
+  let logError: string | null = null;
 
   try {
     const apiMessages: Anthropic.Messages.MessageParam[] = messages.map((m) => ({
@@ -560,11 +573,16 @@ export async function POST(req: Request) {
           /* Check if Claude wants to use tools — support up to 5 rounds */
           let currentMessage = await stream.finalMessage();
           let currentMessages = [...apiMessages];
-          let rounds = 0;
+
+          // Accumulate token usage
+          totalInputTokens += currentMessage.usage?.input_tokens ?? 0;
+          totalOutputTokens += currentMessage.usage?.output_tokens ?? 0;
+          stopReason = currentMessage.stop_reason;
+
           const MAX_TOOL_ROUNDS = 5;
 
-          while (currentMessage.stop_reason === "tool_use" && rounds < MAX_TOOL_ROUNDS) {
-            rounds++;
+          while (currentMessage.stop_reason === "tool_use" && toolRounds < MAX_TOOL_ROUNDS) {
+            toolRounds++;
 
             /* Extract tool_use blocks */
             const toolUseBlocks = currentMessage.content.filter(
@@ -586,6 +604,10 @@ export async function POST(req: Request) {
                 tool_use_id: toolBlock.id,
                 content: result.message,
                 is_error: !result.success,
+              });
+              allToolCalls.push({
+                name: toolBlock.name,
+                success: result.success,
               });
             }
 
@@ -616,11 +638,34 @@ export async function POST(req: Request) {
             }
 
             currentMessage = await nextStream.finalMessage();
+
+            // Accumulate token usage from this round
+            totalInputTokens += currentMessage.usage?.input_tokens ?? 0;
+            totalOutputTokens += currentMessage.usage?.output_tokens ?? 0;
+            stopReason = currentMessage.stop_reason;
           }
 
           controller.close();
         } catch (err) {
+          logError = err instanceof Error ? err.message : "Stream error";
           controller.error(err);
+        } finally {
+          /* ── Log the LLM call (fire-and-forget) ── */
+          const latencyMs = Date.now() - requestStart;
+          const logEntry: LLMLogEntry = {
+            userId: user.id,
+            model: "claude-sonnet-4-20250514",
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            latencyMs,
+            retrievedChunkIds,
+            toolCalls: allToolCalls,
+            toolRounds,
+            userMessage: lastUserMessage,
+            stopReason: stopReason ?? undefined,
+            error: logError ?? undefined,
+          };
+          logInBackground(supabase, logEntry);
         }
       },
     });

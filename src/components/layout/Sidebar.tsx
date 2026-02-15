@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useLayout } from "@/context/LayoutContext";
 import { createClient } from "@/lib/supabase/client";
+import GlobalSearch from "./GlobalSearch";
 
 /* ── navigation data ─────────────────────────────────────── */
 
@@ -155,6 +156,21 @@ export default function Sidebar() {
         </button>
       </div>
 
+      {/* ─── Search trigger ─── */}
+      <button
+        className="sidebar-search-btn"
+        onClick={() => {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
+        }}
+        title={sidebarCollapsed ? "Search (⌘K)" : undefined}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <circle cx="6" cy="6" r="4.5" /><path d="M10 10l3 3" />
+        </svg>
+        {!sidebarCollapsed && <span>Search</span>}
+        {!sidebarCollapsed && <kbd>⌘K</kbd>}
+      </button>
+
       {/* ─── Main nav ─── */}
       <nav className="sidebar-nav">
         <div className="nav-section">
@@ -274,6 +290,9 @@ export default function Sidebar() {
           </button>
         )}
       </div>
+
+      {/* ─── Global Search Modal (renders via portal) ─── */}
+      <GlobalSearch />
     </aside>
   );
 }

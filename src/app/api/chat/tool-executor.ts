@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -398,6 +399,10 @@ async function handleCreateGoal(
     .single();
 
   if (error) return { success: false, message: `Failed to create goal: ${error.message}` };
+
+  // Embed the new goal (fire-and-forget)
+  embedInBackground(supabase, userId, "goals", data.id, data);
+
   return { success: true, message: `Created goal "${data.name}" with status "${data.status}"` };
 }
 
@@ -432,8 +437,13 @@ async function handleAddSubGoals(
     end_date: s.end_date ?? null,
   }));
 
-  const { error } = await supabase.from("sub_goals").insert(rows);
+  const { data: insertedSubs, error } = await supabase.from("sub_goals").insert(rows).select();
   if (error) return { success: false, message: `Failed to add sub-goals: ${error.message}` };
+
+  // Embed each sub-goal (fire-and-forget)
+  for (const sub of insertedSubs ?? []) {
+    embedInBackground(supabase, userId, "sub_goals", sub.id, sub);
+  }
 
   return { success: true, message: `Added ${subGoals.length} sub-goal(s) to "${goalName}": ${subGoals.map((s) => s.name).join(", ")}` };
 }
@@ -472,6 +482,11 @@ async function handleUpdateGoalStatus(
       .eq("id", subGoal.id);
 
     if (error) return { success: false, message: `Failed to update sub-goal: ${error.message}` };
+
+    // Re-embed the sub-goal with updated status (fire-and-forget)
+    const { data: updatedSub } = await supabase.from("sub_goals").select("*").eq("id", subGoal.id).single();
+    if (updatedSub) reembedInBackground(supabase, updatedSub.user_id ?? "", "sub_goals", subGoal.id, updatedSub);
+
     return { success: true, message: `Updated sub-goal "${subGoalName}" to "${status}"` };
   } else {
     /* Update the parent goal */
@@ -484,6 +499,11 @@ async function handleUpdateGoalStatus(
       .eq("id", goalId);
 
     if (error) return { success: false, message: `Failed to update goal: ${error.message}` };
+
+    // Re-embed the goal with updated status (fire-and-forget)
+    const { data: updatedGoal } = await supabase.from("goals").select("*").eq("id", goalId).single();
+    if (updatedGoal) reembedInBackground(supabase, updatedGoal.user_id, "goals", goalId, updatedGoal);
+
     return { success: true, message: `Updated goal "${goalName}" to "${status}"` };
   }
 }
@@ -541,6 +561,9 @@ async function handleCreatePainPoint(
 
   if (error) return { success: false, message: `Failed to create pain point: ${error.message}` };
 
+  // Embed the new pain point (fire-and-forget)
+  embedInBackground(supabase, userId, "pain_points", data.id, data);
+
   const linked = linkedGoalName ? ` (linked to "${linkedGoalName}")` : "";
   return { success: true, message: `Created pain point "${data.name}" [${data.severity}]${linked}` };
 }
@@ -570,6 +593,10 @@ async function handleUpdatePainPointStatus(
 
   if (error) return { success: false, message: `Failed to update pain point: ${error.message}` };
 
+  // Re-embed the pain point with updated fields (fire-and-forget)
+  const { data: updatedPP } = await supabase.from("pain_points").select("*").eq("id", ppId).single();
+  if (updatedPP) reembedInBackground(supabase, updatedPP.user_id, "pain_points", ppId, updatedPP);
+
   const fields = Object.entries(updates).map(([k, v]) => `${k}: ${v}`).join(", ");
   return { success: true, message: `Updated pain point "${ppName}" — ${fields}` };
 }
@@ -586,6 +613,10 @@ async function handleDeletePainPoint(
 
   const { error } = await supabase.from("pain_points").delete().eq("id", ppId);
   if (error) return { success: false, message: `Failed to delete pain point: ${error.message}` };
+
+  // Delete chunks for the deleted pain point (fire-and-forget)
+  deleteChunksInBackground(supabase, "pain_points", ppId);
+
   return { success: true, message: `Deleted pain point "${ppName}"` };
 }
 
@@ -620,6 +651,10 @@ async function handleCreateLibraryItem(
     .single();
 
   if (error) return { success: false, message: `Failed to create library item: ${error.message}` };
+
+  // Embed the new library item (fire-and-forget)
+  embedInBackground(supabase, userId, "library_items", data.id, data);
+
   return { success: true, message: `Created library item "${data.title}" (${data.category})` };
 }
 
@@ -791,8 +826,18 @@ async function handleDeleteGoal(
   const goalId = await resolveGoalId(goalName, supabase);
   if (!goalId) return { success: false, message: `Goal "${goalName}" not found` };
 
+  // Get sub-goal IDs before deleting (for chunk cleanup)
+  const { data: subGoalIds } = await supabase.from("sub_goals").select("id").eq("goal_id", goalId);
+
   const { error } = await supabase.from("goals").delete().eq("id", goalId);
   if (error) return { success: false, message: `Failed to delete goal: ${error.message}` };
+
+  // Delete chunks for the goal and its sub-goals (fire-and-forget)
+  deleteChunksInBackground(supabase, "goals", goalId);
+  for (const sub of subGoalIds ?? []) {
+    deleteChunksInBackground(supabase, "sub_goals", sub.id);
+  }
+
   return { success: true, message: `Deleted goal "${goalName}" and all its sub-goals` };
 }
 
