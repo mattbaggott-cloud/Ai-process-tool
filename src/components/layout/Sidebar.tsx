@@ -14,6 +14,7 @@ const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
   { label: "Dashboards", href: "/dashboards",  icon: "chart" },
   { label: "CRM",        href: "/crm",         icon: "briefcase" },
+  { label: "Data",       href: "/data",        icon: "database" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
 ];
@@ -63,6 +64,13 @@ const icons: Record<string, React.ReactNode> = {
   briefcase: (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="5" width="12" height="9" rx="1" /><path d="M6 5V3.5A1.5 1.5 0 0 1 7.5 2h1A1.5 1.5 0 0 1 10 3.5V5" /><path d="M2 9h12" />
+    </svg>
+  ),
+  database: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <ellipse cx="8" cy="4" rx="5.5" ry="2" />
+      <path d="M2.5 4v8c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2V4" />
+      <path d="M2.5 8c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2" />
     </svg>
   ),
   layout: (

@@ -1009,5 +1009,39 @@ Always include a start and end node. Map document sections/steps to process node
         required: ["company_name", "product_name"],
       },
     },
+
+    /* ── Data Import tools ── */
+    {
+      name: "import_csv_data",
+      description:
+        "Import CSV data into a CRM table. Use when the user provides CSV content and wants to import it into contacts, companies, deals, or products.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          csv_content: {
+            type: "string",
+            description: "The full CSV text content (header row + data rows)",
+          },
+          target_table: {
+            type: "string",
+            enum: ["crm_contacts", "crm_companies", "crm_deals", "crm_products"],
+            description: "Which CRM table to import into",
+          },
+          field_mappings: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                csv_column: { type: "string", description: "CSV column header name" },
+                target_field: { type: "string", description: "Target table field name" },
+              },
+              required: ["csv_column", "target_field"],
+            },
+            description: "Mapping from CSV columns to target table fields",
+          },
+        },
+        required: ["csv_content", "target_table", "field_mappings"],
+      },
+    },
   ];
 }

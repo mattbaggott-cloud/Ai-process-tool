@@ -288,6 +288,50 @@ export const DATA_SOURCES: Record<string, DataSourceDef> = {
     ],
     colorMap: { status: assetStatusColors },
   },
+
+  /* ── Data Home Sources ── */
+
+  data_imports: {
+    label: "Data Imports",
+    table: "data_imports",
+    metrics: [
+      { key: "count", label: "Import Count" },
+      { key: "sum:imported_rows", label: "Total Rows Imported" },
+      { key: "sum:error_rows", label: "Total Errors" },
+    ],
+    dimensions: [
+      { key: "status", label: "Status" },
+      { key: "target_table", label: "Target Table" },
+    ],
+    colorMap: {
+      status: {
+        "pending": "#6b7280",
+        "mapping": "#f59e0b",
+        "importing": "#2563eb",
+        "completed": "#16a34a",
+        "failed": "#dc2626",
+      },
+    },
+  },
+
+  data_sync_log: {
+    label: "Sync Log",
+    table: "data_sync_log",
+    metrics: [
+      { key: "count", label: "Event Count" },
+    ],
+    dimensions: [
+      { key: "event_type", label: "Event Type" },
+    ],
+    colorMap: {
+      event_type: {
+        "info": "#2563eb",
+        "warning": "#f59e0b",
+        "error": "#dc2626",
+        "success": "#16a34a",
+      },
+    },
+  },
 };
 
 /* ── Helpers ── */

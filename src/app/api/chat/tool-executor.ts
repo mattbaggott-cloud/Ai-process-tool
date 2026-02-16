@@ -91,6 +91,8 @@ export async function executeTool(
         return await handleAddDealLineItem(input, supabase, userId);
       case "add_company_asset":
         return await handleAddCompanyAsset(input, supabase, userId);
+      case "import_csv_data":
+        return await handleImportCsvData(input, supabase, userId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -2044,4 +2046,102 @@ async function handleAddCompanyAsset(
   });
   if (error) return { success: false, message: `Failed to add asset: ${error.message}` };
   return { success: true, message: `Added "${product.name}" to ${companyName}'s installed base.` };
+}
+
+/* ── import_csv_data ─────────────────────────────────────── */
+
+async function handleImportCsvData(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const csvContent = input.csv_content as string;
+  const targetTable = input.target_table as string;
+  const fieldMappings = input.field_mappings as Array<{ csv_column: string; target_field: string }>;
+
+  if (!csvContent || !targetTable || !fieldMappings?.length) {
+    return { success: false, message: "csv_content, target_table, and field_mappings are required." };
+  }
+
+  const validTables = ["crm_contacts", "crm_companies", "crm_deals", "crm_products"];
+  if (!validTables.includes(targetTable)) {
+    return { success: false, message: `Invalid target table: ${targetTable}` };
+  }
+
+  // Parse CSV
+  const lines = csvContent.split("\n").filter((l) => l.trim());
+  if (lines.length < 2) return { success: false, message: "CSV must have a header row and at least one data row." };
+
+  function parseLine(line: string): string[] {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++; } else { inQuotes = !inQuotes; }
+        continue;
+      }
+      if (ch === "," && !inQuotes) { result.push(current.trim()); current = ""; continue; }
+      current += ch;
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  const headers = parseLine(lines[0]);
+  const rows = lines.slice(1).map((line) => {
+    const vals = parseLine(line);
+    const obj: Record<string, string> = {};
+    headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+    return obj;
+  });
+
+  const numericFields = ["value", "probability", "unit_price", "annual_revenue", "employees"];
+
+  let imported = 0;
+  let errorCount = 0;
+  const errorDetails: string[] = [];
+  const BATCH = 50;
+
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const insertRows = batch.map((row) => {
+      const mapped: Record<string, unknown> = { user_id: userId };
+      for (const m of fieldMappings) {
+        const val = row[m.csv_column] ?? "";
+        if (numericFields.includes(m.target_field)) {
+          const num = parseFloat(val);
+          mapped[m.target_field] = isNaN(num) ? 0 : num;
+        } else {
+          mapped[m.target_field] = val;
+        }
+      }
+      if (targetTable === "crm_contacts" && !mapped.source) {
+        mapped.source = "import";
+      }
+      return mapped;
+    });
+
+    const { error } = await supabase.from(targetTable).insert(insertRows);
+    if (error) {
+      errorCount += batch.length;
+      errorDetails.push(`Rows ${i + 1}-${i + batch.length}: ${error.message}`);
+    } else {
+      imported += batch.length;
+    }
+  }
+
+  // Log to sync log
+  await supabase.from("data_sync_log").insert({
+    user_id: userId,
+    event_type: errorCount === 0 ? "success" : "warning",
+    message: `AI imported ${imported} rows to ${targetTable} (${errorCount} errors)`,
+    details: { imported, errors: errorCount, errorDetails },
+  });
+
+  return {
+    success: imported > 0,
+    message: `Imported ${imported} of ${rows.length} rows into ${targetTable}.${errorCount > 0 ? ` ${errorCount} rows failed: ${errorDetails.join("; ")}` : ""}`,
+  };
 }

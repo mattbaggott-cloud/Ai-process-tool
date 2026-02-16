@@ -489,6 +489,67 @@ export interface CrmActivity {
   created_at: string;
 }
 
+/* ── Data Home types ──────────────────────────────────── */
+
+export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'dynamics' | 'sharepoint' | 'google_workspace';
+export type ConnectorStatus = 'available' | 'connected' | 'error' | 'coming_soon';
+export type ImportStatus = 'pending' | 'mapping' | 'importing' | 'completed' | 'failed';
+export type SyncEventType = 'info' | 'warning' | 'error' | 'success';
+
+export interface DataConnector {
+  id: string;
+  user_id: string;
+  connector_type: ConnectorType;
+  name: string;
+  description: string;
+  status: ConnectorStatus;
+  config: Record<string, unknown>;
+  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FieldMapping {
+  csv_column: string;
+  target_field: string;
+  skipped: boolean;
+}
+
+export interface ImportError {
+  row: number;
+  field: string;
+  message: string;
+}
+
+export interface DataImport {
+  id: string;
+  user_id: string;
+  connector_id: string | null;
+  source_name: string;
+  target_table: string;
+  status: ImportStatus;
+  total_rows: number;
+  imported_rows: number;
+  error_rows: number;
+  mapped_fields: FieldMapping[];
+  errors: ImportError[];
+  file_preview: Record<string, string>[];
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface DataSyncLog {
+  id: string;
+  user_id: string;
+  connector_id: string | null;
+  import_id: string | null;
+  event_type: SyncEventType;
+  message: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
 /* ── Workflow Builder types ────────────────────────────── */
 
 export type WorkflowNodeType = "start" | "end" | "process" | "decision" | "ai_agent" | "note";
