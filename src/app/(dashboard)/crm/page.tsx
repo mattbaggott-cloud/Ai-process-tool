@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ContactsTab from "@/components/crm/ContactsTab";
 import CompaniesTab from "@/components/crm/CompaniesTab";
@@ -16,7 +16,7 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
-export default function CrmPage() {
+function CrmPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const paramTab = searchParams.get("tab") as TabKey | null;
@@ -58,5 +58,13 @@ export default function CrmPage() {
         {activeTab === "activities" && <ActivitiesTab />}
       </div>
     </div>
+  );
+}
+
+export default function CrmPage() {
+  return (
+    <Suspense fallback={<div className="crm-loading">Loading CRM...</div>}>
+      <CrmPageInner />
+    </Suspense>
   );
 }
