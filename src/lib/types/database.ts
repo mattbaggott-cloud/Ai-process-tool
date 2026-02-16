@@ -348,6 +348,147 @@ export interface WorkflowVersion {
   nodeCount: number;
 }
 
+// CRM Module
+export type ContactStatus = "lead" | "active" | "inactive" | "churned";
+export type ContactSource = "manual" | "import" | "ai" | "referral";
+export type CompanySize = "" | "startup" | "small" | "medium" | "large" | "enterprise";
+export type DealStage = "lead" | "qualified" | "proposal" | "negotiation" | "won" | "lost";
+export type ActivityType = "call" | "email" | "meeting" | "note" | "task";
+
+export interface CrmCompany {
+  id: string;
+  user_id: string;
+  name: string;
+  domain: string;
+  industry: string;
+  size: CompanySize;
+  description: string;
+  website: string;
+  phone: string;
+  address: string;
+  annual_revenue: number | null;
+  employees: number | null;
+  sic_code: string;
+  sector: string;
+  account_owner: string;
+  billing_address: string;
+  shipping_address: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CrmContact {
+  id: string;
+  user_id: string;
+  company_id: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  title: string;
+  status: ContactStatus;
+  source: ContactSource;
+  notes: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CrmContactWithCompany extends CrmContact {
+  company?: CrmCompany | null;
+}
+
+export interface CrmDeal {
+  id: string;
+  user_id: string;
+  contact_id: string | null;
+  company_id: string | null;
+  title: string;
+  value: number;
+  currency: string;
+  stage: DealStage;
+  probability: number;
+  expected_close_date: string | null;
+  notes: string;
+  next_steps: string;
+  close_reason: string;
+  closed_at: string | null;
+  lost_to: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CrmDealStageHistory {
+  id: string;
+  user_id: string;
+  deal_id: string;
+  from_stage: string | null;
+  to_stage: string;
+  changed_at: string;
+  notes: string;
+}
+
+export interface CrmProduct {
+  id: string;
+  user_id: string;
+  name: string;
+  sku: string;
+  description: string;
+  category: string;
+  unit_price: number;
+  currency: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CrmDealLineItem {
+  id: string;
+  user_id: string;
+  deal_id: string;
+  product_id: string | null;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  discount: number;
+  total: number;
+  notes: string;
+  created_at: string;
+}
+
+export interface CrmCompanyAsset {
+  id: string;
+  user_id: string;
+  company_id: string;
+  product_id: string | null;
+  product_name: string;
+  quantity: number;
+  purchase_date: string;
+  renewal_date: string;
+  annual_value: number;
+  status: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface CrmActivity {
+  id: string;
+  user_id: string;
+  contact_id: string | null;
+  company_id: string | null;
+  deal_id: string | null;
+  type: ActivityType;
+  subject: string;
+  description: string;
+  scheduled_at: string | null;
+  completed_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 /* ── Workflow Builder types ────────────────────────────── */
 
 export type WorkflowNodeType = "start" | "end" | "process" | "decision" | "ai_agent" | "note";

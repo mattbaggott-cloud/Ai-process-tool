@@ -819,5 +819,195 @@ Always include a start and end node. Map document sections/steps to process node
         required: ["project_name", "document_text", "nodes", "edges"],
       },
     },
+    /* ── CRM tools ──────────────────────────────────────── */
+    {
+      name: "create_contact",
+      description:
+        "Create a new CRM contact. Use when the user asks to add a contact, lead, or person to the CRM.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          first_name: { type: "string", description: "Contact's first name" },
+          last_name: { type: "string", description: "Contact's last name" },
+          email: { type: "string", description: "Email address" },
+          phone: { type: "string", description: "Phone number" },
+          title: { type: "string", description: "Job title" },
+          company_name: { type: "string", description: "Company name to link to (will auto-create if not found)" },
+          status: { type: "string", enum: ["lead", "active", "inactive", "churned"], description: "Contact status. Defaults to 'lead'." },
+          source: { type: "string", enum: ["manual", "import", "ai", "referral"], description: "How this contact was added. Defaults to 'ai'." },
+          notes: { type: "string", description: "Optional notes about the contact" },
+          tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
+        },
+        required: ["first_name"],
+      },
+    },
+    {
+      name: "update_contact",
+      description:
+        "Update an existing CRM contact's details. Use when the user asks to update, change, or edit a contact.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          contact_name: { type: "string", description: "Full name or email of the contact to update" },
+          first_name: { type: "string" },
+          last_name: { type: "string" },
+          email: { type: "string" },
+          phone: { type: "string" },
+          title: { type: "string" },
+          status: { type: "string", enum: ["lead", "active", "inactive", "churned"] },
+          notes: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["contact_name"],
+      },
+    },
+    {
+      name: "create_company",
+      description:
+        "Create a new CRM company. Use when the user asks to add a company or organization to the CRM.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string", description: "Company name" },
+          domain: { type: "string", description: "Company domain (e.g. acme.com)" },
+          industry: { type: "string", description: "Industry sector" },
+          size: { type: "string", enum: ["startup", "small", "medium", "large", "enterprise"], description: "Company size" },
+          description: { type: "string", description: "What the company does" },
+          website: { type: "string", description: "Company website URL" },
+          phone: { type: "string", description: "Company phone number" },
+          annual_revenue: { type: "number", description: "Annual revenue in dollars" },
+          employees: { type: "number", description: "Number of employees" },
+          sector: { type: "string", description: "Business sector (e.g. Software, Healthcare, Manufacturing)" },
+          account_owner: { type: "string", description: "Account owner name" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "create_deal",
+      description:
+        "Create a new CRM deal/opportunity. Use when the user asks to add a deal, opportunity, or sale to track.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          title: { type: "string", description: "Deal title" },
+          value: { type: "number", description: "Deal value in dollars" },
+          stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost"], description: "Pipeline stage. Defaults to 'lead'." },
+          contact_name: { type: "string", description: "Contact name to link this deal to" },
+          company_name: { type: "string", description: "Company name to link this deal to" },
+          expected_close_date: { type: "string", description: "Expected close date (YYYY-MM-DD)" },
+          notes: { type: "string", description: "Deal notes" },
+          close_reason: { type: "string", description: "Why the deal was won/lost (optional, for retroactively adding closed deals)" },
+        },
+        required: ["title"],
+      },
+    },
+    {
+      name: "update_deal_stage",
+      description:
+        "Update a deal's pipeline stage. Use when the user asks to move, advance, or update a deal's stage. When moving to 'won' or 'lost', provide a close_reason explaining why.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          deal_title: { type: "string", description: "Title of the deal to update" },
+          new_stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost"], description: "New pipeline stage" },
+          notes: { type: "string", description: "Optional notes about the stage change" },
+          close_reason: { type: "string", description: "Why the deal was won or lost (used when new_stage is 'won' or 'lost')" },
+          lost_to: { type: "string", description: "Competitor name if the deal was lost (used when new_stage is 'lost')" },
+        },
+        required: ["deal_title", "new_stage"],
+      },
+    },
+    {
+      name: "log_activity",
+      description:
+        "Log a CRM activity (call, email, meeting, note, or task). Use when the user asks to log, record, or add an activity.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          type: { type: "string", enum: ["call", "email", "meeting", "note", "task"], description: "Activity type" },
+          subject: { type: "string", description: "Activity subject/title" },
+          description: { type: "string", description: "Details about the activity" },
+          contact_name: { type: "string", description: "Contact name to link to" },
+          company_name: { type: "string", description: "Company name to link to" },
+          deal_title: { type: "string", description: "Deal title to link to" },
+        },
+        required: ["type", "subject"],
+      },
+    },
+    {
+      name: "search_crm",
+      description:
+        "Search across CRM contacts, companies, and deals. Use when the user asks to find, look up, or search for CRM records.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string", description: "Search query" },
+          entity_type: { type: "string", enum: ["contacts", "companies", "deals", "all"], description: "Filter by entity type. Defaults to 'all'." },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "get_crm_summary",
+      description:
+        "Get a summary of the user's CRM data including contact counts, pipeline value, and recent activity. Use when the user asks for a CRM overview or summary.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    /* ── CRM Product & Asset tools ──────────────────────── */
+    {
+      name: "create_product",
+      description:
+        "Create a new product/SKU in the CRM product catalog. Use when the user asks to add a product, SKU, or offering.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string", description: "Product name" },
+          sku: { type: "string", description: "Product SKU/code" },
+          category: { type: "string", description: "Product category" },
+          unit_price: { type: "number", description: "Unit price in dollars" },
+          description: { type: "string", description: "Product description" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "add_deal_line_item",
+      description:
+        "Add a product/line item to an existing deal. Use when the user wants to add a product to a deal, or specify what's being sold.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          deal_title: { type: "string", description: "Title of the deal to add the line item to" },
+          product_name: { type: "string", description: "Name of the product to add (must exist in product catalog)" },
+          quantity: { type: "number", description: "Quantity. Defaults to 1." },
+          unit_price: { type: "number", description: "Override unit price (uses product price if not specified)" },
+          discount: { type: "number", description: "Discount percentage (0-100). Defaults to 0." },
+        },
+        required: ["deal_title", "product_name"],
+      },
+    },
+    {
+      name: "add_company_asset",
+      description:
+        "Add an asset/installed product to a company's installed base. Use when the user says a company owns, uses, or has purchased a product.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          company_name: { type: "string", description: "Name of the company" },
+          product_name: { type: "string", description: "Name of the product (must exist in product catalog)" },
+          quantity: { type: "number", description: "Quantity. Defaults to 1." },
+          purchase_date: { type: "string", description: "Purchase date (YYYY-MM-DD)" },
+          renewal_date: { type: "string", description: "Renewal date (YYYY-MM-DD)" },
+          annual_value: { type: "number", description: "Annual value in dollars" },
+          status: { type: "string", enum: ["active", "expired", "cancelled"], description: "Asset status. Defaults to 'active'." },
+        },
+        required: ["company_name", "product_name"],
+      },
+    },
   ];
 }

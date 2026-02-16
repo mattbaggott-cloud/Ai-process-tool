@@ -68,6 +68,29 @@ export async function executeTool(
         return await handleGenerateWorkflow(input, supabase);
       case "generate_workflow_from_document":
         return await handleGenerateWorkflowFromDocument(input, supabase);
+      /* CRM tools */
+      case "create_contact":
+        return await handleCreateContact(input, supabase, userId);
+      case "update_contact":
+        return await handleUpdateContact(input, supabase);
+      case "create_company":
+        return await handleCreateCompany(input, supabase, userId);
+      case "create_deal":
+        return await handleCreateDeal(input, supabase, userId);
+      case "update_deal_stage":
+        return await handleUpdateDealStage(input, supabase);
+      case "log_activity":
+        return await handleLogActivity(input, supabase, userId);
+      case "search_crm":
+        return await handleSearchCrm(input, supabase);
+      case "get_crm_summary":
+        return await handleGetCrmSummary(input, supabase);
+      case "create_product":
+        return await handleCreateProduct(input, supabase, userId);
+      case "add_deal_line_item":
+        return await handleAddDealLineItem(input, supabase, userId);
+      case "add_company_asset":
+        return await handleAddCompanyAsset(input, supabase, userId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -1431,4 +1454,594 @@ async function handleCompareTools(
     message += `\n\n(Not found in catalog: ${notFound.join(", ")})`;
   }
   return { success: true, message };
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   CRM HANDLERS
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Helper: resolve company name → id (auto-create if needed) ── */
+
+async function resolveCompanyId(
+  companyName: string,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string | null> {
+  if (!companyName) return null;
+  const { data } = await supabase
+    .from("crm_companies")
+    .select("id")
+    .ilike("name", companyName)
+    .single();
+  if (data?.id) return data.id;
+
+  // Auto-create company
+  const { data: newCo } = await supabase
+    .from("crm_companies")
+    .insert({ user_id: userId, name: companyName })
+    .select("id")
+    .single();
+  if (newCo?.id) {
+    embedInBackground(supabase, userId, "crm_companies", newCo.id, { name: companyName });
+    return newCo.id;
+  }
+  return null;
+}
+
+/* ── Helper: resolve contact name → id ── */
+
+async function resolveContactId(
+  contactName: string,
+  supabase: SupabaseClient
+): Promise<string | null> {
+  if (!contactName) return null;
+  // Try full name match (first + last)
+  const parts = contactName.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    const { data } = await supabase
+      .from("crm_contacts")
+      .select("id")
+      .ilike("first_name", parts[0])
+      .ilike("last_name", parts.slice(1).join(" "))
+      .single();
+    if (data?.id) return data.id;
+  }
+  // Try email match
+  const { data: emailMatch } = await supabase
+    .from("crm_contacts")
+    .select("id")
+    .ilike("email", contactName)
+    .single();
+  if (emailMatch?.id) return emailMatch.id;
+  // Try first name only
+  const { data: firstName } = await supabase
+    .from("crm_contacts")
+    .select("id")
+    .ilike("first_name", contactName.trim())
+    .limit(1)
+    .single();
+  return firstName?.id ?? null;
+}
+
+/* ── Helper: resolve deal title → id ── */
+
+async function resolveDealId(
+  dealTitle: string,
+  supabase: SupabaseClient
+): Promise<string | null> {
+  if (!dealTitle) return null;
+  const { data } = await supabase
+    .from("crm_deals")
+    .select("id")
+    .ilike("title", dealTitle)
+    .single();
+  return data?.id ?? null;
+}
+
+
+/* ── create_contact ── */
+
+async function handleCreateContact(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const firstName = (input.first_name as string)?.trim();
+  if (!firstName) return { success: false, message: "first_name is required" };
+
+  let companyId: string | null = null;
+  if (input.company_name) {
+    companyId = await resolveCompanyId(input.company_name as string, supabase, userId);
+  }
+
+  const { data, error } = await supabase
+    .from("crm_contacts")
+    .insert({
+      user_id: userId,
+      first_name: firstName,
+      last_name: ((input.last_name as string) ?? "").trim(),
+      email: ((input.email as string) ?? "").trim(),
+      phone: ((input.phone as string) ?? "").trim(),
+      title: ((input.title as string) ?? "").trim(),
+      company_id: companyId,
+      status: (input.status as string) || "lead",
+      source: (input.source as string) || "ai",
+      notes: ((input.notes as string) ?? "").trim(),
+      tags: (input.tags as string[]) ?? [],
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  embedInBackground(supabase, userId, "crm_contacts", data.id, data);
+
+  const name = `${data.first_name} ${data.last_name}`.trim();
+  return { success: true, message: `Created contact: ${name} (${data.status})${companyId ? ` at ${input.company_name}` : ""}` };
+}
+
+
+/* ── update_contact ── */
+
+async function handleUpdateContact(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const contactName = (input.contact_name as string)?.trim();
+  if (!contactName) return { success: false, message: "contact_name is required" };
+
+  const contactId = await resolveContactId(contactName, supabase);
+  if (!contactId) return { success: false, message: `Contact not found: "${contactName}"` };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.first_name !== undefined) updates.first_name = (input.first_name as string).trim();
+  if (input.last_name !== undefined) updates.last_name = (input.last_name as string).trim();
+  if (input.email !== undefined) updates.email = (input.email as string).trim();
+  if (input.phone !== undefined) updates.phone = (input.phone as string).trim();
+  if (input.title !== undefined) updates.title = (input.title as string).trim();
+  if (input.status !== undefined) updates.status = input.status;
+  if (input.notes !== undefined) updates.notes = (input.notes as string).trim();
+  if (input.tags !== undefined) updates.tags = input.tags;
+
+  const { data, error } = await supabase
+    .from("crm_contacts")
+    .update(updates)
+    .eq("id", contactId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  reembedInBackground(supabase, data.user_id, "crm_contacts", contactId, data);
+
+  return { success: true, message: `Updated contact: ${data.first_name} ${data.last_name}`.trim() };
+}
+
+
+/* ── create_company ── */
+
+async function handleCreateCompany(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = (input.name as string)?.trim();
+  if (!name) return { success: false, message: "name is required" };
+
+  const { data, error } = await supabase
+    .from("crm_companies")
+    .insert({
+      user_id: userId,
+      name,
+      domain: ((input.domain as string) ?? "").trim(),
+      industry: ((input.industry as string) ?? "").trim(),
+      size: (input.size as string) || "",
+      description: ((input.description as string) ?? "").trim(),
+      website: ((input.website as string) ?? "").trim(),
+      phone: ((input.phone as string) ?? "").trim(),
+      annual_revenue: (input.annual_revenue as number) ?? null,
+      employees: (input.employees as number) ?? null,
+      sector: ((input.sector as string) ?? "").trim(),
+      account_owner: ((input.account_owner as string) ?? "").trim(),
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  embedInBackground(supabase, userId, "crm_companies", data.id, data);
+
+  return { success: true, message: `Created company: ${data.name}${data.industry ? ` (${data.industry})` : ""}` };
+}
+
+
+/* ── create_deal ── */
+
+async function handleCreateDeal(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const title = (input.title as string)?.trim();
+  if (!title) return { success: false, message: "title is required" };
+
+  let contactId: string | null = null;
+  let companyId: string | null = null;
+  if (input.contact_name) contactId = await resolveContactId(input.contact_name as string, supabase);
+  if (input.company_name) companyId = await resolveCompanyId(input.company_name as string, supabase, userId);
+
+  const stage = (input.stage as string) || "lead";
+  const probMap: Record<string, number> = { lead: 10, qualified: 25, proposal: 50, negotiation: 75, won: 100, lost: 0 };
+
+  const closeReason = ((input.close_reason as string) ?? "").trim();
+
+  const dealRow: Record<string, unknown> = {
+    user_id: userId,
+    title,
+    value: (input.value as number) ?? 0,
+    stage,
+    probability: probMap[stage] ?? 10,
+    contact_id: contactId,
+    company_id: companyId,
+    expected_close_date: (input.expected_close_date as string) || null,
+    notes: ((input.notes as string) ?? "").trim(),
+  };
+
+  // Set close fields if deal is being created as won/lost
+  if (stage === "won" || stage === "lost") {
+    dealRow.closed_at = new Date().toISOString();
+    if (closeReason) dealRow.close_reason = closeReason;
+  }
+
+  const { data, error } = await supabase
+    .from("crm_deals")
+    .insert(dealRow)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // Record initial stage history
+  await supabase.from("crm_deal_stage_history").insert({
+    user_id: userId,
+    deal_id: data.id,
+    from_stage: null,
+    to_stage: stage,
+    notes: closeReason || "",
+  });
+
+  embedInBackground(supabase, userId, "crm_deals", data.id, data);
+
+  const valStr = data.value ? ` ($${Number(data.value).toLocaleString()})` : "";
+  return { success: true, message: `Created deal: ${data.title}${valStr} — Stage: ${data.stage}` };
+}
+
+
+/* ── update_deal_stage ── */
+
+async function handleUpdateDealStage(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const dealTitle = (input.deal_title as string)?.trim();
+  const newStage = (input.new_stage as string)?.trim();
+  if (!dealTitle || !newStage) return { success: false, message: "deal_title and new_stage are required" };
+
+  const dealId = await resolveDealId(dealTitle, supabase);
+  if (!dealId) return { success: false, message: `Deal not found: "${dealTitle}"` };
+
+  // Get current deal to know old stage
+  const { data: currentDeal } = await supabase.from("crm_deals").select("stage, user_id").eq("id", dealId).single();
+  const oldStage = currentDeal?.stage ?? "";
+
+  const probMap: Record<string, number> = { lead: 10, qualified: 25, proposal: 50, negotiation: 75, won: 100, lost: 0 };
+  const closeReason = ((input.close_reason as string) ?? "").trim();
+  const lostTo = ((input.lost_to as string) ?? "").trim();
+
+  const updates: Record<string, unknown> = {
+    stage: newStage,
+    probability: probMap[newStage] ?? 10,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.notes) updates.notes = (input.notes as string).trim();
+
+  // Handle won/lost close fields
+  if (newStage === "won" || newStage === "lost") {
+    updates.closed_at = new Date().toISOString();
+    if (closeReason) updates.close_reason = closeReason;
+    if (lostTo) updates.lost_to = lostTo;
+  }
+  // Clear close fields when moving away from won/lost
+  if (newStage !== "won" && newStage !== "lost" && (oldStage === "won" || oldStage === "lost")) {
+    updates.closed_at = null;
+    updates.close_reason = "";
+    updates.lost_to = "";
+  }
+
+  const { data, error } = await supabase
+    .from("crm_deals")
+    .update(updates)
+    .eq("id", dealId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // Record stage history
+  if (oldStage !== newStage && currentDeal?.user_id) {
+    await supabase.from("crm_deal_stage_history").insert({
+      user_id: currentDeal.user_id,
+      deal_id: dealId,
+      from_stage: oldStage,
+      to_stage: newStage,
+      notes: closeReason || ((input.notes as string) ?? "").trim(),
+    });
+  }
+
+  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data);
+
+  let msg = `Updated deal "${data.title}" → ${newStage} (${data.probability}% probability)`;
+  if (closeReason) msg += ` — Reason: ${closeReason}`;
+  if (lostTo) msg += ` (lost to: ${lostTo})`;
+  return { success: true, message: msg };
+}
+
+
+/* ── log_activity ── */
+
+async function handleLogActivity(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const actType = (input.type as string) || "note";
+  const subject = (input.subject as string)?.trim();
+  if (!subject) return { success: false, message: "subject is required" };
+
+  let contactId: string | null = null;
+  let companyId: string | null = null;
+  let dealId: string | null = null;
+  if (input.contact_name) contactId = await resolveContactId(input.contact_name as string, supabase);
+  if (input.company_name) {
+    const { data } = await supabase.from("crm_companies").select("id").ilike("name", input.company_name as string).single();
+    companyId = data?.id ?? null;
+  }
+  if (input.deal_title) dealId = await resolveDealId(input.deal_title as string, supabase);
+
+  const { data, error } = await supabase
+    .from("crm_activities")
+    .insert({
+      user_id: userId,
+      type: actType,
+      subject,
+      description: ((input.description as string) ?? "").trim(),
+      contact_id: contactId,
+      company_id: companyId,
+      deal_id: dealId,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  embedInBackground(supabase, userId, "crm_activities", data.id, data);
+
+  let msg = `Logged ${actType}: ${subject}`;
+  if (input.contact_name) msg += ` (with ${input.contact_name})`;
+  return { success: true, message: msg };
+}
+
+
+/* ── search_crm ── */
+
+async function handleSearchCrm(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const query = (input.query as string)?.trim();
+  if (!query) return { success: false, message: "query is required" };
+
+  const entityType = (input.entity_type as string) || "all";
+  const results: string[] = [];
+
+  if (entityType === "all" || entityType === "contacts") {
+    const { data: contacts } = await supabase
+      .from("crm_contacts")
+      .select("first_name, last_name, email, title, status")
+      .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%,email.ilike.%${query}%`)
+      .limit(10);
+    if (contacts?.length) {
+      results.push("**Contacts:**");
+      for (const c of contacts) {
+        results.push(`- ${c.first_name} ${c.last_name} (${c.status}) — ${c.title || ""} ${c.email || ""}`);
+      }
+    }
+  }
+
+  if (entityType === "all" || entityType === "companies") {
+    const { data: companies } = await supabase
+      .from("crm_companies")
+      .select("name, industry, size")
+      .or(`name.ilike.%${query}%,industry.ilike.%${query}%`)
+      .limit(10);
+    if (companies?.length) {
+      results.push("**Companies:**");
+      for (const c of companies) {
+        results.push(`- ${c.name} — ${c.industry || ""} (${c.size || ""})`);
+      }
+    }
+  }
+
+  if (entityType === "all" || entityType === "deals") {
+    const { data: deals } = await supabase
+      .from("crm_deals")
+      .select("title, value, stage")
+      .or(`title.ilike.%${query}%,notes.ilike.%${query}%`)
+      .limit(10);
+    if (deals?.length) {
+      results.push("**Deals:**");
+      for (const d of deals) {
+        results.push(`- ${d.title} — $${Number(d.value).toLocaleString()} (${d.stage})`);
+      }
+    }
+  }
+
+  if (results.length === 0) {
+    return { success: true, message: `No CRM records found matching "${query}"` };
+  }
+
+  return { success: true, message: results.join("\n") };
+}
+
+
+/* ── get_crm_summary ── */
+
+async function handleGetCrmSummary(
+  _input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const [contactsRes, companiesRes, dealsRes, activitiesRes] = await Promise.all([
+    supabase.from("crm_contacts").select("status"),
+    supabase.from("crm_companies").select("id", { count: "exact", head: true }),
+    supabase.from("crm_deals").select("stage, value"),
+    supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
+  ]);
+
+  const contacts = contactsRes.data ?? [];
+  const statusCounts: Record<string, number> = {};
+  for (const c of contacts) statusCounts[c.status] = (statusCounts[c.status] ?? 0) + 1;
+
+  const deals = dealsRes.data ?? [];
+  const stageCounts: Record<string, number> = {};
+  let activePipeline = 0;
+  let wonValue = 0;
+  let lostValue = 0;
+  let wonCount = 0;
+  let lostCount = 0;
+  for (const d of deals) {
+    stageCounts[d.stage] = (stageCounts[d.stage] ?? 0) + 1;
+    const val = Number(d.value);
+    if (d.stage === "won") { wonValue += val; wonCount++; }
+    else if (d.stage === "lost") { lostValue += val; lostCount++; }
+    else { activePipeline += val; }
+  }
+
+  const closedCount = wonCount + lostCount;
+  const winRate = closedCount > 0 ? Math.round((wonCount / closedCount) * 100) : 0;
+  const avgDealSize = deals.length > 0 ? Math.round(deals.reduce((s, d) => s + Number(d.value), 0) / deals.length) : 0;
+
+  const lines: string[] = [];
+  lines.push(`## CRM Summary`);
+  lines.push(`**Contacts:** ${contacts.length} total — ${Object.entries(statusCounts).map(([s, n]) => `${n} ${s}`).join(", ") || "none"}`);
+  lines.push(`**Companies:** ${companiesRes.count ?? 0}`);
+  lines.push(`**Deals:** ${deals.length} total — ${Object.entries(stageCounts).map(([s, n]) => `${n} ${s}`).join(", ") || "none"}`);
+  lines.push(`**Active Pipeline:** $${activePipeline.toLocaleString()}`);
+  lines.push(`**Won:** $${wonValue.toLocaleString()} (${wonCount} deals)`);
+  lines.push(`**Lost:** $${lostValue.toLocaleString()} (${lostCount} deals)`);
+  lines.push(`**Win Rate:** ${winRate}%`);
+  lines.push(`**Average Deal Size:** $${avgDealSize.toLocaleString()}`);
+  lines.push(`**Activities (last 7 days):** ${activitiesRes.data?.length ?? 0}`);
+
+  return { success: true, message: lines.join("\n") };
+}
+
+/* ── Create Product ───────────────────────────────────── */
+
+async function handleCreateProduct(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name?.trim()) return { success: false, message: "Product name is required." };
+
+  const { error } = await supabase.from("crm_products").insert({
+    user_id: userId,
+    name: name.trim(),
+    sku: ((input.sku as string) ?? "").trim(),
+    category: ((input.category as string) ?? "").trim(),
+    unit_price: (input.unit_price as number) ?? 0,
+    description: ((input.description as string) ?? "").trim(),
+  });
+  if (error) return { success: false, message: `Failed to create product: ${error.message}` };
+  return { success: true, message: `Product "${name}" created successfully.` };
+}
+
+/* ── Add Deal Line Item ───────────────────────────────── */
+
+async function handleAddDealLineItem(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const dealTitle = input.deal_title as string;
+  const productName = input.product_name as string;
+  if (!dealTitle?.trim()) return { success: false, message: "Deal title is required." };
+  if (!productName?.trim()) return { success: false, message: "Product name is required." };
+
+  // Find the deal
+  const { data: deals } = await supabase.from("crm_deals").select("id").ilike("title", dealTitle.trim());
+  if (!deals?.length) return { success: false, message: `Deal "${dealTitle}" not found.` };
+  const dealId = deals[0].id;
+
+  // Find the product
+  const { data: products } = await supabase.from("crm_products").select("id, name, unit_price").ilike("name", productName.trim());
+  const product = products?.[0];
+  if (!product) return { success: false, message: `Product "${productName}" not found in catalog. Create it first.` };
+
+  const qty = (input.quantity as number) || 1;
+  const price = (input.unit_price as number) ?? product.unit_price ?? 0;
+  const discount = (input.discount as number) ?? 0;
+  const total = Math.round(qty * price * (1 - discount / 100) * 100) / 100;
+
+  const { error } = await supabase.from("crm_deal_line_items").insert({
+    user_id: userId,
+    deal_id: dealId,
+    product_id: product.id,
+    product_name: product.name,
+    quantity: qty,
+    unit_price: price,
+    discount,
+    total,
+  });
+  if (error) return { success: false, message: `Failed to add line item: ${error.message}` };
+  return { success: true, message: `Added ${qty}x "${product.name}" to deal "${dealTitle}" (total: $${total.toLocaleString()}).` };
+}
+
+/* ── Add Company Asset ────────────────────────────────── */
+
+async function handleAddCompanyAsset(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const companyName = input.company_name as string;
+  const productName = input.product_name as string;
+  if (!companyName?.trim()) return { success: false, message: "Company name is required." };
+  if (!productName?.trim()) return { success: false, message: "Product name is required." };
+
+  // Find the company
+  const { data: companies } = await supabase.from("crm_companies").select("id").ilike("name", companyName.trim());
+  if (!companies?.length) return { success: false, message: `Company "${companyName}" not found.` };
+  const companyId = companies[0].id;
+
+  // Find the product
+  const { data: products } = await supabase.from("crm_products").select("id, name").ilike("name", productName.trim());
+  const product = products?.[0];
+  if (!product) return { success: false, message: `Product "${productName}" not found in catalog. Create it first.` };
+
+  const { error } = await supabase.from("crm_company_assets").insert({
+    user_id: userId,
+    company_id: companyId,
+    product_id: product.id,
+    product_name: product.name,
+    quantity: (input.quantity as number) || 1,
+    purchase_date: ((input.purchase_date as string) ?? ""),
+    renewal_date: ((input.renewal_date as string) ?? ""),
+    annual_value: (input.annual_value as number) ?? 0,
+    status: ((input.status as string) ?? "active"),
+  });
+  if (error) return { success: false, message: `Failed to add asset: ${error.message}` };
+  return { success: true, message: `Added "${product.name}" to ${companyName}'s installed base.` };
 }

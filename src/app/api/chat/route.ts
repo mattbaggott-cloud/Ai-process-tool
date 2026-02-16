@@ -42,13 +42,22 @@ function buildSystemPrompt(data: {
   chatFileContents: { name: string; content: string }[];
   currentPage: string;
   retrievedContext: SearchResult[];
+  crmSummary: {
+    contactTotal: number;
+    contactByStatus: Record<string, number>;
+    companyTotal: number;
+    dealTotal: number;
+    dealByStage: Record<string, number>;
+    pipelineValue: number;
+    recentActivities: number;
+  };
 }): string {
   const {
     email, userProfile, organization,
     teams, teamRoles, teamKpis, teamTools,
     goalSummary, painPointSummary, librarySummary,
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
-    chatFileContents, currentPage, retrievedContext,
+    chatFileContents, currentPage, retrievedContext, crmSummary,
   } = data;
 
   /* Group team child data by team_id */
@@ -100,6 +109,9 @@ You can take actions in the user's workspace using tools:
 - Search the tool catalog for tool details, features, pricing, and comparisons
 - Add or remove tools from the user's tech stack
 - Compare 2-3 tools side by side from the catalog
+- Manage CRM: create/update contacts, companies, deals, and activities
+- Search CRM records and get pipeline summaries
+- Move deals through pipeline stages (lead → qualified → proposal → negotiation → won/lost)
 - Create new projects in the workspace
 - Add content to project canvases (text, headings, images, dividers)
 - Generate workflow flows from natural language descriptions (process flows, pipelines, automation diagrams)
@@ -225,6 +237,20 @@ ${currentPage}
     if (librarySummary.items > 0) prompt += `Notes & Documents: ${librarySummary.items}\n`;
     if (librarySummary.files > 0) prompt += `Files: ${librarySummary.files}\n`;
     prompt += `(Detailed library content is retrieved via semantic search when relevant to your question)\n`;
+  }
+
+  /* ── CRM Summary ── */
+  if (crmSummary.contactTotal > 0 || crmSummary.companyTotal > 0 || crmSummary.dealTotal > 0) {
+    prompt += `\n## CRM Summary\n`;
+    if (crmSummary.contactTotal > 0) {
+      prompt += `**Contacts:** ${crmSummary.contactTotal} — ${Object.entries(crmSummary.contactByStatus).map(([s, n]) => `${n} ${s}`).join(", ")}\n`;
+    }
+    if (crmSummary.companyTotal > 0) prompt += `**Companies:** ${crmSummary.companyTotal}\n`;
+    if (crmSummary.dealTotal > 0) {
+      prompt += `**Deals:** ${crmSummary.dealTotal} — ${Object.entries(crmSummary.dealByStage).map(([s, n]) => `${n} ${s}`).join(", ")}\n`;
+      prompt += `**Pipeline Value:** $${crmSummary.pipelineValue.toLocaleString()}\n`;
+    }
+    if (crmSummary.recentActivities > 0) prompt += `**Activities (last 7 days):** ${crmSummary.recentActivities}\n`;
   }
 
   /* ── Tech Stack ── */
@@ -436,6 +462,11 @@ export async function POST(req: Request) {
     { data: catalogCategories },
     { data: projects },
     { data: dashboardsData },
+    // CRM lean queries
+    { data: crmContacts },
+    { data: crmCompanies },
+    { data: crmDeals },
+    { data: crmRecentActivities },
   ] = await Promise.all([
     supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
@@ -452,6 +483,11 @@ export async function POST(req: Request) {
     supabase.from("tool_catalog").select("category, subcategory"),
     supabase.from("projects").select("*").order("created_at", { ascending: false }),
     supabase.from("dashboards").select("id, name, widgets").eq("user_id", user.id).order("created_at"),
+    // CRM
+    supabase.from("crm_contacts").select("status"),
+    supabase.from("crm_companies").select("id", { count: "exact", head: true }),
+    supabase.from("crm_deals").select("stage, value"),
+    supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
   ]);
 
   /* Build goal summary */
@@ -507,6 +543,29 @@ export async function POST(req: Request) {
   }
   catalogSubcategories.sort((a, b) => a.category.localeCompare(b.category) || b.count - a.count);
 
+  /* CRM summary */
+  const crmContactStatusCounts: Record<string, number> = {};
+  for (const c of crmContacts ?? []) {
+    const s = (c.status as string) || "lead";
+    crmContactStatusCounts[s] = (crmContactStatusCounts[s] ?? 0) + 1;
+  }
+  const crmDealStageCounts: Record<string, number> = {};
+  let crmPipelineValue = 0;
+  for (const d of crmDeals ?? []) {
+    const s = (d.stage as string) || "lead";
+    crmDealStageCounts[s] = (crmDealStageCounts[s] ?? 0) + 1;
+    if (s !== "lost") crmPipelineValue += Number(d.value ?? 0);
+  }
+  const crmSummary = {
+    contactTotal: crmContacts?.length ?? 0,
+    contactByStatus: crmContactStatusCounts,
+    companyTotal: crmCompanies?.length ?? 0,
+    dealTotal: crmDeals?.length ?? 0,
+    dealByStage: crmDealStageCounts,
+    pipelineValue: crmPipelineValue,
+    recentActivities: crmRecentActivities?.length ?? 0,
+  };
+
   /* 6. Build system prompt */
   const systemPrompt = buildSystemPrompt({
     email: user.email ?? "User",
@@ -527,6 +586,7 @@ export async function POST(req: Request) {
     chatFileContents: chatFileContents ?? [],
     currentPage: currentPage ?? "/",
     retrievedContext,
+    crmSummary,
   });
 
   /* 7. Call Claude with streaming + tool use */

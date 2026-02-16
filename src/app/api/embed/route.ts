@@ -44,6 +44,7 @@ export async function POST(req: Request) {
     "goals", "sub_goals", "pain_points",
     "library_items", "library_files",
     "organization_files", "team_files",
+    "crm_contacts", "crm_companies", "crm_deals", "crm_activities",
   ];
 
   if (!EMBEDDABLE_TABLES.includes(sourceTable)) {

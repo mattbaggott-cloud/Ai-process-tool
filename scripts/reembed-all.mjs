@@ -130,6 +130,82 @@ function buildChunks(sourceTable, sourceId, record) {
       }
       break;
     }
+    case "crm_contacts": {
+      const parts = [
+        record.first_name && record.last_name
+          ? `${record.first_name} ${record.last_name}`
+          : record.first_name || record.last_name,
+        record.title && `Title: ${record.title}`,
+        record.email && `Email: ${record.email}`,
+        record.phone && `Phone: ${record.phone}`,
+        record.status && `Status: ${record.status}`,
+        record.source && `Source: ${record.source}`,
+        record.notes && `Notes: ${record.notes}`,
+        record.tags?.length && `Tags: ${record.tags.join(", ")}`,
+      ].filter(Boolean);
+      if (parts.length > 0) {
+        chunks.push({
+          index: 0,
+          text: parts.join(" | "),
+          metadata: { name: `${record.first_name || ""} ${record.last_name || ""}`.trim(), status: record.status, email: record.email },
+        });
+      }
+      break;
+    }
+    case "crm_companies": {
+      const parts = [
+        record.name,
+        record.industry && `Industry: ${record.industry}`,
+        record.size && `Size: ${record.size}`,
+        record.description,
+        record.domain && `Domain: ${record.domain}`,
+        record.website && `Website: ${record.website}`,
+      ].filter(Boolean);
+      if (parts.length > 0) {
+        chunks.push({
+          index: 0,
+          text: parts.join(" | "),
+          metadata: { name: record.name, industry: record.industry, size: record.size },
+        });
+      }
+      break;
+    }
+    case "crm_deals": {
+      const parts = [
+        record.title,
+        record.value && `Value: $${record.value}`,
+        record.stage && `Stage: ${record.stage}`,
+        record.probability != null && `Probability: ${record.probability}%`,
+        record.expected_close_date && `Expected close: ${record.expected_close_date}`,
+        record.notes,
+      ].filter(Boolean);
+      if (parts.length > 0) {
+        chunks.push({
+          index: 0,
+          text: parts.join(" | "),
+          metadata: { title: record.title, stage: record.stage, value: record.value },
+        });
+      }
+      break;
+    }
+    case "crm_activities": {
+      const parts = [
+        record.type && record.subject
+          ? `${record.type.charAt(0).toUpperCase() + record.type.slice(1)}: ${record.subject}`
+          : record.subject,
+        record.description,
+        record.scheduled_at && `Scheduled: ${record.scheduled_at}`,
+        record.completed_at && `Completed: ${record.completed_at}`,
+      ].filter(Boolean);
+      if (parts.length > 0) {
+        chunks.push({
+          index: 0,
+          text: parts.join(" | "),
+          metadata: { subject: record.subject, activity_type: record.type },
+        });
+      }
+      break;
+    }
   }
 
   return chunks;
@@ -183,6 +259,10 @@ const TABLES = [
   { name: "library_files", select: "id, name, text_content" },
   { name: "organization_files", select: "id, name, text_content" },
   { name: "team_files", select: "id, name, text_content" },
+  { name: "crm_contacts", select: "*" },
+  { name: "crm_companies", select: "*" },
+  { name: "crm_deals", select: "*" },
+  { name: "crm_activities", select: "*" },
 ];
 
 let totalChunks = 0;

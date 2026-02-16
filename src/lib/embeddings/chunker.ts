@@ -67,6 +67,14 @@ export function chunkDocument(
     case "organization_files":
     case "team_files":
       return chunkFile(sourceTable, sourceId, record);
+    case "crm_contacts":
+      return chunkCrmContact(sourceId, record);
+    case "crm_companies":
+      return chunkCrmCompany(sourceId, record);
+    case "crm_deals":
+      return chunkCrmDeal(sourceId, record);
+    case "crm_activities":
+      return chunkCrmActivity(sourceId, record);
     default:
       return chunkGeneric(sourceId, record);
   }
@@ -168,6 +176,110 @@ function chunkFile(
       team_id: r.team_id,
     },
   }));
+}
+
+/* ── CRM chunkers ── */
+
+function chunkCrmContact(id: string, r: Record<string, unknown>): Chunk[] {
+  const parts = [
+    r.first_name && r.last_name
+      ? `${r.first_name} ${r.last_name}`
+      : r.first_name || r.last_name,
+    r.title && `Title: ${r.title}`,
+    r.email && `Email: ${r.email}`,
+    r.phone && `Phone: ${r.phone}`,
+    r.status && `Status: ${r.status}`,
+    r.source && `Source: ${r.source}`,
+    r.notes && `Notes: ${r.notes}`,
+    Array.isArray(r.tags) && r.tags.length > 0 && `Tags: ${(r.tags as string[]).join(", ")}`,
+  ].filter(Boolean);
+  const text = parts.join(" | ");
+  if (!text) return [];
+  return [{
+    text,
+    index: 0,
+    metadata: {
+      title: [r.first_name, r.last_name].filter(Boolean).join(" "),
+      type: "crm_contact",
+      status: r.status,
+      email: r.email,
+      company_id: r.company_id,
+    },
+  }];
+}
+
+function chunkCrmCompany(id: string, r: Record<string, unknown>): Chunk[] {
+  const parts = [
+    r.name,
+    r.industry && `Industry: ${r.industry}`,
+    r.size && `Size: ${r.size}`,
+    r.description,
+    r.domain && `Domain: ${r.domain}`,
+    r.website && `Website: ${r.website}`,
+  ].filter(Boolean);
+  const text = parts.join(" | ");
+  if (!text) return [];
+  return [{
+    text,
+    index: 0,
+    metadata: {
+      title: r.name,
+      type: "crm_company",
+      industry: r.industry,
+      size: r.size,
+    },
+  }];
+}
+
+function chunkCrmDeal(id: string, r: Record<string, unknown>): Chunk[] {
+  const parts = [
+    r.title,
+    r.value && `Value: $${r.value}`,
+    r.currency && r.currency !== "USD" && `Currency: ${r.currency}`,
+    r.stage && `Stage: ${r.stage}`,
+    r.probability != null && `Probability: ${r.probability}%`,
+    r.expected_close_date && `Expected close: ${r.expected_close_date}`,
+    r.notes,
+  ].filter(Boolean);
+  const text = parts.join(" | ");
+  if (!text) return [];
+  return [{
+    text,
+    index: 0,
+    metadata: {
+      title: r.title,
+      type: "crm_deal",
+      stage: r.stage,
+      value: r.value,
+      contact_id: r.contact_id,
+      company_id: r.company_id,
+    },
+  }];
+}
+
+function chunkCrmActivity(id: string, r: Record<string, unknown>): Chunk[] {
+  const parts = [
+    r.type && r.subject
+      ? `${String(r.type).charAt(0).toUpperCase() + String(r.type).slice(1)}: ${r.subject}`
+      : r.subject,
+    r.description,
+    r.scheduled_at && `Scheduled: ${r.scheduled_at}`,
+    r.completed_at && `Completed: ${r.completed_at}`,
+  ].filter(Boolean);
+  const text = parts.join(" | ");
+  if (!text) return [];
+  return [{
+    text,
+    index: 0,
+    metadata: {
+      title: r.subject,
+      type: "crm_activity",
+      activity_type: r.type,
+      contact_id: r.contact_id,
+      company_id: r.company_id,
+      deal_id: r.deal_id,
+    },
+  }];
 }
 
 function chunkGeneric(id: string, r: Record<string, unknown>): Chunk[] {

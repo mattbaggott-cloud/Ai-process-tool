@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
+import { useLayout } from "@/context/LayoutContext";
 
 interface Message {
   role: "user" | "assistant";
@@ -10,6 +11,7 @@ interface Message {
 }
 
 export default function AIChat() {
+  const { toggleChat } = useLayout();
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -118,8 +120,24 @@ export default function AIChat() {
     <aside className="ai-panel">
       {/* ─── Header ─── */}
       <div className="ai-panel-header">
-        <h2 className="ai-panel-title">AI Copilot</h2>
-        <p className="ai-panel-subtitle">Context-aware assistant</p>
+        <span className="ai-panel-header-icon">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+            <path d="M7 0.5L10.5 4.5L7 8.5L3.5 4.5Z" opacity="0.85" />
+            <path d="M2 8v1.5a4 4 0 004 4h2a4 4 0 004-4V8" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="ai-panel-title">AI Copilot</span>
+        <span className="ai-panel-header-spacer" />
+        <button
+          className="ai-panel-close-btn"
+          onClick={toggleChat}
+          title="Close AI Copilot"
+          aria-label="Close AI Copilot"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M5 3l4 4-4 4" />
+          </svg>
+        </button>
       </div>
 
       {/* ─── Messages ─── */}

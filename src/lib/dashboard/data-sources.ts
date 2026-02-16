@@ -52,6 +52,46 @@ const projectModeColors: Record<string, string> = {
   "chat":     "#16a34a",
 };
 
+/* ── CRM color maps ── */
+
+const dealStageColors: Record<string, string> = {
+  "lead":        "#2563eb",
+  "qualified":   "#7c3aed",
+  "proposal":    "#d97706",
+  "negotiation": "#ea580c",
+  "won":         "#16a34a",
+  "lost":        "#dc2626",
+};
+
+const contactStatusColors: Record<string, string> = {
+  "lead":     "#2563eb",
+  "active":   "#059669",
+  "inactive": "#6b7280",
+  "churned":  "#dc2626",
+};
+
+const companySizeColors: Record<string, string> = {
+  "startup":    "#06b6d4",
+  "small":      "#2563eb",
+  "medium":     "#7c3aed",
+  "large":      "#ea580c",
+  "enterprise": "#dc2626",
+};
+
+const activityTypeColors: Record<string, string> = {
+  "call":    "#2563eb",
+  "email":   "#7c3aed",
+  "meeting": "#059669",
+  "note":    "#6b7280",
+  "task":    "#d97706",
+};
+
+const assetStatusColors: Record<string, string> = {
+  "active":    "#059669",
+  "expired":   "#d97706",
+  "cancelled": "#6b7280",
+};
+
 /* ── Registry ── */
 
 export const DATA_SOURCES: Record<string, DataSourceDef> = {
@@ -148,6 +188,105 @@ export const DATA_SOURCES: Record<string, DataSourceDef> = {
       { key: "active_mode", label: "Mode" },
     ],
     colorMap: { active_mode: projectModeColors },
+  },
+
+  /* ── CRM Data Sources ── */
+
+  crm_deals: {
+    label: "Deals",
+    table: "crm_deals",
+    metrics: [
+      { key: "count", label: "Deal Count" },
+      { key: "sum:value", label: "Total Value" },
+    ],
+    dimensions: [
+      { key: "stage", label: "Stage" },
+      { key: "company_id", label: "Company" },
+      { key: "contact_id", label: "Contact" },
+    ],
+    colorMap: { stage: dealStageColors },
+  },
+
+  crm_contacts: {
+    label: "Contacts",
+    table: "crm_contacts",
+    metrics: [
+      { key: "count", label: "Contact Count" },
+    ],
+    dimensions: [
+      { key: "status", label: "Status" },
+      { key: "source", label: "Source" },
+      { key: "company_id", label: "Company" },
+    ],
+    colorMap: { status: contactStatusColors },
+  },
+
+  crm_companies: {
+    label: "Companies",
+    table: "crm_companies",
+    metrics: [
+      { key: "count", label: "Company Count" },
+      { key: "sum:annual_revenue", label: "Total Revenue" },
+      { key: "sum:employees", label: "Total Employees" },
+    ],
+    dimensions: [
+      { key: "size", label: "Size" },
+      { key: "industry", label: "Industry" },
+      { key: "sector", label: "Sector" },
+    ],
+    colorMap: { size: companySizeColors },
+  },
+
+  crm_activities: {
+    label: "Activities",
+    table: "crm_activities",
+    metrics: [
+      { key: "count", label: "Activity Count" },
+    ],
+    dimensions: [
+      { key: "type", label: "Type" },
+      { key: "deal_id", label: "Deal" },
+      { key: "contact_id", label: "Contact" },
+    ],
+    colorMap: { type: activityTypeColors },
+  },
+
+  crm_products: {
+    label: "Products",
+    table: "crm_products",
+    metrics: [
+      { key: "count", label: "Product Count" },
+    ],
+    dimensions: [
+      { key: "category", label: "Category" },
+      { key: "is_active", label: "Active Status" },
+    ],
+  },
+
+  crm_deal_line_items: {
+    label: "Deal Line Items",
+    table: "crm_deal_line_items",
+    metrics: [
+      { key: "count", label: "Line Item Count" },
+      { key: "sum:total", label: "Total Revenue" },
+    ],
+    dimensions: [
+      { key: "product_name", label: "Product" },
+    ],
+  },
+
+  crm_company_assets: {
+    label: "Company Assets",
+    table: "crm_company_assets",
+    metrics: [
+      { key: "count", label: "Asset Count" },
+      { key: "sum:annual_value", label: "Total Annual Value" },
+    ],
+    dimensions: [
+      { key: "status", label: "Status" },
+      { key: "product_name", label: "Product" },
+    ],
+    colorMap: { status: assetStatusColors },
   },
 };
 

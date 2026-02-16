@@ -13,6 +13,7 @@ import GlobalSearch from "./GlobalSearch";
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
   { label: "Dashboards", href: "/dashboards",  icon: "chart" },
+  { label: "CRM",        href: "/crm",         icon: "briefcase" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
 ];
@@ -57,6 +58,11 @@ const icons: Record<string, React.ReactNode> = {
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="5.5" cy="5.5" r="2" /><path d="M1.5 13.5a4 4 0 0 1 8 0" />
       <circle cx="11" cy="5.5" r="1.5" /><path d="M14.5 13.5a3 3 0 0 0-4.5-2.6" />
+    </svg>
+  ),
+  briefcase: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="5" width="12" height="9" rx="1" /><path d="M6 5V3.5A1.5 1.5 0 0 1 7.5 2h1A1.5 1.5 0 0 1 10 3.5V5" /><path d="M2 9h12" />
     </svg>
   ),
   layout: (
@@ -211,6 +217,15 @@ export default function Sidebar() {
               Goals & Pain Points
             </Link>
           )}
+          {!sidebarCollapsed && (
+            <Link
+              href="/organization/products"
+              prefetch={false}
+              className={`nav-item-sub ${isActive("/organization/products") ? "active" : ""}`}
+            >
+              Products
+            </Link>
+          )}
 
           {/* Teams */}
           <Link
@@ -233,6 +248,7 @@ export default function Sidebar() {
                 {t.name}
               </Link>
             ))}
+
         </div>
 
         {/* ─── Workspace ─── */}

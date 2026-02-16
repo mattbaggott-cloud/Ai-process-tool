@@ -25,6 +25,10 @@ const TABLE_ROUTES: Record<string, string> = {
   library_files: "/library",
   organization_files: "/organization",
   team_files: "/teams",
+  crm_contacts: "/crm?tab=contacts",
+  crm_companies: "/crm?tab=companies",
+  crm_deals: "/crm?tab=deals",
+  crm_activities: "/crm?tab=activities",
 };
 
 const TABLE_LABELS: Record<string, string> = {
@@ -35,6 +39,10 @@ const TABLE_LABELS: Record<string, string> = {
   library_files: "File",
   organization_files: "Org Doc",
   team_files: "Team Doc",
+  crm_contacts: "Contact",
+  crm_companies: "Company",
+  crm_deals: "Deal",
+  crm_activities: "Activity",
 };
 
 const TABLE_COLORS: Record<string, string> = {
@@ -45,6 +53,10 @@ const TABLE_COLORS: Record<string, string> = {
   library_files: "#6366f1",
   organization_files: "#059669",
   team_files: "#0891b2",
+  crm_contacts: "#0d9488",
+  crm_companies: "#4f46e5",
+  crm_deals: "#d97706",
+  crm_activities: "#64748b",
 };
 
 /* ── Component ─────────────────────────────────────────── */
