@@ -1043,5 +1043,105 @@ Always include a start and end node. Map document sections/steps to process node
         required: ["csv_content", "target_table", "field_mappings"],
       },
     },
+
+    /* ── CRM Reports ─────────────────────────────────────── */
+    {
+      name: "create_report",
+      description:
+        "Create a saved CRM report with configurable columns and filters. Use when the user asks to build, create, or generate a report, or wants to see a filtered list of CRM data. The report is saved and viewable in CRM → Reports tab. Available column keys per entity type: contacts: first_name, last_name, email, phone, title, status, source, company_name, tags, created_at, updated_at. companies: name, domain, industry, size, website, phone, address, annual_revenue, employees, sector, account_owner, contact_count, deal_count, created_at. deals: title, value, stage, probability, expected_close_date, contact_name, company_name, close_reason, lost_to, closed_at, created_at. activities: type, subject, description, contact_name, company_name, scheduled_at, completed_at, created_at. Custom fields use 'cf:field_key' prefix. Filter operators: text fields support 'contains', 'equals', 'not_equals', 'starts_with'. Number/currency fields support 'equals', 'gt', 'gte', 'lt', 'lte'. Date fields support 'before', 'after', 'equals'. Select fields (status, stage, size, source, type) support 'is', 'is_not'.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Name for the report (e.g., 'Active Leads Q1', 'Enterprise Companies by Revenue')",
+          },
+          entity_type: {
+            type: "string",
+            enum: ["contacts", "companies", "deals", "activities"],
+            description: "Which CRM entity to report on",
+          },
+          description: {
+            type: "string",
+            description: "Optional description of what this report shows",
+          },
+          columns: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of column keys to display. If omitted, defaults to the entity's default visible columns.",
+          },
+          filters: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string", description: "Field key to filter on" },
+                operator: {
+                  type: "string",
+                  enum: ["equals", "not_equals", "contains", "starts_with", "gt", "gte", "lt", "lte", "before", "after", "is", "is_not", "is_empty", "is_not_empty", "is_true", "is_false"],
+                  description: "Filter operator",
+                },
+                value: { type: "string", description: "Filter value" },
+              },
+              required: ["field", "operator", "value"],
+            },
+            description: "Array of filter conditions. Each has field, operator, and value.",
+          },
+          sort_field: {
+            type: "string",
+            description: "Field to sort by. Defaults to 'created_at'.",
+          },
+          sort_direction: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort direction. Defaults to 'desc'.",
+          },
+        },
+        required: ["name", "entity_type"],
+      },
+    },
+    {
+      name: "update_report",
+      description:
+        "Update an existing CRM report's columns, filters, name, or sort config. Use when the user asks to modify, update, add columns to, or change filters on a report they are currently viewing. The report_id is available from the active report context. Only specified fields are updated — omitted fields remain unchanged.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          report_id: {
+            type: "string",
+            description: "The UUID of the report to update (from active report context)",
+          },
+          name: {
+            type: "string",
+            description: "New name for the report (optional)",
+          },
+          description: {
+            type: "string",
+            description: "New description (optional)",
+          },
+          columns: {
+            type: "array",
+            items: { type: "string" },
+            description: "Full replacement list of column keys. Include ALL desired columns, not just new ones.",
+          },
+          filters: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string" },
+                operator: { type: "string" },
+                value: { type: "string" },
+              },
+              required: ["field", "operator", "value"],
+            },
+            description: "Full replacement list of filters.",
+          },
+          sort_field: { type: "string", description: "Field to sort by" },
+          sort_direction: { type: "string", enum: ["asc", "desc"], description: "Sort direction" },
+        },
+        required: ["report_id"],
+      },
+    },
   ];
 }

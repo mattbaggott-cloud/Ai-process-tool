@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge, ActivityIcon, ActivityLabel, DealValue, formatCurrency } from "@/components/crm/shared";
+import CustomFieldsSection from "@/components/crm/CustomFieldsSection";
 import type { CrmContact, CrmCompany, CrmDeal, CrmActivity, ContactStatus } from "@/lib/types/database";
 
 const STATUS_OPTIONS: ContactStatus[] = ["lead", "active", "inactive", "churned"];
@@ -232,6 +233,16 @@ export default function ContactDetailPage() {
               <div className="crm-detail-notes">{contact.notes}</div>
             </div>
           )}
+
+          {/* Custom Fields */}
+          <div style={{ gridColumn: "1 / -1" }}>
+            <CustomFieldsSection
+              tableName="crm_contacts"
+              metadata={(contact.metadata as Record<string, unknown>) || {}}
+              entityId={contact.id}
+              onUpdate={loadData}
+            />
+          </div>
         </div>
       )}
 

@@ -8,6 +8,7 @@ import {
   SizeBadge, StatusBadge, DealValue, ActivityIcon, ActivityLabel,
   AssetStatusBadge, formatCurrency, DEAL_STAGES,
 } from "@/components/crm/shared";
+import CustomFieldsSection from "@/components/crm/CustomFieldsSection";
 import type { CrmCompany, CrmContact, CrmDeal, CrmActivity, CrmCompanyAsset, CrmProduct, CompanySize } from "@/lib/types/database";
 
 const SIZE_OPTIONS: CompanySize[] = ["", "startup", "small", "medium", "large", "enterprise"];
@@ -293,6 +294,14 @@ export default function CompanyDetailPage() {
             </div>
             {company.description && <div className="crm-detail-notes" style={{ marginTop: 12 }}>{company.description}</div>}
           </div>
+
+          {/* Custom Fields */}
+          <CustomFieldsSection
+            tableName="crm_companies"
+            metadata={(company.metadata as Record<string, unknown>) || {}}
+            entityId={company.id}
+            onUpdate={loadData}
+          />
         </>
       )}
 

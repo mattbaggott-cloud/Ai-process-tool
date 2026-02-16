@@ -6,7 +6,6 @@ import ContactsTab from "@/components/crm/ContactsTab";
 import CompaniesTab from "@/components/crm/CompaniesTab";
 import DealsTab from "@/components/crm/DealsTab";
 import ActivitiesTab from "@/components/crm/ActivitiesTab";
-
 const TABS = [
   { key: "contacts", label: "Contacts" },
   { key: "companies", label: "Companies" },

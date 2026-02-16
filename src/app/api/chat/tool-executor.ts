@@ -93,6 +93,10 @@ export async function executeTool(
         return await handleAddCompanyAsset(input, supabase, userId);
       case "import_csv_data":
         return await handleImportCsvData(input, supabase, userId);
+      case "create_report":
+        return await handleCreateReport(input, supabase, userId);
+      case "update_report":
+        return await handleUpdateReport(input, supabase, userId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -2046,6 +2050,112 @@ async function handleAddCompanyAsset(
   });
   if (error) return { success: false, message: `Failed to add asset: ${error.message}` };
   return { success: true, message: `Added "${product.name}" to ${companyName}'s installed base.` };
+}
+
+/* ── create_report ────────────────────────────────────────── */
+
+const DEFAULT_VISIBLE_COLUMNS: Record<string, string[]> = {
+  contacts: ["first_name", "last_name", "email", "status", "company_name"],
+  companies: ["name", "industry", "size"],
+  deals: ["title", "value", "stage", "expected_close_date"],
+  activities: ["type", "subject", "contact_name", "created_at"],
+};
+
+async function handleCreateReport(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const name = (input.name as string)?.trim();
+  const entityType = (input.entity_type as string)?.trim();
+
+  if (!name) return { success: false, message: "Report name is required." };
+  if (!entityType || !["contacts", "companies", "deals", "activities"].includes(entityType)) {
+    return { success: false, message: "entity_type must be one of: contacts, companies, deals, activities." };
+  }
+
+  const description = ((input.description as string) ?? "").trim();
+  const columns = (input.columns as string[]) ?? DEFAULT_VISIBLE_COLUMNS[entityType] ?? [];
+  const filters = (input.filters as Array<{ field: string; operator: string; value: string }>) ?? [];
+  const sortField = ((input.sort_field as string) ?? "created_at").trim();
+  const sortDirection = ((input.sort_direction as string) ?? "desc").trim();
+
+  const { data, error } = await supabase
+    .from("crm_reports")
+    .insert({
+      user_id: userId,
+      name,
+      description,
+      entity_type: entityType,
+      columns: JSON.stringify(columns),
+      filters: JSON.stringify(filters),
+      sort_config: JSON.stringify({ field: sortField, direction: sortDirection }),
+    })
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to create report: ${error.message}` };
+
+  const filterDesc = filters.length > 0 ? `, ${filters.length} filter(s)` : "";
+  return {
+    success: true,
+    message: `Created report "${data.name}" — ${entityType} with ${columns.length} column(s)${filterDesc}. View it in CRM → Reports tab.`,
+  };
+}
+
+/* ── update_report ───────────────────────────────────────── */
+
+async function handleUpdateReport(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const reportId = (input.report_id as string)?.trim();
+  if (!reportId) return { success: false, message: "report_id is required." };
+
+  // Build partial update
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.name) updates.name = (input.name as string).trim();
+  if (input.description !== undefined) updates.description = (input.description as string).trim();
+  if (input.columns) updates.columns = JSON.stringify(input.columns);
+  if (input.filters) updates.filters = JSON.stringify(input.filters);
+  if (input.sort_field || input.sort_direction) {
+    // Fetch existing sort config to merge
+    const { data: existing } = await supabase
+      .from("crm_reports")
+      .select("sort_config")
+      .eq("id", reportId)
+      .eq("user_id", userId)
+      .single();
+    const existingSort = typeof existing?.sort_config === "string"
+      ? JSON.parse(existing.sort_config)
+      : existing?.sort_config ?? { field: "created_at", direction: "desc" };
+    updates.sort_config = JSON.stringify({
+      field: (input.sort_field as string) ?? existingSort.field,
+      direction: (input.sort_direction as string) ?? existingSort.direction,
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("crm_reports")
+    .update(updates)
+    .eq("id", reportId)
+    .eq("user_id", userId)
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to update report: ${error.message}` };
+
+  const changes: string[] = [];
+  if (input.name) changes.push(`name → "${data.name}"`);
+  if (input.columns) changes.push(`${(input.columns as string[]).length} columns`);
+  if (input.filters) changes.push(`${(input.filters as unknown[]).length} filter(s)`);
+  if (input.sort_field) changes.push(`sort by ${input.sort_field}`);
+
+  return {
+    success: true,
+    message: `Updated report "${data.name}": ${changes.join(", ") || "no changes"}. Refresh the report to see updates.`,
+  };
 }
 
 /* ── import_csv_data ─────────────────────────────────────── */

@@ -56,6 +56,9 @@ export default function AIChat() {
         .filter((f) => f.textContent !== null)
         .map((f) => ({ name: f.name, content: f.textContent! }));
 
+      // Read active report context if on reports page
+      const activeReport = (window as unknown as Record<string, unknown>).__activeReport ?? null;
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -64,6 +67,7 @@ export default function AIChat() {
             messages: updatedMessages,
             currentPage: pathname,
             chatFileContents,
+            activeReport,
           }),
         });
 

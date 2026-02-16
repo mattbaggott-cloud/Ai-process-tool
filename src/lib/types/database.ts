@@ -489,6 +489,60 @@ export interface CrmActivity {
   created_at: string;
 }
 
+/* ── CRM Custom Fields ───────────────────────────────── */
+
+export type CustomFieldType = 'text' | 'number' | 'date' | 'boolean' | 'select';
+
+export interface CrmCustomField {
+  id: string;
+  user_id: string;
+  table_name: string;
+  field_key: string;
+  field_label: string;
+  field_type: CustomFieldType;
+  is_required: boolean;
+  options: string[];
+  sort_order: number;
+  created_at: string;
+}
+
+/* ── CRM Reports ────────────────────────────────────── */
+
+export type ReportEntityType = 'contacts' | 'companies' | 'deals' | 'activities';
+
+export type FilterOperator =
+  | 'equals' | 'not_equals'
+  | 'contains' | 'starts_with'
+  | 'gt' | 'gte' | 'lt' | 'lte'
+  | 'before' | 'after'
+  | 'is_true' | 'is_false'
+  | 'is' | 'is_not'
+  | 'is_empty' | 'is_not_empty';
+
+export interface ReportFilter {
+  field: string;
+  operator: FilterOperator;
+  value: string;
+}
+
+export interface ReportSortConfig {
+  field: string;
+  direction: 'asc' | 'desc';
+}
+
+export interface CrmReport {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  entity_type: ReportEntityType;
+  columns: string[];
+  filters: ReportFilter[];
+  sort_config: ReportSortConfig;
+  created_at: string;
+  updated_at: string;
+}
+
 /* ── Data Home types ──────────────────────────────────── */
 
 export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'dynamics' | 'sharepoint' | 'google_workspace';

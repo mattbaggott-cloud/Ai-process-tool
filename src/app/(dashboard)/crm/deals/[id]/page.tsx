@@ -14,6 +14,7 @@ import {
   formatCurrency,
   CloseReasonModal,
 } from "@/components/crm/shared";
+import CustomFieldsSection from "@/components/crm/CustomFieldsSection";
 import type {
   CrmDeal,
   CrmContact,
@@ -434,6 +435,14 @@ export default function DealDetailPage() {
             <div className="crm-detail-field"><span className="crm-field-label">Created</span><span>{fmt(deal.created_at)}</span></div>
           </div>
         </div>
+
+        {/* Custom Fields */}
+        <CustomFieldsSection
+          tableName="crm_deals"
+          metadata={(deal.metadata as Record<string, unknown>) || {}}
+          entityId={deal.id}
+          onUpdate={loadData}
+        />
 
         {/* Close Info (only if won/lost) */}
         {isClosed && (

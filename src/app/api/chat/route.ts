@@ -11,6 +11,7 @@ interface ChatRequest {
   messages: { role: "user" | "assistant"; content: string }[];
   currentPage: string;
   chatFileContents: { name: string; content: string }[];
+  activeReport?: Record<string, unknown> | null;
 }
 
 /* ── Truncation helpers ────────────────────────────────── */
@@ -50,14 +51,16 @@ function buildSystemPrompt(data: {
     dealByStage: Record<string, number>;
     pipelineValue: number;
     recentActivities: number;
+    reportCount: number;
   };
+  activeReport: Record<string, unknown> | null;
 }): string {
   const {
     email, userProfile, organization,
     teams, teamRoles, teamKpis, teamTools,
     goalSummary, painPointSummary, librarySummary,
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
-    chatFileContents, currentPage, retrievedContext, crmSummary,
+    chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
   } = data;
 
   /* Group team child data by team_id */
@@ -128,6 +131,20 @@ When the user asks about tools, use search_tool_catalog to look up details. When
 ## User's Current Page
 ${currentPage}
 `;
+
+  /* ── Active Report Context ── */
+  if (activeReport) {
+    prompt += `\n## Currently Viewing Report\n`;
+    prompt += `The user is currently viewing a report. When they ask to modify columns, filters, or settings, use the update_report tool with this report's ID instead of creating a new report.\n`;
+    prompt += `**Report ID:** ${activeReport.id}\n`;
+    prompt += `**Name:** ${activeReport.name}\n`;
+    prompt += `**Entity Type:** ${activeReport.entity_type}\n`;
+    prompt += `**Current Columns:** ${(activeReport.columns as string[])?.join(", ") || "default"}\n`;
+    if ((activeReport.filters as unknown[])?.length > 0) {
+      prompt += `**Filters:** ${JSON.stringify(activeReport.filters)}\n`;
+    }
+    prompt += `**Results:** ${activeReport.resultCount ?? "unknown"} records\n`;
+  }
 
   /* ── User Profile ── */
   if (userProfile) {
@@ -251,6 +268,7 @@ ${currentPage}
       prompt += `**Pipeline Value:** $${crmSummary.pipelineValue.toLocaleString()}\n`;
     }
     if (crmSummary.recentActivities > 0) prompt += `**Activities (last 7 days):** ${crmSummary.recentActivities}\n`;
+    if (crmSummary.reportCount > 0) prompt += `**Reports:** ${crmSummary.reportCount} saved report(s)\n`;
   }
 
   /* ── Tech Stack ── */
@@ -422,7 +440,7 @@ export async function POST(req: Request) {
     return new Response("Invalid JSON", { status: 400 });
   }
 
-  const { messages, currentPage, chatFileContents } = body;
+  const { messages, currentPage, chatFileContents, activeReport } = body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return new Response("Messages array is required", { status: 400 });
@@ -467,6 +485,7 @@ export async function POST(req: Request) {
     { data: crmCompanies },
     { data: crmDeals },
     { data: crmRecentActivities },
+    { count: crmReportCount },
   ] = await Promise.all([
     supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
     supabase.from("organizations").select("*").eq("user_id", user.id).single(),
@@ -488,6 +507,7 @@ export async function POST(req: Request) {
     supabase.from("crm_companies").select("id", { count: "exact", head: true }),
     supabase.from("crm_deals").select("stage, value"),
     supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
+    supabase.from("crm_reports").select("id", { count: "exact", head: true }),
   ]);
 
   /* Build goal summary */
@@ -564,6 +584,7 @@ export async function POST(req: Request) {
     dealByStage: crmDealStageCounts,
     pipelineValue: crmPipelineValue,
     recentActivities: crmRecentActivities?.length ?? 0,
+    reportCount: crmReportCount ?? 0,
   };
 
   /* 6. Build system prompt */
@@ -587,6 +608,7 @@ export async function POST(req: Request) {
     currentPage: currentPage ?? "/",
     retrievedContext,
     crmSummary,
+    activeReport: activeReport ?? null,
   });
 
   /* 7. Call Claude with streaming + tool use */

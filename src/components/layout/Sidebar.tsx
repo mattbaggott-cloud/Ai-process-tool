@@ -14,6 +14,7 @@ const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
   { label: "Dashboards", href: "/dashboards",  icon: "chart" },
   { label: "CRM",        href: "/crm",         icon: "briefcase" },
+  { label: "Reports",    href: "/reports",     icon: "report" },
   { label: "Data",       href: "/data",        icon: "database" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
@@ -81,6 +82,12 @@ const icons: Record<string, React.ReactNode> = {
   chart: (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 13V8M7 13V5M11 13V2" />
+    </svg>
+  ),
+  report: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 2.5h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
+      <path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" />
     </svg>
   ),
 };

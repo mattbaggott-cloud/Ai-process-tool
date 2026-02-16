@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { createClient } from "@/lib/supabase/client";
-import type { DataImport } from "@/lib/types/database";
+import type { DataImport, CrmCustomField, CustomFieldType } from "@/lib/types/database";
 
 /* ── CSV Parser ──────────────────────────────────────────── */
 
@@ -95,10 +95,19 @@ const TARGET_FIELDS: Record<string, { field: string; label: string; required: bo
   ],
 };
 
+/* ── Tables that support custom fields (have metadata JSONB) */
+const CUSTOM_FIELD_TABLES = ["crm_contacts", "crm_companies", "crm_deals"];
+
 /* ── Auto-suggest mapping ────────────────────────────────── */
 
-function suggestMapping(csvHeader: string, fields: { field: string; label: string }[]): string {
+function suggestMapping(
+  csvHeader: string,
+  fields: { field: string; label: string }[],
+  customFields: CrmCustomField[]
+): string {
   const norm = csvHeader.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Check standard fields first
   for (const f of fields) {
     const fNorm = f.field.replace(/_/g, "");
     const lNorm = f.label.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -106,6 +115,16 @@ function suggestMapping(csvHeader: string, fields: { field: string; label: strin
     if (norm.includes(fNorm) || fNorm.includes(norm)) return f.field;
     if (norm.includes(lNorm) || lNorm.includes(norm)) return f.field;
   }
+
+  // Check custom fields
+  for (const cf of customFields) {
+    const keyNorm = cf.field_key.replace(/_/g, "");
+    const labelNorm = cf.field_label.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (norm === keyNorm || norm === labelNorm) return `custom:${cf.field_key}`;
+    if (norm.includes(keyNorm) || keyNorm.includes(norm)) return `custom:${cf.field_key}`;
+    if (norm.includes(labelNorm) || labelNorm.includes(norm)) return `custom:${cf.field_key}`;
+  }
+
   return "";
 }
 
@@ -133,6 +152,48 @@ export default function ImportsTab() {
   const [importId, setImportId] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0, errors: 0 });
   const [importErrors, setImportErrors] = useState<{ row: number; message: string }[]>([]);
+
+  /* ── Custom field state ── */
+  const [customFields, setCustomFields] = useState<CrmCustomField[]>([]);
+  const [creatingFieldFor, setCreatingFieldFor] = useState<string | null>(null); // csv header
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [newFieldType, setNewFieldType] = useState<CustomFieldType>("text");
+  const [creatingField, setCreatingField] = useState(false);
+
+  /* ── Dropdown state ── */
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!openDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openDropdown]);
+
+  /* ── Load custom fields ── */
+  const loadCustomFields = useCallback(async () => {
+    if (!user || !CUSTOM_FIELD_TABLES.includes(targetTable)) {
+      setCustomFields([]);
+      return;
+    }
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("crm_custom_fields")
+      .select("*")
+      .eq("table_name", targetTable)
+      .order("sort_order", { ascending: true });
+    if (data) setCustomFields(data as CrmCustomField[]);
+  }, [user, targetTable]);
+
+  useEffect(() => {
+    loadCustomFields();
+  }, [loadCustomFields]);
 
   /* ── Load import history ── */
   const loadHistory = useCallback(async () => {
@@ -190,10 +251,55 @@ export default function ImportsTab() {
     const fields = TARGET_FIELDS[targetTable] || [];
     const autoMap: Record<string, string> = {};
     csvHeaders.forEach((h) => {
-      autoMap[h] = suggestMapping(h, fields);
+      autoMap[h] = suggestMapping(h, fields, customFields);
     });
     setMappings(autoMap);
     setStep("map");
+  };
+
+  /* ── Create custom field inline ── */
+  const handleCreateCustomField = async (csvHeader: string) => {
+    if (!user || !newFieldLabel.trim()) return;
+    setCreatingField(true);
+
+    const fieldKey = newFieldLabel
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("crm_custom_fields")
+      .insert({
+        user_id: user.id,
+        table_name: targetTable,
+        field_key: fieldKey,
+        field_label: newFieldLabel.trim(),
+        field_type: newFieldType,
+        sort_order: customFields.length,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Failed to create custom field:", error.message);
+      setCreatingField(false);
+      return;
+    }
+
+    // Add to local custom fields
+    const newField = data as CrmCustomField;
+    setCustomFields((prev) => [...prev, newField]);
+
+    // Auto-map this CSV header to the new field
+    setMappings((prev) => ({ ...prev, [csvHeader]: `custom:${fieldKey}` }));
+
+    // Reset inline form
+    setCreatingFieldFor(null);
+    setNewFieldLabel("");
+    setNewFieldType("text");
+    setCreatingField(false);
   };
 
   /* ── Execute import ── */
@@ -232,8 +338,12 @@ export default function ImportsTab() {
       .filter((h) => mappings[h])
       .map((h) => ({ csv: h, field: mappings[h] }));
 
+    // Separate standard vs custom field mappings
+    const standardMappings = activeMappings.filter((m) => !m.field.startsWith("custom:"));
+    const customMappings = activeMappings.filter((m) => m.field.startsWith("custom:"));
+
     // For contacts: resolve company_name → company_id
-    const companyNameMapping = activeMappings.find((m) => m.field === "company_name");
+    const companyNameMapping = standardMappings.find((m) => m.field === "company_name");
     const companyCache: Record<string, string> = {}; // name → id
 
     if (targetTable === "crm_contacts" && companyNameMapping) {
@@ -270,7 +380,11 @@ export default function ImportsTab() {
       const batch = csvRows.slice(i, i + BATCH);
       const insertRows = batch.map((row) => {
         const mapped: Record<string, unknown> = { user_id: user.id };
-        for (const m of activeMappings) {
+
+        // Build metadata from custom fields
+        const metadata: Record<string, unknown> = {};
+
+        for (const m of standardMappings) {
           const val = row[m.csv] ?? "";
           // Handle company_name → company_id for contacts
           if (m.field === "company_name" && targetTable === "crm_contacts") {
@@ -286,6 +400,28 @@ export default function ImportsTab() {
             mapped[m.field] = val;
           }
         }
+
+        // Map custom fields into metadata
+        for (const m of customMappings) {
+          const fieldKey = m.field.replace("custom:", "");
+          const val = row[m.csv] ?? "";
+          // Look up field type for coercion
+          const cfDef = customFields.find((cf) => cf.field_key === fieldKey);
+          if (cfDef?.field_type === "number") {
+            const num = parseFloat(val);
+            metadata[fieldKey] = isNaN(num) ? null : num;
+          } else if (cfDef?.field_type === "boolean") {
+            metadata[fieldKey] = ["true", "yes", "1"].includes(val.toLowerCase());
+          } else {
+            metadata[fieldKey] = val;
+          }
+        }
+
+        // Only set metadata if there are custom values
+        if (Object.keys(metadata).length > 0) {
+          mapped.metadata = metadata;
+        }
+
         // Auto-set source for contacts
         if (targetTable === "crm_contacts") {
           mapped.source = "import";
@@ -345,15 +481,30 @@ export default function ImportsTab() {
     setImportId(null);
     setProgress({ done: 0, total: 0, errors: 0 });
     setImportErrors([]);
+    setCreatingFieldFor(null);
+    setNewFieldLabel("");
+    setNewFieldType("text");
     if (fileRef.current) fileRef.current.value = "";
   };
 
   /* ── Computed values ── */
   const mappedCount = Object.values(mappings).filter(Boolean).length;
+  const customMappedCount = Object.values(mappings).filter((v) => v.startsWith("custom:")).length;
+  const standardMappedCount = mappedCount - customMappedCount;
+  const skippedCount = csvHeaders.length - mappedCount;
   const requiredFields = (TARGET_FIELDS[targetTable] || []).filter((f) => f.required);
   const unmappedRequired = requiredFields.filter(
     (rf) => !Object.values(mappings).includes(rf.field)
   );
+  const supportsCustomFields = CUSTOM_FIELD_TABLES.includes(targetTable);
+
+  /* ── Type chip options ── */
+  const TYPE_CHIPS: { type: CustomFieldType; label: string; icon: string }[] = [
+    { type: "text", label: "Text", icon: "Aa" },
+    { type: "number", label: "Number", icon: "#" },
+    { type: "date", label: "Date", icon: "D" },
+    { type: "boolean", label: "Bool", icon: "?" },
+  ];
 
   /* ── Format helper ── */
   const fmtDate = (d: string) => {
@@ -370,6 +521,19 @@ export default function ImportsTab() {
       failed: { bg: "rgba(220,38,38,0.1)", fg: "#dc2626" },
     };
     return colors[s] || colors.pending;
+  };
+
+  /* ── Helper: get display info for a mapping value ── */
+  const getMappingInfo = (val: string) => {
+    if (!val) return { label: "Select field...", color: "gray" as const, icon: "–" };
+    if (val.startsWith("custom:")) {
+      const key = val.replace("custom:", "");
+      const cf = customFields.find((f) => f.field_key === key);
+      return { label: cf?.field_label || key, color: "blue" as const, icon: "★" };
+    }
+    const stdFields = TARGET_FIELDS[targetTable] || [];
+    const f = stdFields.find((sf) => sf.field === val);
+    return { label: f?.label || val, color: "green" as const, icon: "✓" };
   };
 
   /* ── Render ── */
@@ -487,45 +651,219 @@ export default function ImportsTab() {
           {/* Map Fields */}
           {step === "map" && (
             <div>
-              <div className="data-mapping-header">
-                <span>
-                  {mappedCount} of {csvHeaders.length} columns mapped
-                  {unmappedRequired.length > 0 && (
-                    <span style={{ color: "#dc2626", marginLeft: 8 }}>
-                      ⚠ Missing required: {unmappedRequired.map((f) => f.label).join(", ")}
+              {/* Header with stats + progress */}
+              <div className="data-map-header">
+                <div className="data-map-stats">
+                  {standardMappedCount > 0 && (
+                    <span className="data-map-stat data-map-stat-green">
+                      <span className="data-map-stat-dot" />
+                      {standardMappedCount} mapped
                     </span>
                   )}
-                </span>
-              </div>
-              <div className="data-mapping-grid">
-                <div className="data-mapping-row data-mapping-row-header">
-                  <div className="data-mapping-source">CSV Column</div>
-                  <div className="data-mapping-arrow" />
-                  <div className="data-mapping-target">Target Field</div>
+                  {customMappedCount > 0 && (
+                    <span className="data-map-stat data-map-stat-blue">
+                      <span className="data-map-stat-dot" />
+                      {customMappedCount} custom
+                    </span>
+                  )}
+                  {skippedCount > 0 && (
+                    <span className="data-map-stat data-map-stat-gray">
+                      <span className="data-map-stat-dot" />
+                      {skippedCount} skipped
+                    </span>
+                  )}
+                  {unmappedRequired.length > 0 && (
+                    <span className="data-map-stat data-map-stat-red">
+                      Missing: {unmappedRequired.map((f) => f.label).join(", ")}
+                    </span>
+                  )}
                 </div>
-                {csvHeaders.map((h) => (
-                  <div key={h} className="data-mapping-row">
-                    <div className="data-mapping-source">{h}</div>
-                    <div className="data-mapping-arrow">→</div>
-                    <div className="data-mapping-target">
-                      <select
-                        className="crm-input"
-                        value={mappings[h] || ""}
-                        onChange={(e) =>
-                          setMappings((prev) => ({ ...prev, [h]: e.target.value }))
-                        }
-                      >
-                        <option value="">— Skip —</option>
-                        {(TARGET_FIELDS[targetTable] || []).map((f) => (
-                          <option key={f.field} value={f.field}>
-                            {f.label} {f.required ? "*" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div className="data-map-progress-wrap">
+                  <div className="data-map-progress">
+                    <div
+                      className="data-map-progress-fill"
+                      style={{ width: `${csvHeaders.length > 0 ? (mappedCount / csvHeaders.length) * 100 : 0}%` }}
+                    />
                   </div>
-                ))}
+                </div>
               </div>
+
+              {/* Card list */}
+              <div className="data-map-list">
+                {csvHeaders.map((h) => {
+                  const val = mappings[h] || "";
+                  const info = getMappingInfo(val);
+                  const isCreating = creatingFieldFor === h;
+                  const isCustom = val.startsWith("custom:");
+                  const isMapped = !!val;
+                  const cardColor = isCreating ? "amber" : isCustom ? "blue" : isMapped ? "green" : "gray";
+                  const iconColor = isCreating ? "amber" : isCustom ? "blue" : isMapped ? "green" : "gray";
+                  const sample = csvRows[0]?.[h] || "";
+
+                  return (
+                    <React.Fragment key={h}>
+                      <div className={`data-map-card data-map-card-${cardColor}`}>
+                        {/* Status icon */}
+                        <div className={`data-map-card-icon data-map-card-icon-${iconColor}`}>
+                          {isCreating ? "+" : isMapped ? info.icon : "–"}
+                        </div>
+
+                        {/* Source column */}
+                        <div className="data-map-card-source">
+                          <div className="data-map-card-col">{h}</div>
+                          {sample && (
+                            <div className="data-map-card-sample">
+                              e.g. &ldquo;{sample.length > 32 ? sample.slice(0, 32) + "..." : sample}&rdquo;
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Arrow */}
+                        <div className="data-map-card-arrow">→</div>
+
+                        {/* Target tag + dropdown */}
+                        <div className="data-map-card-target" ref={openDropdown === h ? dropdownRef : undefined}>
+                          <div
+                            className={`data-map-tag data-map-tag-${isMapped ? info.color : "placeholder"}`}
+                            onClick={() => setOpenDropdown(openDropdown === h ? null : h)}
+                          >
+                            {isMapped ? info.label : "Select field..."}
+                            <span className={`data-map-tag-chevron ${openDropdown === h ? "data-map-tag-chevron-open" : ""}`}>
+                              ▾
+                            </span>
+                          </div>
+
+                          {/* Dropdown panel */}
+                          {openDropdown === h && (
+                            <div className="data-map-dropdown">
+                              <div className="data-map-dropdown-scroll">
+                                {/* Skip option */}
+                                <div
+                                  className="data-map-dropdown-skip"
+                                  onClick={() => {
+                                    setMappings((prev) => ({ ...prev, [h]: "" }));
+                                    setOpenDropdown(null);
+                                    if (creatingFieldFor === h) setCreatingFieldFor(null);
+                                  }}
+                                >
+                                  — Skip this column
+                                </div>
+
+                                {/* Standard fields */}
+                                <div className="data-map-dropdown-section">Standard Fields</div>
+                                {(TARGET_FIELDS[targetTable] || []).map((f) => (
+                                  <div
+                                    key={f.field}
+                                    className={`data-map-dropdown-item ${val === f.field ? "data-map-dropdown-item-active" : ""}`}
+                                    onClick={() => {
+                                      setMappings((prev) => ({ ...prev, [h]: f.field }));
+                                      setOpenDropdown(null);
+                                      if (creatingFieldFor === h) setCreatingFieldFor(null);
+                                    }}
+                                  >
+                                    <span>
+                                      {f.label}
+                                      {f.required && <span className="data-map-dropdown-item-req">REQ</span>}
+                                    </span>
+                                    {val === f.field && <span className="data-map-dropdown-item-check">✓</span>}
+                                  </div>
+                                ))}
+
+                                {/* Custom fields */}
+                                {supportsCustomFields && customFields.length > 0 && (
+                                  <>
+                                    <div className="data-map-dropdown-section">Custom Fields</div>
+                                    {customFields.map((cf) => {
+                                      const cfVal = `custom:${cf.field_key}`;
+                                      return (
+                                        <div
+                                          key={cf.field_key}
+                                          className={`data-map-dropdown-item ${val === cfVal ? "data-map-dropdown-item-active" : ""}`}
+                                          onClick={() => {
+                                            setMappings((prev) => ({ ...prev, [h]: cfVal }));
+                                            setOpenDropdown(null);
+                                            if (creatingFieldFor === h) setCreatingFieldFor(null);
+                                          }}
+                                        >
+                                          <span>{cf.field_label} <span style={{ opacity: 0.5, fontSize: 11 }}>({cf.field_type})</span></span>
+                                          {val === cfVal && <span className="data-map-dropdown-item-check">✓</span>}
+                                        </div>
+                                      );
+                                    })}
+                                  </>
+                                )}
+                              </div>
+
+                              {/* Create custom field action */}
+                              {supportsCustomFields && (
+                                <div
+                                  className="data-map-dropdown-create"
+                                  onClick={() => {
+                                    setCreatingFieldFor(h);
+                                    setNewFieldLabel(h);
+                                    setNewFieldType("text");
+                                    setMappings((prev) => ({ ...prev, [h]: "" }));
+                                    setOpenDropdown(null);
+                                  }}
+                                >
+                                  + Create Custom Field
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Create custom field panel */}
+                      {isCreating && (
+                        <div className="data-map-create-panel">
+                          <div className="data-map-create-row">
+                            <input
+                              className="crm-input"
+                              type="text"
+                              placeholder="Field name"
+                              value={newFieldLabel}
+                              onChange={(e) => setNewFieldLabel(e.target.value)}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && newFieldLabel.trim()) handleCreateCustomField(h);
+                                if (e.key === "Escape") setCreatingFieldFor(null);
+                              }}
+                            />
+                            <div className="data-map-type-chips">
+                              {TYPE_CHIPS.map((tc) => (
+                                <div
+                                  key={tc.type}
+                                  className={`data-map-type-chip ${newFieldType === tc.type ? "data-map-type-chip-active" : ""}`}
+                                  onClick={() => setNewFieldType(tc.type)}
+                                  title={tc.label}
+                                >
+                                  {tc.icon}
+                                </div>
+                              ))}
+                            </div>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => handleCreateCustomField(h)}
+                              disabled={!newFieldLabel.trim() || creatingField}
+                            >
+                              {creatingField ? "..." : "Create"}
+                            </button>
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => setCreatingFieldFor(null)}
+                              style={{ padding: "4px 8px", fontSize: 12 }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+
               <div className="data-wizard-actions">
                 <button className="btn" onClick={() => setStep("preview")}>
                   ← Back

@@ -116,6 +116,9 @@ export default function FullChat({ projectId, initialMessages }: Props) {
         .filter((f) => f.textContent !== null)
         .map((f) => ({ name: f.name, content: f.textContent! }));
 
+      // Read active report context if on reports page
+      const activeReport = (window as unknown as Record<string, unknown>).__activeReport ?? null;
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -124,6 +127,7 @@ export default function FullChat({ projectId, initialMessages }: Props) {
             messages: updatedMessages,
             currentPage: pathname,
             chatFileContents,
+            activeReport,
           }),
         });
 
