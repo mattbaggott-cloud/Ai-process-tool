@@ -4,6 +4,7 @@ import { getToolDefinitions } from "./tools";
 import { executeTool } from "./tool-executor";
 import { hybridSearch, type SearchResult } from "@/lib/embeddings/search";
 import { logInBackground, type LLMLogEntry } from "@/lib/logging/llm-logger";
+import { getOrgContext } from "@/lib/org";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -54,6 +55,11 @@ function buildSystemPrompt(data: {
     reportCount: number;
   };
   activeReport: Record<string, unknown> | null;
+  orgRole: string;
+  orgMemberCount: number;
+  orgMembersByRole: Record<string, number>;
+  orgDepartmentNames: string[];
+  pendingInviteCount: number;
 }): string {
   const {
     email, userProfile, organization,
@@ -61,6 +67,7 @@ function buildSystemPrompt(data: {
     goalSummary, painPointSummary, librarySummary,
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
+    orgRole, orgMemberCount, orgMembersByRole, orgDepartmentNames, pendingInviteCount,
   } = data;
 
   /* Group team child data by team_id */
@@ -119,6 +126,9 @@ You can take actions in the user's workspace using tools:
 - Add content to project canvases (text, headings, images, dividers)
 - Generate workflow flows from natural language descriptions (process flows, pipelines, automation diagrams)
 - Generate workflows from uploaded documents (SOPs, process docs, playbooks, PDFs) — parse the document and extract steps, decisions, and automations into a visual flow
+- Manage organization members: invite new members, list current members, change roles, remove members
+- Create departments to organize the team
+- View organization info: member count, departments, pending invites
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 When the user asks to create a workflow, process, flow, or pipeline, use generate_workflow to build it visually with proper nodes and connections. Assign tools from their tech stack to process steps when mentioned.
@@ -127,6 +137,9 @@ When the user is on a project page with an existing workflow, you can see all th
 If a role, KPI, or tool with the same name already exists on a team, the system will update it instead of creating a duplicate.
 The UI updates automatically after changes — no need to tell the user to refresh.
 When the user asks about tools, use search_tool_catalog to look up details. When comparing tools, use compare_tools to get full data.
+When the user asks to invite someone, add a team member, or manage roles, use the org management tools (invite_member, update_member_role, remove_member, list_members).
+For invite_member, update_member_role, and remove_member: ALWAYS call with confirmed=false first, present the summary to the user, and only call again with confirmed=true after the user explicitly confirms. Never skip the confirmation step.
+Invite permission hierarchy: Owner invites anyone. Admin invites manager/user/viewer. Manager invites user/viewer. User and Viewer cannot invite.
 
 ## User's Current Page
 ${currentPage}
@@ -161,6 +174,37 @@ ${currentPage}
     if (p.focus_areas) prompt += `**Current Priorities:** ${p.focus_areas}\n`;
     if (p.decision_authority) prompt += `**Decision Authority:** ${p.decision_authority}\n`;
     if (p.communication_preferences) prompt += `**Communication Preferences:** ${p.communication_preferences}\n`;
+  }
+
+  /* ── User's Org Role & Permissions ── */
+  if (orgRole) {
+    prompt += `\n## Your Organization Role\n`;
+    prompt += `**Your role:** ${orgRole}\n`;
+    prompt += `**Can invite members:** ${
+      orgRole === "owner" ? "Yes (any role)" :
+      orgRole === "admin" ? "Yes (manager, user, viewer)" :
+      orgRole === "manager" ? "Yes (user, viewer only)" : "No"
+    }\n`;
+    prompt += `**Can manage members/roles:** ${
+      orgRole === "owner" || orgRole === "admin" ? "Yes" : "No"
+    }\n`;
+    prompt += `**Can create workflows:** ${
+      orgRole === "owner" || orgRole === "admin" || orgRole === "manager" ? "Yes" : "No"
+    }\n`;
+    prompt += `**Can create/edit data:** ${orgRole !== "viewer" ? "Yes" : "No (read-only)"}\n`;
+
+    if (orgMemberCount > 0) {
+      const roleSummary = Object.entries(orgMembersByRole)
+        .map(([r, c]) => `${c} ${r}${(c as number) > 1 ? "s" : ""}`)
+        .join(", ");
+      prompt += `\n**Org members:** ${orgMemberCount} (${roleSummary})\n`;
+    }
+    if (orgDepartmentNames.length > 0) {
+      prompt += `**Departments:** ${orgDepartmentNames.join(", ")}\n`;
+    }
+    if (pendingInviteCount > 0) {
+      prompt += `**Pending invites:** ${pendingInviteCount}\n`;
+    }
   }
 
   /* ── Organization ── */
@@ -427,10 +471,11 @@ export async function POST(req: Request) {
 
   /* 2. Auth */
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
+  const orgCtx = await getOrgContext(supabase);
+  if (!orgCtx) {
     return new Response("Unauthorized", { status: 401 });
   }
+  const { user, orgId } = orgCtx;
 
   /* 3. Parse request */
   let body: ChatRequest;
@@ -486,9 +531,13 @@ export async function POST(req: Request) {
     { data: crmDeals },
     { data: crmRecentActivities },
     { count: crmReportCount },
+    // Org context
+    { data: orgMembersData },
+    { data: orgDeptsData },
+    { count: orgPendingInviteCount },
   ] = await Promise.all([
     supabase.from("user_profiles").select("*").eq("user_id", user.id).single(),
-    supabase.from("organizations").select("*").eq("user_id", user.id).single(),
+    supabase.from("org_profiles").select("*").eq("org_id", orgId).single(),
     supabase.from("teams").select("*").order("created_at"),
     supabase.from("team_roles").select("*").order("created_at"),
     supabase.from("team_kpis").select("*").order("created_at"),
@@ -508,6 +557,10 @@ export async function POST(req: Request) {
     supabase.from("crm_deals").select("stage, value"),
     supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
     supabase.from("crm_reports").select("id", { count: "exact", head: true }),
+    // Org context
+    supabase.from("org_members").select("role").eq("org_id", orgId),
+    supabase.from("org_departments").select("name").eq("org_id", orgId).order("name"),
+    supabase.from("org_invites").select("id", { count: "exact", head: true }).eq("org_id", orgId).is("accepted_at", null),
   ]);
 
   /* Build goal summary */
@@ -587,6 +640,13 @@ export async function POST(req: Request) {
     reportCount: crmReportCount ?? 0,
   };
 
+  /* Org member/dept summary */
+  const orgMembersByRole: Record<string, number> = {};
+  for (const m of orgMembersData ?? []) {
+    const r = m.role as string;
+    orgMembersByRole[r] = (orgMembersByRole[r] ?? 0) + 1;
+  }
+
   /* 6. Build system prompt */
   const systemPrompt = buildSystemPrompt({
     email: user.email ?? "User",
@@ -609,6 +669,11 @@ export async function POST(req: Request) {
     retrievedContext,
     crmSummary,
     activeReport: activeReport ?? null,
+    orgRole: orgCtx.role,
+    orgMemberCount: orgMembersData?.length ?? 0,
+    orgMembersByRole,
+    orgDepartmentNames: (orgDeptsData ?? []).map((d) => d.name as string),
+    pendingInviteCount: orgPendingInviteCount ?? 0,
   });
 
   /* 7. Call Claude with streaming + tool use */
@@ -679,7 +744,9 @@ export async function POST(req: Request) {
                 toolBlock.name,
                 toolBlock.input as Record<string, unknown>,
                 supabase,
-                user.id
+                user.id,
+                orgId,
+                orgCtx.role
               );
               toolResults.push({
                 type: "tool_result",
@@ -736,6 +803,7 @@ export async function POST(req: Request) {
           const latencyMs = Date.now() - requestStart;
           const logEntry: LLMLogEntry = {
             userId: user.id,
+            orgId,
             model: "claude-sonnet-4-20250514",
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,

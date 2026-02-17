@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 
 /* ── Types ────────────────────────────────────────────── */
@@ -35,6 +36,7 @@ function toSlug(name: string): string {
 
 export default function TeamsPage() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [teams, setTeams] = useState<TeamWithCounts[]>([]);
@@ -134,6 +136,7 @@ export default function TeamsPage() {
       .from("teams")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         slug,
         name: form.name.trim(),
         description: form.description.trim(),

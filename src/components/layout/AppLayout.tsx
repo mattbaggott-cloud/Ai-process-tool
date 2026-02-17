@@ -4,6 +4,7 @@ import Sidebar from "./Sidebar";
 import AIChat from "./AIChat";
 import ErrorBoundary from "./ErrorBoundary";
 import { FileProvider } from "@/context/FileContext";
+import { OrgProvider } from "@/context/OrgContext";
 import { LayoutProvider, useLayout } from "@/context/LayoutContext";
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
@@ -55,10 +56,12 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <FileProvider>
-      <LayoutProvider>
-        <AppLayoutInner>{children}</AppLayoutInner>
-      </LayoutProvider>
-    </FileProvider>
+    <OrgProvider>
+      <FileProvider>
+        <LayoutProvider>
+          <AppLayoutInner>{children}</AppLayoutInner>
+        </LayoutProvider>
+      </FileProvider>
+    </OrgProvider>
   );
 }

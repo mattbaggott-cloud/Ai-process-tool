@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { ToolStatus } from "@/lib/types/database";
 
@@ -118,6 +119,7 @@ function splitCSVLine(line: string): string[] {
 
 export default function ToolsPage() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   /* ── Tab state ── */
@@ -225,6 +227,7 @@ export default function ToolsPage() {
       .from("user_stack_tools")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         name: stackForm.name,
         description: stackForm.description,
         category: stackForm.category,
@@ -267,6 +270,7 @@ export default function ToolsPage() {
       .from("user_stack_tools")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         catalog_id: cat.id,
         name: cat.name,
         description: cat.description,
@@ -321,6 +325,7 @@ export default function ToolsPage() {
 
     const rows = csvRows.map((r) => ({
       user_id: user.id,
+      org_id: orgId,
       name: r.name ?? "",
       description: r.description ?? "",
       category: r.category ?? "",

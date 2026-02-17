@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { DataImport, CrmCustomField, CustomFieldType } from "@/lib/types/database";
 
@@ -134,6 +135,7 @@ type WizardStep = "upload" | "preview" | "map" | "importing" | "results";
 
 export default function ImportsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const fileRef = useRef<HTMLInputElement>(null);
 
   /* ── History state ── */
@@ -273,6 +275,7 @@ export default function ImportsTab() {
       .from("crm_custom_fields")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         table_name: targetTable,
         field_key: fieldKey,
         field_label: newFieldLabel.trim(),
@@ -319,6 +322,7 @@ export default function ImportsTab() {
       .from("data_imports")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         source_name: fileName,
         target_table: targetTable,
         status: "importing",
@@ -361,7 +365,7 @@ export default function ImportsTab() {
         for (const name of missing) {
           const { data: created } = await supabase
             .from("crm_companies")
-            .insert({ user_id: user.id, name })
+            .insert({ user_id: user.id, org_id: orgId, name })
             .select("id")
             .single();
           if (created) companyCache[name] = created.id;
@@ -379,7 +383,7 @@ export default function ImportsTab() {
     for (let i = 0; i < csvRows.length; i += BATCH) {
       const batch = csvRows.slice(i, i + BATCH);
       const insertRows = batch.map((row) => {
-        const mapped: Record<string, unknown> = { user_id: user.id };
+        const mapped: Record<string, unknown> = { user_id: user.id, org_id: orgId };
 
         // Build metadata from custom fields
         const metadata: Record<string, unknown> = {};
@@ -456,6 +460,7 @@ export default function ImportsTab() {
     // Log to sync log
     await supabase.from("data_sync_log").insert({
       user_id: user.id,
+      org_id: orgId,
       import_id: currentImportId,
       event_type: errorCount === 0 ? "success" : errorCount === csvRows.length ? "error" : "warning",
       message: `Imported ${imported} of ${csvRows.length} rows to ${targetTable}${errorCount > 0 ? ` (${errorCount} errors)` : ""}`,

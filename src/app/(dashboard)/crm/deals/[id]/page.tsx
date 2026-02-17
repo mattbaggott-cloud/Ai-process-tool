@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import {
   StatusBadge,
@@ -30,6 +31,7 @@ export default function DealDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [deal, setDeal] = useState<CrmDeal | null>(null);
@@ -163,6 +165,7 @@ export default function DealDetailPage() {
     await supabase.from("crm_deals").update(updates).eq("id", deal.id);
     await supabase.from("crm_deal_stage_history").insert({
       user_id: user.id,
+      org_id: orgId,
       deal_id: deal.id,
       from_stage: oldStage,
       to_stage: newStage,
@@ -183,6 +186,7 @@ export default function DealDetailPage() {
 
     await supabase.from("crm_deal_line_items").insert({
       user_id: user.id,
+      org_id: orgId,
       deal_id: deal.id,
       product_id: lineItemForm.product_id || null,
       product_name: product?.name || "Custom Item",
@@ -260,6 +264,7 @@ export default function DealDetailPage() {
       if (newStage !== oldStage) {
         await supabase.from("crm_deal_stage_history").insert({
           user_id: user!.id,
+          org_id: orgId,
           deal_id: deal.id,
           from_stage: oldStage,
           to_stage: newStage,
@@ -291,7 +296,7 @@ export default function DealDetailPage() {
       const { error } = await supabase.from("crm_deals").update(updates).eq("id", deal.id);
       if (!error) {
         await supabase.from("crm_deal_stage_history").insert({
-          user_id: user.id, deal_id: deal.id, from_stage: deal.stage, to_stage: pendingStage, notes: result.close_reason,
+          user_id: user.id, org_id: orgId, deal_id: deal.id, from_stage: deal.stage, to_stage: pendingStage, notes: result.close_reason,
         });
         setEditing(false);
       }
@@ -307,7 +312,7 @@ export default function DealDetailPage() {
       };
       await supabase.from("crm_deals").update(updates).eq("id", deal.id);
       await supabase.from("crm_deal_stage_history").insert({
-        user_id: user.id, deal_id: deal.id, from_stage: deal.stage, to_stage: pendingStage, notes: result.close_reason,
+        user_id: user.id, org_id: orgId, deal_id: deal.id, from_stage: deal.stage, to_stage: pendingStage, notes: result.close_reason,
       });
     }
 

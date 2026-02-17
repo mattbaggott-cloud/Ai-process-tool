@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { ProjectMode } from "@/lib/types/database";
 
@@ -31,6 +32,7 @@ function fmtDate(iso: string) {
 
 export default function BrainstormPage() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const router = useRouter();
   const supabase = createClient();
 
@@ -78,6 +80,7 @@ export default function BrainstormPage() {
 
     const { error } = await supabase.from("projects").insert({
       user_id: user.id,
+      org_id: orgId,
       name: newName.trim(),
       slug,
       description: newDesc.trim(),

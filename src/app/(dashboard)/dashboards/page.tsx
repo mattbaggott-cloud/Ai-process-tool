@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { Dashboard, WidgetConfig } from "@/lib/types/database";
 import type { WidgetQueryResult } from "@/lib/dashboard/query-engine";
@@ -70,6 +71,7 @@ const DEFAULT_WIDGETS: WidgetConfig[] = [
 
 export default function DashboardsPage() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   /* ── State ── */
@@ -102,6 +104,7 @@ export default function DashboardsPage() {
         .from("dashboards")
         .insert({
           user_id: user.id,
+          org_id: orgId,
           name: "My Dashboard",
           widgets: DEFAULT_WIDGETS,
           is_default: true,
@@ -252,6 +255,7 @@ export default function DashboardsPage() {
       .from("dashboards")
       .insert({
         user_id: user.id,
+        org_id: orgId,
         name: `Dashboard ${dashboards.length + 1}`,
         widgets: [],
         is_default: false,

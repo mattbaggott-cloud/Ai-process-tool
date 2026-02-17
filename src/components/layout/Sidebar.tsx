@@ -18,6 +18,7 @@ const mainNav = [
   { label: "Data",       href: "/data",        icon: "database" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },
+  { label: "Settings",   href: "/settings",    icon: "gear" },
 ];
 
 /* ── tiny SVG icons (no dependency needed) ───────────────── */
@@ -90,6 +91,12 @@ const icons: Record<string, React.ReactNode> = {
       <path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" />
     </svg>
   ),
+  gear: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="2.5" />
+      <path d="M8 1.5v1.25M8 13.25v1.25M3.4 3.4l.9.9M11.7 11.7l.9.9M1.5 8h1.25M13.25 8h1.25M3.4 12.6l.9-.9M11.7 4.3l.9-.9" />
+    </svg>
+  ),
 };
 
 /* ── component ───────────────────────────────────────────── */
@@ -128,7 +135,7 @@ export default function Sidebar() {
         if (data) setSidebarTeams(data.map((t) => ({ slug: t.slug, name: t.name || t.slug })));
       });
     supabase
-      .from("organizations")
+      .from("org_profiles")
       .select("name")
       .eq("user_id", user.id)
       .single()

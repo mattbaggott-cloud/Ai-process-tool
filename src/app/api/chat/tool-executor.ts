@@ -1,5 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
+import { hasMinRole } from "@/lib/org";
+import type { OrgRole } from "@/lib/types/database";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -14,28 +16,30 @@ export async function executeTool(
   toolName: string,
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string,
+  userRole: OrgRole = "viewer"
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
       case "create_team":
-        return await handleCreateTeam(input, supabase, userId);
+        return await handleCreateTeam(input, supabase, userId, orgId);
       case "add_team_roles":
-        return await handleAddTeamRoles(input, supabase);
+        return await handleAddTeamRoles(input, supabase, orgId);
       case "add_team_kpis":
-        return await handleAddTeamKpis(input, supabase);
+        return await handleAddTeamKpis(input, supabase, orgId);
       case "add_team_tools":
-        return await handleAddTeamTools(input, supabase, userId);
+        return await handleAddTeamTools(input, supabase, userId, orgId);
       case "update_team_description":
         return await handleUpdateTeamDescription(input, supabase);
       case "create_goal":
-        return await handleCreateGoal(input, supabase, userId);
+        return await handleCreateGoal(input, supabase, userId, orgId);
       case "add_sub_goals":
-        return await handleAddSubGoals(input, supabase, userId);
+        return await handleAddSubGoals(input, supabase, userId, orgId);
       case "update_goal_status":
         return await handleUpdateGoalStatus(input, supabase);
       case "create_library_item":
-        return await handleCreateLibraryItem(input, supabase, userId);
+        return await handleCreateLibraryItem(input, supabase, userId, orgId);
       case "delete_team_roles":
         return await handleDeleteTeamRoles(input, supabase);
       case "delete_team_kpis":
@@ -45,58 +49,71 @@ export async function executeTool(
       case "delete_goal":
         return await handleDeleteGoal(input, supabase);
       case "create_pain_point":
-        return await handleCreatePainPoint(input, supabase, userId);
+        return await handleCreatePainPoint(input, supabase, userId, orgId);
       case "update_pain_point_status":
         return await handleUpdatePainPointStatus(input, supabase);
       case "delete_pain_point":
         return await handleDeletePainPoint(input, supabase);
       case "update_organization":
-        return await handleUpdateOrganization(input, supabase, userId);
+        return await handleUpdateOrganization(input, supabase, userId, orgId);
       case "search_tool_catalog":
         return await handleSearchToolCatalog(input, supabase);
       case "add_stack_tool":
-        return await handleAddStackTool(input, supabase, userId);
+        return await handleAddStackTool(input, supabase, userId, orgId);
       case "remove_stack_tool":
         return await handleRemoveStackTool(input, supabase);
       case "compare_tools":
         return await handleCompareTools(input, supabase);
       case "create_project":
-        return await handleCreateProject(input, supabase, userId);
+        return await handleCreateProject(input, supabase, userId, orgId);
       case "update_canvas":
         return await handleUpdateCanvas(input, supabase);
       case "generate_workflow":
-        return await handleGenerateWorkflow(input, supabase);
+        return await handleGenerateWorkflow(input, supabase, userRole);
       case "generate_workflow_from_document":
-        return await handleGenerateWorkflowFromDocument(input, supabase);
+        return await handleGenerateWorkflowFromDocument(input, supabase, userRole);
       /* CRM tools */
       case "create_contact":
-        return await handleCreateContact(input, supabase, userId);
+        return await handleCreateContact(input, supabase, userId, orgId);
       case "update_contact":
         return await handleUpdateContact(input, supabase);
       case "create_company":
-        return await handleCreateCompany(input, supabase, userId);
+        return await handleCreateCompany(input, supabase, userId, orgId);
       case "create_deal":
-        return await handleCreateDeal(input, supabase, userId);
+        return await handleCreateDeal(input, supabase, userId, orgId);
       case "update_deal_stage":
-        return await handleUpdateDealStage(input, supabase);
+        return await handleUpdateDealStage(input, supabase, orgId);
       case "log_activity":
-        return await handleLogActivity(input, supabase, userId);
+        return await handleLogActivity(input, supabase, userId, orgId);
       case "search_crm":
         return await handleSearchCrm(input, supabase);
       case "get_crm_summary":
         return await handleGetCrmSummary(input, supabase);
       case "create_product":
-        return await handleCreateProduct(input, supabase, userId);
+        return await handleCreateProduct(input, supabase, userId, orgId);
       case "add_deal_line_item":
-        return await handleAddDealLineItem(input, supabase, userId);
+        return await handleAddDealLineItem(input, supabase, userId, orgId);
       case "add_company_asset":
-        return await handleAddCompanyAsset(input, supabase, userId);
+        return await handleAddCompanyAsset(input, supabase, userId, orgId);
       case "import_csv_data":
-        return await handleImportCsvData(input, supabase, userId);
+        return await handleImportCsvData(input, supabase, userId, orgId);
       case "create_report":
-        return await handleCreateReport(input, supabase, userId);
+        return await handleCreateReport(input, supabase, userId, orgId);
       case "update_report":
-        return await handleUpdateReport(input, supabase, userId);
+        return await handleUpdateReport(input, supabase, userId, orgId);
+      /* Org management tools */
+      case "invite_member":
+        return await handleInviteMember(input, supabase, userId, orgId, userRole);
+      case "list_members":
+        return await handleListMembers(input, supabase, userId, orgId);
+      case "update_member_role":
+        return await handleUpdateMemberRole(input, supabase, userId, orgId, userRole);
+      case "remove_member":
+        return await handleRemoveMember(input, supabase, userId, orgId, userRole);
+      case "create_department":
+        return await handleCreateDepartmentTool(input, supabase, orgId, userRole);
+      case "list_org_info":
+        return await handleListOrgInfo(input, supabase, orgId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -141,7 +158,8 @@ async function resolveGoalId(
 async function handleCreateTeam(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name) return { success: false, message: "Team name is required" };
@@ -154,7 +172,7 @@ async function handleCreateTeam(
 
   const { data, error } = await supabase
     .from("teams")
-    .insert({ user_id: userId, slug, name, description })
+    .insert({ user_id: userId, org_id: orgId, slug, name, description })
     .select()
     .single();
 
@@ -164,7 +182,8 @@ async function handleCreateTeam(
 
 async function handleAddTeamRoles(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  orgId: string
 ): Promise<ToolResult> {
   const teamName = input.team_name as string;
   const roles = input.roles as Array<{ name: string; description?: string; headcount?: number }>;
@@ -207,6 +226,7 @@ async function handleAddTeamRoles(
   if (toInsert.length > 0) {
     const rows = toInsert.map((r) => ({
       team_id: teamId,
+      org_id: orgId,
       name: r.name,
       description: r.description ?? "",
       headcount: r.headcount ?? 1,
@@ -223,7 +243,8 @@ async function handleAddTeamRoles(
 
 async function handleAddTeamKpis(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  orgId: string
 ): Promise<ToolResult> {
   const teamName = input.team_name as string;
   const kpis = input.kpis as Array<{
@@ -269,6 +290,7 @@ async function handleAddTeamKpis(
   if (toInsert.length > 0) {
     const rows = toInsert.map((k) => ({
       team_id: teamId,
+      org_id: orgId,
       name: k.name,
       current_value: k.current_value ?? null,
       target_value: k.target_value ?? null,
@@ -287,7 +309,8 @@ async function handleAddTeamKpis(
 async function handleAddTeamTools(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const teamName = input.team_name as string;
   const tools = input.tools as Array<{ name: string; purpose?: string }>;
@@ -328,6 +351,7 @@ async function handleAddTeamTools(
   if (toInsert.length > 0) {
     const rows = toInsert.map((t) => ({
       team_id: teamId,
+      org_id: orgId,
       name: t.name,
       purpose: t.purpose ?? "",
     }));
@@ -357,6 +381,7 @@ async function handleAddTeamTools(
       /* Not in stack — create entry */
       await supabase.from("user_stack_tools").insert({
         user_id: userId,
+        org_id: orgId,
         name: t.name,
         description: t.purpose ?? "",
         category: "",
@@ -403,13 +428,15 @@ async function handleUpdateTeamDescription(
 async function handleCreateGoal(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name) return { success: false, message: "Goal name is required" };
 
   const row = {
     user_id: userId,
+    org_id: orgId,
     name,
     description: (input.description as string) ?? "",
     status: (input.status as string) ?? "Backlog",
@@ -438,7 +465,8 @@ async function handleCreateGoal(
 async function handleAddSubGoals(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const goalName = input.goal_name as string;
   const subGoals = input.sub_goals as Array<{
@@ -459,6 +487,7 @@ async function handleAddSubGoals(
   const rows = subGoals.map((s) => ({
     goal_id: goalId,
     user_id: userId,
+    org_id: orgId,
     name: s.name,
     description: s.description ?? "",
     status: s.status ?? "Backlog",
@@ -556,7 +585,8 @@ async function resolvePainPointId(
 async function handleCreatePainPoint(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name) return { success: false, message: "Pain point name is required" };
@@ -572,6 +602,7 @@ async function handleCreatePainPoint(
 
   const row = {
     user_id: userId,
+    org_id: orgId,
     name,
     description: (input.description as string) ?? "",
     severity: (input.severity as string) ?? "Medium",
@@ -656,7 +687,8 @@ async function handleDeletePainPoint(
 async function handleCreateLibraryItem(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const title = input.title as string;
   const content = input.content as string;
@@ -667,6 +699,7 @@ async function handleCreateLibraryItem(
 
   const row = {
     user_id: userId,
+    org_id: orgId,
     title,
     content,
     category: (input.category as string) ?? "Note",
@@ -877,7 +910,8 @@ async function handleDeleteGoal(
 async function handleUpdateOrganization(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   /* Build partial update from any provided fields */
   const fields = ["name", "industry", "description", "website", "stage", "target_market", "differentiators", "notes"];
@@ -896,9 +930,9 @@ async function handleUpdateOrganization(
 
   /* Upsert (create if not exists, update if exists) */
   const { data, error } = await supabase
-    .from("organizations")
+    .from("org_profiles")
     .upsert(
-      { user_id: userId, ...updates },
+      { user_id: userId, org_id: orgId, ...updates },
       { onConflict: "user_id" }
     )
     .select()
@@ -1014,7 +1048,8 @@ async function handleSearchToolCatalog(
 async function handleAddStackTool(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name) return { success: false, message: "Tool name is required" };
@@ -1041,6 +1076,7 @@ async function handleAddStackTool(
 
   const row = {
     user_id: userId,
+    org_id: orgId,
     catalog_id: cat?.id ?? null,
     name,
     description: (input.description as string) ?? cat?.description ?? "",
@@ -1105,7 +1141,8 @@ async function handleRemoveStackTool(
 async function handleCreateProject(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name) return { success: false, message: "Project name is required" };
@@ -1120,6 +1157,7 @@ async function handleCreateProject(
     .from("projects")
     .insert({
       user_id: userId,
+      org_id: orgId,
       name,
       slug,
       description,
@@ -1251,8 +1289,12 @@ const WF_DEFAULT_SIZES: Record<string, { w: number; h: number }> = {
 
 async function handleGenerateWorkflow(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userRole: OrgRole = "viewer"
 ): Promise<ToolResult> {
+  if (!hasMinRole(userRole, "manager")) {
+    return { success: false, message: "You need manager, admin, or owner permissions to create workflows. Your current role is " + userRole + "." };
+  }
   const projectName = input.project_name as string;
   const rawNodes = input.nodes as Array<{
     temp_id: string;
@@ -1386,8 +1428,12 @@ async function handleGenerateWorkflow(
 
 async function handleGenerateWorkflowFromDocument(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userRole: OrgRole = "viewer"
 ): Promise<ToolResult> {
+  if (!hasMinRole(userRole, "manager")) {
+    return { success: false, message: "You need manager, admin, or owner permissions to create workflows. Your current role is " + userRole + "." };
+  }
   const projectName = input.project_name as string;
   const documentText = input.document_text as string;
   const documentName = (input.document_name as string) ?? "Document";
@@ -1472,7 +1518,8 @@ async function handleCompareTools(
 async function resolveCompanyId(
   companyName: string,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<string | null> {
   if (!companyName) return null;
   const { data } = await supabase
@@ -1485,7 +1532,7 @@ async function resolveCompanyId(
   // Auto-create company
   const { data: newCo } = await supabase
     .from("crm_companies")
-    .insert({ user_id: userId, name: companyName })
+    .insert({ user_id: userId, org_id: orgId, name: companyName })
     .select("id")
     .single();
   if (newCo?.id) {
@@ -1551,20 +1598,22 @@ async function resolveDealId(
 async function handleCreateContact(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const firstName = (input.first_name as string)?.trim();
   if (!firstName) return { success: false, message: "first_name is required" };
 
   let companyId: string | null = null;
   if (input.company_name) {
-    companyId = await resolveCompanyId(input.company_name as string, supabase, userId);
+    companyId = await resolveCompanyId(input.company_name as string, supabase, userId, orgId);
   }
 
   const { data, error } = await supabase
     .from("crm_contacts")
     .insert({
       user_id: userId,
+      org_id: orgId,
       first_name: firstName,
       last_name: ((input.last_name as string) ?? "").trim(),
       email: ((input.email as string) ?? "").trim(),
@@ -1630,7 +1679,8 @@ async function handleUpdateContact(
 async function handleCreateCompany(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = (input.name as string)?.trim();
   if (!name) return { success: false, message: "name is required" };
@@ -1639,6 +1689,7 @@ async function handleCreateCompany(
     .from("crm_companies")
     .insert({
       user_id: userId,
+      org_id: orgId,
       name,
       domain: ((input.domain as string) ?? "").trim(),
       industry: ((input.industry as string) ?? "").trim(),
@@ -1667,7 +1718,8 @@ async function handleCreateCompany(
 async function handleCreateDeal(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const title = (input.title as string)?.trim();
   if (!title) return { success: false, message: "title is required" };
@@ -1675,7 +1727,7 @@ async function handleCreateDeal(
   let contactId: string | null = null;
   let companyId: string | null = null;
   if (input.contact_name) contactId = await resolveContactId(input.contact_name as string, supabase);
-  if (input.company_name) companyId = await resolveCompanyId(input.company_name as string, supabase, userId);
+  if (input.company_name) companyId = await resolveCompanyId(input.company_name as string, supabase, userId, orgId);
 
   const stage = (input.stage as string) || "lead";
   const probMap: Record<string, number> = { lead: 10, qualified: 25, proposal: 50, negotiation: 75, won: 100, lost: 0 };
@@ -1684,6 +1736,7 @@ async function handleCreateDeal(
 
   const dealRow: Record<string, unknown> = {
     user_id: userId,
+    org_id: orgId,
     title,
     value: (input.value as number) ?? 0,
     stage,
@@ -1711,6 +1764,7 @@ async function handleCreateDeal(
   // Record initial stage history
   await supabase.from("crm_deal_stage_history").insert({
     user_id: userId,
+    org_id: orgId,
     deal_id: data.id,
     from_stage: null,
     to_stage: stage,
@@ -1728,7 +1782,8 @@ async function handleCreateDeal(
 
 async function handleUpdateDealStage(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  orgId: string
 ): Promise<ToolResult> {
   const dealTitle = (input.deal_title as string)?.trim();
   const newStage = (input.new_stage as string)?.trim();
@@ -1778,6 +1833,7 @@ async function handleUpdateDealStage(
   if (oldStage !== newStage && currentDeal?.user_id) {
     await supabase.from("crm_deal_stage_history").insert({
       user_id: currentDeal.user_id,
+      org_id: orgId,
       deal_id: dealId,
       from_stage: oldStage,
       to_stage: newStage,
@@ -1799,7 +1855,8 @@ async function handleUpdateDealStage(
 async function handleLogActivity(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const actType = (input.type as string) || "note";
   const subject = (input.subject as string)?.trim();
@@ -1819,6 +1876,7 @@ async function handleLogActivity(
     .from("crm_activities")
     .insert({
       user_id: userId,
+      org_id: orgId,
       type: actType,
       subject,
       description: ((input.description as string) ?? "").trim(),
@@ -1957,13 +2015,15 @@ async function handleGetCrmSummary(
 async function handleCreateProduct(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = input.name as string;
   if (!name?.trim()) return { success: false, message: "Product name is required." };
 
   const { error } = await supabase.from("crm_products").insert({
     user_id: userId,
+    org_id: orgId,
     name: name.trim(),
     sku: ((input.sku as string) ?? "").trim(),
     category: ((input.category as string) ?? "").trim(),
@@ -1979,7 +2039,8 @@ async function handleCreateProduct(
 async function handleAddDealLineItem(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const dealTitle = input.deal_title as string;
   const productName = input.product_name as string;
@@ -2003,6 +2064,7 @@ async function handleAddDealLineItem(
 
   const { error } = await supabase.from("crm_deal_line_items").insert({
     user_id: userId,
+    org_id: orgId,
     deal_id: dealId,
     product_id: product.id,
     product_name: product.name,
@@ -2020,7 +2082,8 @@ async function handleAddDealLineItem(
 async function handleAddCompanyAsset(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const companyName = input.company_name as string;
   const productName = input.product_name as string;
@@ -2039,6 +2102,7 @@ async function handleAddCompanyAsset(
 
   const { error } = await supabase.from("crm_company_assets").insert({
     user_id: userId,
+    org_id: orgId,
     company_id: companyId,
     product_id: product.id,
     product_name: product.name,
@@ -2064,7 +2128,8 @@ const DEFAULT_VISIBLE_COLUMNS: Record<string, string[]> = {
 async function handleCreateReport(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const name = (input.name as string)?.trim();
   const entityType = (input.entity_type as string)?.trim();
@@ -2084,6 +2149,7 @@ async function handleCreateReport(
     .from("crm_reports")
     .insert({
       user_id: userId,
+      org_id: orgId,
       name,
       description,
       entity_type: entityType,
@@ -2108,7 +2174,8 @@ async function handleCreateReport(
 async function handleUpdateReport(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const reportId = (input.report_id as string)?.trim();
   if (!reportId) return { success: false, message: "report_id is required." };
@@ -2163,7 +2230,8 @@ async function handleUpdateReport(
 async function handleImportCsvData(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const csvContent = input.csv_content as string;
   const targetTable = input.target_table as string;
@@ -2217,7 +2285,7 @@ async function handleImportCsvData(
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
     const insertRows = batch.map((row) => {
-      const mapped: Record<string, unknown> = { user_id: userId };
+      const mapped: Record<string, unknown> = { user_id: userId, org_id: orgId };
       for (const m of fieldMappings) {
         const val = row[m.csv_column] ?? "";
         if (numericFields.includes(m.target_field)) {
@@ -2245,6 +2313,7 @@ async function handleImportCsvData(
   // Log to sync log
   await supabase.from("data_sync_log").insert({
     user_id: userId,
+    org_id: orgId,
     event_type: errorCount === 0 ? "success" : "warning",
     message: `AI imported ${imported} rows to ${targetTable} (${errorCount} errors)`,
     details: { imported, errors: errorCount, errorDetails },
@@ -2254,4 +2323,394 @@ async function handleImportCsvData(
     success: imported > 0,
     message: `Imported ${imported} of ${rows.length} rows into ${targetTable}.${errorCount > 0 ? ` ${errorCount} rows failed: ${errorDetails.join("; ")}` : ""}`,
   };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ORG MANAGEMENT TOOLS
+   ═══════════════════════════════════════════════════════════ */
+
+const ROLE_HIERARCHY: Record<string, number> = {
+  owner: 5, admin: 4, manager: 3, user: 2, viewer: 1,
+};
+
+/** Check if userRole can invite someone at targetRole */
+function canInviteRole(userRole: OrgRole, targetRole: OrgRole): boolean {
+  // Owner can invite anyone except owner
+  // Admin can invite manager, user, viewer
+  // Manager can invite user, viewer
+  // User / Viewer cannot invite
+  if (targetRole === "owner") return false;
+  if (userRole === "owner") return true;
+  if (userRole === "admin") return ["manager", "user", "viewer"].includes(targetRole);
+  if (userRole === "manager") return ["user", "viewer"].includes(targetRole);
+  return false;
+}
+
+/* ── invite_member ── */
+async function handleInviteMember(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+  userRole: OrgRole
+): Promise<ToolResult> {
+  const email = (input.email as string)?.trim().toLowerCase();
+  if (!email) return { success: false, message: "Email address is required." };
+
+  const role = ((input.role as string) || "user") as OrgRole;
+  const confirmed = input.confirmed === true;
+
+  // Permission check
+  if (!canInviteRole(userRole, role)) {
+    if (ROLE_HIERARCHY[userRole] <= ROLE_HIERARCHY["user"]) {
+      return { success: false, message: `Your role (${userRole}) does not have permission to invite members. Only managers and above can invite.` };
+    }
+    return { success: false, message: `As a ${userRole}, you can only invite roles below your level. You cannot invite someone as ${role}.` };
+  }
+
+  // Confirmation step
+  if (!confirmed) {
+    const deptNames = input.department_names as string[] | undefined;
+    const deptNote = deptNames?.length ? ` and assign them to: ${deptNames.join(", ")}` : "";
+    return {
+      success: false,
+      message: `CONFIRM_REQUIRED: I'll invite **${email}** as **${role}**${deptNote}. The invite expires in 7 days. Please confirm you'd like to proceed.`,
+    };
+  }
+
+  // Check for existing pending invite
+  const { data: existingInvite } = await supabase
+    .from("org_invites")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("email", email)
+    .is("accepted_at", null)
+    .single();
+
+  if (existingInvite) {
+    return {
+      success: false,
+      message: `There is already a pending invite for ${email}. Share this link: /invite/${existingInvite.id}`,
+    };
+  }
+
+  // Resolve department names to IDs
+  let departmentIds: string[] = [];
+  const deptNames = input.department_names as string[] | undefined;
+  if (deptNames && deptNames.length > 0) {
+    const { data: depts } = await supabase
+      .from("org_departments")
+      .select("id, name")
+      .eq("org_id", orgId);
+    for (const name of deptNames) {
+      const found = (depts ?? []).find(
+        (d) => d.name.toLowerCase() === name.toLowerCase()
+      );
+      if (found) departmentIds.push(found.id);
+    }
+  }
+
+  // Create the invite
+  const { data: invite, error } = await supabase
+    .from("org_invites")
+    .insert({
+      org_id: orgId,
+      email,
+      role,
+      department_ids: departmentIds,
+      invited_by: userId,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (error) return { success: false, message: `Failed to create invite: ${error.message}` };
+
+  const deptNote = departmentIds.length > 0
+    ? ` Assigned to ${departmentIds.length} department(s).`
+    : "";
+
+  return {
+    success: true,
+    message: `Invited **${email}** as **${role}**.${deptNote}\n\nShareable invite link: \`/invite/${invite.id}\`\n\nThe invite expires in 7 days.`,
+  };
+}
+
+/* ── list_members ── */
+async function handleListMembers(
+  _input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  const { data: members, error } = await supabase
+    .from("org_members")
+    .select("user_id, role, created_at")
+    .eq("org_id", orgId)
+    .order("created_at");
+
+  if (error) return { success: false, message: `Failed to load members: ${error.message}` };
+  if (!members || members.length === 0) {
+    return { success: true, message: "No members found in this organization." };
+  }
+
+  const { data: profiles } = await supabase
+    .from("user_profiles")
+    .select("user_id, display_name, email")
+    .eq("org_id", orgId);
+
+  const profileMap: Record<string, { name: string; email: string }> = {};
+  for (const p of profiles ?? []) {
+    profileMap[p.user_id] = { name: p.display_name || "", email: p.email || "" };
+  }
+
+  const { data: pendingInvites } = await supabase
+    .from("org_invites")
+    .select("email, role, created_at, expires_at")
+    .eq("org_id", orgId)
+    .is("accepted_at", null)
+    .order("created_at", { ascending: false });
+
+  const lines = members.map((m) => {
+    const profile = profileMap[m.user_id];
+    const displayName = profile?.name || profile?.email || m.user_id.slice(0, 8);
+    const emailPart = profile?.email ? ` (${profile.email})` : "";
+    const selfMarker = m.user_id === userId ? " ← you" : "";
+    const joined = new Date(m.created_at).toLocaleDateString();
+    return `- **${displayName}**${emailPart} — ${m.role} (joined ${joined})${selfMarker}`;
+  });
+
+  let result = `## Organization Members (${members.length})\n${lines.join("\n")}`;
+
+  if (pendingInvites && pendingInvites.length > 0) {
+    result += `\n\n## Pending Invites (${pendingInvites.length})\n`;
+    for (const inv of pendingInvites) {
+      const expires = new Date(inv.expires_at).toLocaleDateString();
+      result += `- ${inv.email} — ${inv.role} (expires ${expires})\n`;
+    }
+  }
+
+  return { success: true, message: result };
+}
+
+/* ── update_member_role ── */
+async function handleUpdateMemberRole(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+  userRole: OrgRole
+): Promise<ToolResult> {
+  if (!hasMinRole(userRole, "admin")) {
+    return { success: false, message: "You need admin or owner permissions to change member roles." };
+  }
+
+  const identifier = (input.member_identifier as string)?.trim();
+  const newRole = input.new_role as OrgRole;
+  const confirmed = input.confirmed === true;
+
+  if (!identifier) return { success: false, message: "Member email or name is required." };
+  if (!newRole) return { success: false, message: "New role is required." };
+  if (newRole === "owner") return { success: false, message: "Cannot assign the owner role." };
+
+  // Find the member
+  const { data: profiles } = await supabase
+    .from("user_profiles")
+    .select("user_id, display_name, email")
+    .eq("org_id", orgId);
+
+  const match = (profiles ?? []).find(
+    (p) =>
+      p.email?.toLowerCase() === identifier.toLowerCase() ||
+      p.display_name?.toLowerCase() === identifier.toLowerCase()
+  );
+
+  if (!match) {
+    return { success: false, message: `Could not find a member matching "${identifier}". Try using their exact email address.` };
+  }
+
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("id, role")
+    .eq("org_id", orgId)
+    .eq("user_id", match.user_id)
+    .single();
+
+  if (!membership) return { success: false, message: `"${identifier}" is not a member of this organization.` };
+  if (membership.role === "owner") return { success: false, message: "Cannot change the owner's role." };
+  if (membership.role === newRole) return { success: true, message: `${match.display_name || match.email} already has the ${newRole} role.` };
+
+  // Cannot assign a role ≥ your own (unless owner)
+  if (userRole !== "owner" && ROLE_HIERARCHY[newRole] >= ROLE_HIERARCHY[userRole]) {
+    return { success: false, message: `You cannot assign a role (${newRole}) that is equal to or above your own role (${userRole}).` };
+  }
+
+  const displayName = match.display_name || match.email || identifier;
+
+  // Confirmation step
+  if (!confirmed) {
+    return {
+      success: false,
+      message: `CONFIRM_REQUIRED: I'll change **${displayName}**'s role from **${membership.role}** to **${newRole}**. Please confirm you'd like to proceed.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from("org_members")
+    .update({ role: newRole })
+    .eq("id", membership.id);
+
+  if (error) return { success: false, message: `Failed to update role: ${error.message}` };
+
+  return {
+    success: true,
+    message: `Changed **${displayName}**'s role from ${membership.role} to **${newRole}**.`,
+  };
+}
+
+/* ── remove_member ── */
+async function handleRemoveMember(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+  userRole: OrgRole
+): Promise<ToolResult> {
+  if (!hasMinRole(userRole, "admin")) {
+    return { success: false, message: "You need admin or owner permissions to remove members." };
+  }
+
+  const identifier = (input.member_identifier as string)?.trim();
+  const confirmed = input.confirmed === true;
+
+  if (!identifier) return { success: false, message: "Member email or name is required." };
+
+  const { data: profiles } = await supabase
+    .from("user_profiles")
+    .select("user_id, display_name, email")
+    .eq("org_id", orgId);
+
+  const match = (profiles ?? []).find(
+    (p) =>
+      p.email?.toLowerCase() === identifier.toLowerCase() ||
+      p.display_name?.toLowerCase() === identifier.toLowerCase()
+  );
+
+  if (!match) return { success: false, message: `Could not find a member matching "${identifier}".` };
+  if (match.user_id === userId) return { success: false, message: "You cannot remove yourself from the organization." };
+
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("id, role")
+    .eq("org_id", orgId)
+    .eq("user_id", match.user_id)
+    .single();
+
+  if (!membership) return { success: false, message: `"${identifier}" is not a member of this organization.` };
+  if (membership.role === "owner") return { success: false, message: "Cannot remove the organization owner." };
+
+  const displayName = match.display_name || match.email || identifier;
+
+  // Confirmation step
+  if (!confirmed) {
+    return {
+      success: false,
+      message: `CONFIRM_REQUIRED: I'll remove **${displayName}** (${membership.role}) from the organization. This cannot be undone. Please confirm.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from("org_members")
+    .delete()
+    .eq("id", membership.id);
+
+  if (error) return { success: false, message: `Failed to remove member: ${error.message}` };
+
+  return { success: true, message: `Removed **${displayName}** (${membership.role}) from the organization.` };
+}
+
+/* ── create_department ── */
+async function handleCreateDepartmentTool(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userRole: OrgRole
+): Promise<ToolResult> {
+  if (!hasMinRole(userRole, "admin")) {
+    return { success: false, message: "You need admin or owner permissions to create departments." };
+  }
+
+  const name = (input.name as string)?.trim();
+  if (!name) return { success: false, message: "Department name is required." };
+
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  const { data: existing } = await supabase
+    .from("org_departments")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("slug", slug)
+    .single();
+
+  if (existing) return { success: false, message: `A department with the slug "${slug}" already exists.` };
+
+  const { data, error } = await supabase
+    .from("org_departments")
+    .insert({ org_id: orgId, name, slug })
+    .select("name, slug")
+    .single();
+
+  if (error) return { success: false, message: `Failed to create department: ${error.message}` };
+
+  return {
+    success: true,
+    message: `Created department **${data.name}** (/${data.slug}). You can now assign members to this department when inviting them.`,
+  };
+}
+
+/* ── list_org_info ── */
+async function handleListOrgInfo(
+  _input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const [orgRes, membersRes, deptsRes, invitesRes] = await Promise.all([
+    supabase.from("orgs").select("name, slug, created_at").eq("id", orgId).single(),
+    supabase.from("org_members").select("role").eq("org_id", orgId),
+    supabase.from("org_departments").select("name, slug").eq("org_id", orgId).order("name"),
+    supabase.from("org_invites").select("email, role").eq("org_id", orgId).is("accepted_at", null),
+  ]);
+
+  if (!orgRes.data) return { success: false, message: "Organization not found." };
+
+  const org = orgRes.data;
+  const members = membersRes.data ?? [];
+  const depts = deptsRes.data ?? [];
+  const invites = invitesRes.data ?? [];
+
+  const roleCounts: Record<string, number> = {};
+  for (const m of members) {
+    roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
+  }
+  const roleBreakdown = Object.entries(roleCounts)
+    .map(([r, count]) => `${count} ${r}${count !== 1 ? "s" : ""}`)
+    .join(", ");
+
+  let result = `## Organization Info\n`;
+  result += `**Name:** ${org.name}\n`;
+  result += `**Slug:** ${org.slug}\n`;
+  result += `**Created:** ${new Date(org.created_at).toLocaleDateString()}\n`;
+  result += `**Members:** ${members.length} (${roleBreakdown})\n`;
+  result += depts.length > 0
+    ? `**Departments:** ${depts.map((d) => d.name).join(", ")}\n`
+    : `**Departments:** None\n`;
+  result += invites.length > 0
+    ? `**Pending Invites:** ${invites.length} (${invites.map((i) => i.email).join(", ")})\n`
+    : `**Pending Invites:** None\n`;
+
+  return { success: true, message: result };
 }

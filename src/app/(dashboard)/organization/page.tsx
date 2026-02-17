@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { OrgStage } from "@/lib/types/database";
 import {
@@ -69,6 +70,7 @@ const blankOrg: OrgForm = {
 
 export default function OrganizationPage() {
   const { user } = useAuth();
+  const { orgId: tenantOrgId } = useOrg();
   const supabase = createClient();
 
   /* ── Form state ── */
@@ -92,9 +94,9 @@ export default function OrganizationPage() {
     if (!user) return;
 
     const [orgRes, filesRes, rolesRes] = await Promise.all([
-      supabase.from("organizations").select("*").eq("user_id", user.id).single(),
+      supabase.from("org_profiles").select("*").eq("user_id", user.id).single(),
       supabase
-        .from("organization_files")
+        .from("org_profile_files")
         .select("id, name, size, mime_type, storage_path, text_content, added_at")
         .order("added_at", { ascending: false }),
       supabase.from("team_roles").select("headcount"),
@@ -152,13 +154,13 @@ export default function OrganizationPage() {
 
     if (orgId) {
       /* Update existing */
-      await supabase.from("organizations").update(updates).eq("id", orgId);
+      await supabase.from("org_profiles").update(updates).eq("id", orgId);
     } else {
       /* Create new (upsert) */
       const { data } = await supabase
-        .from("organizations")
+        .from("org_profiles")
         .upsert(
-          { user_id: user.id, ...blankOrg, ...form, ...updates },
+          { user_id: user.id, org_id: tenantOrgId, ...blankOrg, ...form, ...updates },
           { onConflict: "user_id" }
         )
         .select()
@@ -226,9 +228,10 @@ export default function OrganizationPage() {
 
       /* Insert metadata row */
       const { data: row, error: insertErr } = await supabase
-        .from("organization_files")
+        .from("org_profile_files")
         .insert({
           user_id: user.id,
+          org_id: tenantOrgId,
           name: file.name,
           size: file.size,
           mime_type: file.type || "application/octet-stream",
@@ -265,7 +268,7 @@ export default function OrganizationPage() {
     if (!file) return;
 
     await supabase.storage.from("team-files").remove([file.storage_path]);
-    await supabase.from("organization_files").delete().eq("id", id);
+    await supabase.from("org_profile_files").delete().eq("id", id);
     setOrgFiles((prev) => prev.filter((f) => f.id !== id));
     window.dispatchEvent(new Event("workspace-updated"));
   };

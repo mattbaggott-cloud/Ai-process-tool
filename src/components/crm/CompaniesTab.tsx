@@ -3,8 +3,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { SizeBadge, StatusBadge } from "./shared";
+import CrmPagination from "./CrmPagination";
 import type { CrmCompany, CompanySize, DealStage } from "@/lib/types/database";
 
 const SIZE_OPTIONS: CompanySize[] = ["startup", "small", "medium", "large", "enterprise"];
@@ -25,6 +27,7 @@ interface CompanyWithCounts extends CrmCompany {
 
 export default function CompaniesTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const router = useRouter();
   const supabase = createClient();
 
@@ -32,6 +35,8 @@ export default function CompaniesTab() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"cards" | "list">("cards");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -104,6 +109,7 @@ export default function CompaniesTab() {
 
     const { error } = await supabase.from("crm_companies").insert({
       user_id: user.id,
+      org_id: orgId,
       name: form.name.trim(),
       domain: form.domain.trim(),
       industry: form.industry.trim(),
@@ -140,6 +146,13 @@ export default function CompaniesTab() {
     return `${c.name} ${c.industry} ${c.domain}`.toLowerCase().includes(search.toLowerCase());
   });
 
+  /* Pagination */
+  const totalFiltered = filtered.length;
+  const paginatedCompanies = filtered.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
   if (loading) return <div className="crm-loading">Loading companies...</div>;
 
   return (
@@ -150,8 +163,9 @@ export default function CompaniesTab() {
           className="crm-search-input"
           placeholder="Search companies..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
         />
+        <span className="crm-record-count">{filtered.length} companies</span>
         <div className="crm-view-toggle">
           <button
             className={`crm-view-btn ${viewMode === "cards" ? "crm-view-btn-active" : ""}`}
@@ -210,7 +224,7 @@ export default function CompaniesTab() {
         </div>
       ) : viewMode === "cards" ? (
         <div className="crm-card-grid">
-          {filtered.map((c) => (
+          {paginatedCompanies.map((c) => (
             <div
               key={c.id}
               className="crm-card crm-clickable"
@@ -260,7 +274,7 @@ export default function CompaniesTab() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c) => (
+              {paginatedCompanies.map((c) => (
                 <tr
                   key={c.id}
                   className="crm-table-row crm-clickable"
@@ -292,6 +306,17 @@ export default function CompaniesTab() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {totalFiltered > 0 && (
+        <CrmPagination
+          totalItems={totalFiltered}
+          pageSize={pageSize}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+          label="companies"
+        />
       )}
     </div>
   );

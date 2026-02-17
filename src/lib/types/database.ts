@@ -3,7 +3,58 @@
 /*  This file grows as we add tables in later phases                  */
 /* ------------------------------------------------------------------ */
 
-// Phase 1: Profile (auth)
+/* ── Multi-Tenancy & RBAC ──────────────────────────────── */
+
+export type OrgRole = 'owner' | 'admin' | 'manager' | 'user' | 'viewer';
+
+export interface Org {
+  id: string;
+  name: string;
+  slug: string;
+  owner_id: string;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgMember {
+  id: string;
+  org_id: string;
+  user_id: string;
+  role: OrgRole;
+  created_at: string;
+}
+
+export interface OrgDepartment {
+  id: string;
+  org_id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+}
+
+export interface OrgDepartmentMember {
+  id: string;
+  department_id: string;
+  user_id: string;
+  role: OrgRole;
+  created_at: string;
+}
+
+export interface OrgInvite {
+  id: string;
+  org_id: string;
+  email: string;
+  role: OrgRole;
+  department_ids: string[];
+  invited_by: string;
+  accepted_at: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+/* ── Profile (auth) ────────────────────────────────────── */
+
 export interface Profile {
   id: string;
   email: string;
@@ -15,7 +66,9 @@ export interface Profile {
 export interface UserProfile {
   id: string;
   user_id: string;
+  org_id: string;
   display_name: string;
+  email: string;
   job_title: string;
   department: string;
   bio: string;
@@ -29,12 +82,14 @@ export interface UserProfile {
   updated_at: string;
 }
 
-// Phase 4: Library
+/* ── Library ───────────────────────────────────────────── */
+
 export type Category = "Note" | "Document" | "Template" | "Reference";
 
 export interface LibraryItem {
   id: string;
   user_id: string;
+  org_id: string;
   title: string;
   content: string;
   category: Category;
@@ -46,6 +101,7 @@ export interface LibraryItem {
 export interface LibraryFile {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   size: number;
   mime_type: string;
@@ -54,12 +110,14 @@ export interface LibraryFile {
   added_at: string;
 }
 
-// Phase 5: Goals
+/* ── Goals ─────────────────────────────────────────────── */
+
 export type GoalStatus = "Backlog" | "To Do" | "In Progress" | "In Review" | "Done";
 
 export interface Goal {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   description: string;
   status: GoalStatus;
@@ -75,6 +133,7 @@ export interface Goal {
 export interface SubGoal {
   id: string;
   goal_id: string;
+  org_id: string;
   name: string;
   description: string;
   status: GoalStatus;
@@ -83,12 +142,14 @@ export interface SubGoal {
   created_at: string;
 }
 
-// Pain Points
+/* ── Pain Points ───────────────────────────────────────── */
+
 export type PainPointSeverity = "Low" | "Medium" | "High" | "Critical";
 
 export interface PainPoint {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   description: string;
   severity: PainPointSeverity;
@@ -100,7 +161,8 @@ export interface PainPoint {
   created_at: string;
 }
 
-// Dashboards
+/* ── Dashboards ────────────────────────────────────────── */
+
 export type WidgetType = "metric" | "bar" | "pie" | "line" | "table" | "progress";
 
 export interface WidgetConfig {
@@ -117,6 +179,7 @@ export interface WidgetConfig {
 export interface Dashboard {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   widgets: WidgetConfig[];
   is_default: boolean;
@@ -124,10 +187,12 @@ export interface Dashboard {
   updated_at: string;
 }
 
-// Vector Search / RAG
+/* ── Vector Search / RAG ───────────────────────────────── */
+
 export interface DocumentChunk {
   id: string;
   user_id: string;
+  org_id: string;
   source_table: string;
   source_id: string;
   source_field: string;
@@ -142,6 +207,7 @@ export interface DocumentChunk {
 export interface LLMLog {
   id: string;
   user_id: string;
+  org_id: string;
   model: string;
   system_prompt_tokens: number | null;
   input_tokens: number;
@@ -169,12 +235,14 @@ export interface SearchResult {
   score: number;
 }
 
-// Phase 6: Teams
+/* ── Teams ─────────────────────────────────────────────── */
+
 export type KpiPeriod = "Day" | "Week" | "Month" | "Quarter" | "Year";
 
 export interface Team {
   id: string;
   user_id: string;
+  org_id: string;
   slug: string;
   name: string;
   description: string;
@@ -184,6 +252,7 @@ export interface Team {
 export interface TeamRole {
   id: string;
   team_id: string;
+  org_id: string;
   name: string;
   description: string;
   headcount: number;
@@ -193,6 +262,7 @@ export interface TeamRole {
 export interface TeamKPI {
   id: string;
   team_id: string;
+  org_id: string;
   name: string;
   current_value: number | null;
   target_value: number | null;
@@ -203,6 +273,7 @@ export interface TeamKPI {
 export interface TeamTool {
   id: string;
   team_id: string;
+  org_id: string;
   name: string;
   purpose: string;
   created_at: string;
@@ -212,6 +283,7 @@ export interface TeamFile {
   id: string;
   team_id: string;
   user_id: string;
+  org_id: string;
   name: string;
   size: number;
   mime_type: string;
@@ -220,12 +292,15 @@ export interface TeamFile {
   added_at: string;
 }
 
-// Phase 9: Organization
+/* ── Org Profile (company info for AI context) ─────────── */
+/* Renamed from "Organization" — the SQL table is now "org_profiles" */
+
 export type OrgStage = "Idea" | "Pre-Seed" | "Seed" | "Series A" | "Series B" | "Series C+" | "Growth" | "Public";
 
-export interface Organization {
+export interface OrgProfile {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   industry: string;
   description: string;
@@ -238,9 +313,13 @@ export interface Organization {
   updated_at: string;
 }
 
-export interface OrganizationFile {
+/** @deprecated Use OrgProfile instead */
+export type Organization = OrgProfile;
+
+export interface OrgProfileFile {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   size: number;
   mime_type: string;
@@ -249,12 +328,17 @@ export interface OrganizationFile {
   added_at: string;
 }
 
-// Phase 8: Tool Catalog + Stack
+/** @deprecated Use OrgProfileFile instead */
+export type OrganizationFile = OrgProfileFile;
+
+/* ── Tool Catalog + Stack ──────────────────────────────── */
+
 export type ToolStatus = "Active" | "Evaluating" | "Deprecated";
 
 export interface ToolCatalogItem {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   category: string;
   subcategory: string;
@@ -272,6 +356,7 @@ export interface ToolCatalogItem {
 export interface UserStackTool {
   id: string;
   user_id: string;
+  org_id: string;
   catalog_id: string | null;
   name: string;
   description: string;
@@ -282,7 +367,8 @@ export interface UserStackTool {
   created_at: string;
 }
 
-// Phase 10: Projects (unified workspace)
+/* ── Projects (unified workspace) ──────────────────────── */
+
 export type ProjectMode = "canvas" | "workflow" | "chat";
 export type CanvasBlockType =
   "text" | "heading" | "image" | "divider" |
@@ -329,6 +415,7 @@ export interface ChatMessage {
 export interface Project {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   slug: string;
   description: string;
@@ -348,7 +435,34 @@ export interface WorkflowVersion {
   nodeCount: number;
 }
 
-// CRM Module
+/* ── Workflow Executions ───────────────────────────────── */
+
+export type WorkflowExecutionStatus = 'in_progress' | 'completed' | 'cancelled';
+
+export interface CompletedNodeEntry {
+  nodeId: string;
+  nodeTitle: string;
+  completedBy: string;
+  completedAt: string;
+  notes?: string;
+  branchChosen?: string;
+}
+
+export interface WorkflowExecution {
+  id: string;
+  org_id: string;
+  project_id: string;
+  started_by: string;
+  status: WorkflowExecutionStatus;
+  current_node_id: string | null;
+  completed_nodes: CompletedNodeEntry[];
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+}
+
+/* ── CRM Module ────────────────────────────────────────── */
+
 export type ContactStatus = "lead" | "active" | "inactive" | "churned";
 export type ContactSource = "manual" | "import" | "ai" | "referral";
 export type CompanySize = "" | "startup" | "small" | "medium" | "large" | "enterprise";
@@ -358,6 +472,7 @@ export type ActivityType = "call" | "email" | "meeting" | "note" | "task";
 export interface CrmCompany {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   domain: string;
   industry: string;
@@ -381,6 +496,7 @@ export interface CrmCompany {
 export interface CrmContact {
   id: string;
   user_id: string;
+  org_id: string;
   company_id: string | null;
   first_name: string;
   last_name: string;
@@ -403,6 +519,7 @@ export interface CrmContactWithCompany extends CrmContact {
 export interface CrmDeal {
   id: string;
   user_id: string;
+  org_id: string;
   contact_id: string | null;
   company_id: string | null;
   title: string;
@@ -424,6 +541,7 @@ export interface CrmDeal {
 export interface CrmDealStageHistory {
   id: string;
   user_id: string;
+  org_id: string;
   deal_id: string;
   from_stage: string | null;
   to_stage: string;
@@ -434,6 +552,7 @@ export interface CrmDealStageHistory {
 export interface CrmProduct {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   sku: string;
   description: string;
@@ -448,6 +567,7 @@ export interface CrmProduct {
 export interface CrmDealLineItem {
   id: string;
   user_id: string;
+  org_id: string;
   deal_id: string;
   product_id: string | null;
   product_name: string;
@@ -462,6 +582,7 @@ export interface CrmDealLineItem {
 export interface CrmCompanyAsset {
   id: string;
   user_id: string;
+  org_id: string;
   company_id: string;
   product_id: string | null;
   product_name: string;
@@ -477,6 +598,7 @@ export interface CrmCompanyAsset {
 export interface CrmActivity {
   id: string;
   user_id: string;
+  org_id: string;
   contact_id: string | null;
   company_id: string | null;
   deal_id: string | null;
@@ -496,6 +618,7 @@ export type CustomFieldType = 'text' | 'number' | 'date' | 'boolean' | 'select';
 export interface CrmCustomField {
   id: string;
   user_id: string;
+  org_id: string;
   table_name: string;
   field_key: string;
   field_label: string;
@@ -533,6 +656,7 @@ export interface ReportSortConfig {
 export interface CrmReport {
   id: string;
   user_id: string;
+  org_id: string;
   name: string;
   description: string;
   entity_type: ReportEntityType;
@@ -542,6 +666,23 @@ export interface CrmReport {
   created_at: string;
   updated_at: string;
 }
+
+/* ── HubSpot Connector ───────────────────────────────── */
+
+export interface HubSpotConfig {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  hub_id: string;
+  scopes: string[];
+  field_mappings?: {
+    contacts?: Record<string, string>;
+    companies?: Record<string, string>;
+    deals?: Record<string, string>;
+  };
+}
+
+export type HubSpotSyncDirection = 'import' | 'export' | 'both';
 
 /* ── Data Home types ──────────────────────────────────── */
 
@@ -553,6 +694,7 @@ export type SyncEventType = 'info' | 'warning' | 'error' | 'success';
 export interface DataConnector {
   id: string;
   user_id: string;
+  org_id: string;
   connector_type: ConnectorType;
   name: string;
   description: string;
@@ -578,6 +720,7 @@ export interface ImportError {
 export interface DataImport {
   id: string;
   user_id: string;
+  org_id: string;
   connector_id: string | null;
   source_name: string;
   target_table: string;
@@ -596,6 +739,7 @@ export interface DataImport {
 export interface DataSyncLog {
   id: string;
   user_id: string;
+  org_id: string;
   connector_id: string | null;
   import_id: string | null;
   event_type: SyncEventType;

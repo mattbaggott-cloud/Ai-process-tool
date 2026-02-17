@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useFiles, formatFileSize, getFileExtension, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { UploadedFile } from "@/context/FileContext";
 import type { Category } from "@/lib/types/database";
@@ -40,6 +41,7 @@ interface LibItem {
 
 export default function LibraryPage() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [items, setItems] = useState<LibItem[]>([]);
@@ -161,6 +163,7 @@ export default function LibraryPage() {
     if (!form.title.trim() || !user) return;
     const newItem = {
       user_id: user.id,
+      org_id: orgId,
       title: form.title,
       content: form.content,
       category: form.category,

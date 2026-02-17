@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { ActivityIcon, ActivityLabel } from "./shared";
 import type { CrmActivity, ActivityType } from "@/lib/types/database";
@@ -15,6 +16,7 @@ interface ActivityRow extends CrmActivity {
 
 export default function ActivitiesTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [activities, setActivities] = useState<ActivityRow[]>([]);
@@ -74,6 +76,7 @@ export default function ActivitiesTab() {
 
     const { error } = await supabase.from("crm_activities").insert({
       user_id: user.id,
+      org_id: orgId,
       type: form.type,
       subject: form.subject.trim(),
       description: form.description.trim(),

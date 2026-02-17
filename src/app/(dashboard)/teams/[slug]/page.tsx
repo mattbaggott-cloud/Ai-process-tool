@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { KpiPeriod } from "@/lib/types/database";
 
@@ -82,6 +83,7 @@ function fmtDate(iso: string): string {
 export default function TeamPage() {
   const { slug } = useParams<{ slug: string }>();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   /* Team name comes from the database now */
@@ -148,6 +150,7 @@ export default function TeamPage() {
         .from("teams")
         .insert({
           user_id: user.id,
+          org_id: orgId,
           slug,
           name: defaultName,
           description: "",
@@ -250,6 +253,7 @@ export default function TeamPage() {
       .from("team_roles")
       .insert({
         team_id: teamId,
+        org_id: orgId,
         name: newRole.name,
         description: newRole.description,
         headcount: newRole.headcount,
@@ -309,6 +313,7 @@ export default function TeamPage() {
       .from("team_kpis")
       .insert({
         team_id: teamId,
+        org_id: orgId,
         name: newKpi.name,
         current_value: newKpi.current_value,
         target_value: newKpi.target_value,
@@ -367,6 +372,7 @@ export default function TeamPage() {
       .from("team_tools")
       .insert({
         team_id: teamId,
+        org_id: orgId,
         name: newTool.name,
         purpose: newTool.purpose,
       })
@@ -404,6 +410,7 @@ export default function TeamPage() {
       /* Not in stack — create it */
       await supabase.from("user_stack_tools").insert({
         user_id: user.id,
+        org_id: orgId,
         name: newTool.name.trim(),
         description: newTool.purpose,
         category: "",
@@ -485,6 +492,7 @@ export default function TeamPage() {
         .insert({
           team_id: teamId,
           user_id: user.id,
+          org_id: orgId,
           name: file.name,
           size: file.size,
           mime_type: file.type || "application/octet-stream",

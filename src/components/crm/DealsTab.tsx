@@ -3,9 +3,11 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge, DealValue, DEAL_STAGES, STAGE_PROBABILITY, formatCurrency } from "./shared";
 import DealsPipeline from "./DealsPipeline";
+import CrmPagination from "./CrmPagination";
 import type { CrmDeal, DealStage } from "@/lib/types/database";
 
 type DealFilter = "all" | "active" | "won" | "lost";
@@ -17,6 +19,7 @@ interface DealRow extends CrmDeal {
 
 export default function DealsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const router = useRouter();
   const supabase = createClient();
 
@@ -26,6 +29,8 @@ export default function DealsTab() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"list" | "pipeline">("pipeline");
   const [dealFilter, setDealFilter] = useState<DealFilter>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     title: "",
@@ -88,6 +93,7 @@ export default function DealsTab() {
 
     const { error } = await supabase.from("crm_deals").insert({
       user_id: user.id,
+      org_id: orgId,
       title: form.title.trim(),
       value: parseFloat(form.value) || 0,
       stage,
@@ -138,6 +144,7 @@ export default function DealsTab() {
     if (oldStage !== newStage && user) {
       await supabase.from("crm_deal_stage_history").insert({
         user_id: user.id,
+        org_id: orgId,
         deal_id: dealId,
         from_stage: oldStage,
         to_stage: newStage,
@@ -159,6 +166,13 @@ export default function DealsTab() {
     : dealFilter === "lost" ? lostDeals
     : deals;
 
+  /* Pagination (list view only) */
+  const totalFilteredDeals = filteredDeals.length;
+  const paginatedDeals = filteredDeals.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
   const fmt = (d: string) =>
     new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
@@ -178,7 +192,7 @@ export default function DealsTab() {
             <button
               key={f.key}
               className={`crm-deal-filter-tab ${dealFilter === f.key ? "crm-deal-filter-tab-active" : ""}`}
-              onClick={() => setDealFilter(f.key)}
+              onClick={() => { setDealFilter(f.key); setCurrentPage(1); }}
             >
               {f.label}
             </button>
@@ -254,7 +268,7 @@ export default function DealsTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredDeals.map((d) => (
+                  {paginatedDeals.map((d) => (
                     <tr key={d.id} className="crm-table-row crm-clickable" onClick={() => router.push(`/crm/deals/${d.id}`)}>
                       <td className="crm-cell-name">{d.title}</td>
                       <td><DealValue value={d.value} currency={d.currency} /></td>
@@ -283,6 +297,17 @@ export default function DealsTab() {
                 </tbody>
               </table>
             </div>
+          )}
+
+          {totalFilteredDeals > 0 && (
+            <CrmPagination
+              totalItems={totalFilteredDeals}
+              pageSize={pageSize}
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+              label="deals"
+            />
           )}
         </>
       )}

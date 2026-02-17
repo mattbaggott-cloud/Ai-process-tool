@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "./shared";
 import type { CrmProduct } from "@/lib/types/database";
@@ -10,6 +11,7 @@ type ProductFilter = "active" | "all";
 
 export default function ProductsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [products, setProducts] = useState<CrmProduct[]>([]);
@@ -56,6 +58,7 @@ export default function ProductsTab() {
 
     const payload = {
       user_id: user.id,
+      org_id: orgId,
       name: form.name.trim(),
       sku: form.sku.trim(),
       category: form.category.trim(),

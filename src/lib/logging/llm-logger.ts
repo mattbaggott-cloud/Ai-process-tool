@@ -10,6 +10,7 @@ const COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000;  // $15.00 per 1M output tokens
 
 export interface LLMLogEntry {
   userId: string;
+  orgId?: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -47,6 +48,7 @@ export async function logLLMCall(
 
     await supabase.from("llm_logs").insert({
       user_id: entry.userId,
+      org_id: entry.orgId,
       model: entry.model,
       input_tokens: entry.inputTokens,
       output_tokens: entry.outputTokens,

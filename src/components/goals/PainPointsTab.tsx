@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { GoalStatus, PainPointSeverity } from "@/lib/types/database";
 import { StatusPill, TeamPicker, statuses, statusStyles } from "./GoalsTab";
@@ -164,6 +165,7 @@ function PainPointForm({
 
 export default function PainPointsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [painPoints, setPainPoints] = useState<PainPointLocal[]>([]);
@@ -226,7 +228,7 @@ export default function PainPointsTab() {
     const { data: row, error } = await supabase
       .from("pain_points")
       .insert({
-        user_id: user.id, name: newPP.name, description: newPP.description,
+        user_id: user.id, org_id: orgId, name: newPP.name, description: newPP.description,
         severity: newPP.severity, status: newPP.status, teams: newPP.teams,
         owner: newPP.owner, impact_metric: newPP.impact_metric,
         linked_goal_id: newPP.linked_goal_id,

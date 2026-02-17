@@ -3,8 +3,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./shared";
+import CrmPagination from "./CrmPagination";
 import type { CrmContact, CrmCompany, ContactStatus, ContactSource } from "@/lib/types/database";
 
 interface ContactRow extends CrmContact {
@@ -17,6 +19,7 @@ const SOURCE_OPTIONS: ContactSource[] = ["manual", "import", "ai", "referral"];
 
 export default function ContactsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const router = useRouter();
   const supabase = createClient();
 
@@ -26,6 +29,8 @@ export default function ContactsTab() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [viewMode, setViewMode] = useState<"cards" | "list">("list");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     first_name: "",
@@ -90,6 +95,7 @@ export default function ContactsTab() {
 
     const { error } = await supabase.from("crm_contacts").insert({
       user_id: user.id,
+      org_id: orgId,
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim(),
       email: form.email.trim(),
@@ -123,6 +129,13 @@ export default function ContactsTab() {
     return matchesSearch && matchesStatus;
   });
 
+  /* Pagination */
+  const totalFiltered = filtered.length;
+  const paginatedContacts = filtered.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
   if (loading) return <div className="crm-loading">Loading contacts...</div>;
 
   return (
@@ -134,12 +147,13 @@ export default function ContactsTab() {
           className="crm-search-input"
           placeholder="Search contacts..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
         />
+        <span className="crm-record-count">{filtered.length} contacts</span>
         <select
           className="crm-filter-select"
           value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          onChange={(e) => { setFilterStatus(e.target.value); setCurrentPage(1); }}
         >
           <option value="">All Statuses</option>
           {STATUS_OPTIONS.map((s) => (
@@ -258,7 +272,7 @@ export default function ContactsTab() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c) => (
+              {paginatedContacts.map((c) => (
                 <tr
                   key={c.id}
                   className="crm-table-row crm-clickable"
@@ -286,7 +300,7 @@ export default function ContactsTab() {
         </div>
       ) : (
         <div className="crm-card-grid">
-          {filtered.map((c) => (
+          {paginatedContacts.map((c) => (
             <div
               key={c.id}
               className="crm-card crm-clickable"
@@ -324,6 +338,17 @@ export default function ContactsTab() {
             </div>
           ))}
         </div>
+      )}
+
+      {totalFiltered > 0 && (
+        <CrmPagination
+          totalItems={totalFiltered}
+          pageSize={pageSize}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+          label="contacts"
+        />
       )}
     </div>
   );

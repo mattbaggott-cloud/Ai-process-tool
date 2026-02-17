@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import {
   SizeBadge, StatusBadge, DealValue, ActivityIcon, ActivityLabel,
@@ -19,6 +20,7 @@ export default function CompanyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [company, setCompany] = useState<CrmCompany | null>(null);
@@ -108,6 +110,7 @@ export default function CompanyDetailPage() {
     const product = products.find(p => p.id === assetForm.product_id);
     await supabase.from("crm_company_assets").insert({
       user_id: user.id,
+      org_id: orgId,
       company_id: company.id,
       product_id: assetForm.product_id || null,
       product_name: product?.name || "Custom Product",

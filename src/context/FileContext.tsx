@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -124,6 +125,7 @@ export function useFiles(): FileContextValue {
 
 export function FileProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   /* Library files — persisted to Supabase Storage + library_files table */
@@ -208,6 +210,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
             .from("library_files")
             .insert({
               user_id: user.id,
+              org_id: orgId,
               name: file.name,
               size: file.size,
               mime_type: file.type || "application/octet-stream",

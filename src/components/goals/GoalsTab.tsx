@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import type { GoalStatus } from "@/lib/types/database";
 
@@ -208,6 +209,7 @@ function GoalForm({
 
 export default function GoalsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const supabase = createClient();
 
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -291,7 +293,7 @@ export default function GoalsTab() {
     const { data: row, error } = await supabase
       .from("goals")
       .insert({
-        user_id: user.id, name: newGoal.name, description: newGoal.description,
+        user_id: user.id, org_id: orgId, name: newGoal.name, description: newGoal.description,
         status: newGoal.status, teams: newGoal.teams, owner: newGoal.owner,
         start_date: newGoal.start_date, end_date: newGoal.end_date,
         metric: newGoal.metric, metric_target: newGoal.metric_target,
@@ -341,7 +343,7 @@ export default function GoalsTab() {
     if (!newSub.name.trim()) return;
     const { data: row, error } = await supabase
       .from("sub_goals")
-      .insert({ goal_id: parentId, user_id: user!.id, name: newSub.name, description: newSub.description, status: newSub.status, owner: newSub.owner, end_date: newSub.end_date })
+      .insert({ goal_id: parentId, user_id: user!.id, org_id: orgId, name: newSub.name, description: newSub.description, status: newSub.status, owner: newSub.owner, end_date: newSub.end_date })
       .select().single();
     if (error || !row) { console.error("Add sub-goal error:", error?.message); return; }
     const sub: SubGoal = { id: row.id, goal_id: row.goal_id, name: row.name, description: row.description ?? "", status: row.status, owner: row.owner ?? "", end_date: row.end_date };

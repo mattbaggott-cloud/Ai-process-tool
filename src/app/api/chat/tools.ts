@@ -1143,5 +1143,111 @@ Always include a start and end node. Map document sections/steps to process node
         required: ["report_id"],
       },
     },
+
+    /* ── Org Management tools ─────────────────────────────── */
+    {
+      name: "invite_member",
+      description:
+        "Invite a new member to the organization by email. Creates an invite link. Permission hierarchy: Owner can invite anyone, Admin can invite manager/user/viewer, Manager can invite user/viewer, User/Viewer cannot invite. IMPORTANT: Always call with confirmed=false first to show the user what will happen, then call again with confirmed=true only after they explicitly confirm.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          email: { type: "string", description: "Email address of the person to invite" },
+          role: {
+            type: "string",
+            enum: ["admin", "manager", "user", "viewer"],
+            description: "Role to assign. Defaults to 'user'. Cannot assign 'owner'.",
+          },
+          department_names: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional department names to pre-assign (e.g. ['Sales', 'Marketing'])",
+          },
+          confirmed: {
+            type: "boolean",
+            description: "Set to true only after the user explicitly confirms. Always call with false or omit first.",
+          },
+        },
+        required: ["email"],
+      },
+    },
+    {
+      name: "list_members",
+      description:
+        "List all current members of the organization with their roles, emails, and join dates. Also shows pending invites. Any org member can use this.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "update_member_role",
+      description:
+        "Change a member's role. Requires admin or owner. Cannot change the owner's role or assign owner. IMPORTANT: Always call with confirmed=false first, then confirmed=true only after user explicitly confirms.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          member_identifier: {
+            type: "string",
+            description: "Email address or display name of the member",
+          },
+          new_role: {
+            type: "string",
+            enum: ["admin", "manager", "user", "viewer"],
+            description: "The new role to assign",
+          },
+          confirmed: {
+            type: "boolean",
+            description: "Set to true only after the user explicitly confirms.",
+          },
+        },
+        required: ["member_identifier", "new_role"],
+      },
+    },
+    {
+      name: "remove_member",
+      description:
+        "Remove a member from the organization. Requires admin or owner. Cannot remove the owner or yourself. IMPORTANT: Always call with confirmed=false first, then confirmed=true only after user explicitly confirms.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          member_identifier: {
+            type: "string",
+            description: "Email address or display name of the member to remove",
+          },
+          confirmed: {
+            type: "boolean",
+            description: "Set to true only after the user explicitly confirms.",
+          },
+        },
+        required: ["member_identifier"],
+      },
+    },
+    {
+      name: "create_department",
+      description:
+        "Create a new department in the organization. Requires admin or owner. Departments organize team members into functional groups.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Department name (e.g. 'Sales', 'Engineering', 'Marketing')",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "list_org_info",
+      description:
+        "Get a summary of the organization: name, member count by role, departments, and pending invites. Any org member can use this.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
   ];
 }

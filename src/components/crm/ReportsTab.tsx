@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge, formatCurrency } from "./shared";
 import type {
@@ -136,6 +137,7 @@ type ReportView = "list" | "builder" | "viewer";
 
 export default function ReportsTab() {
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const router = useRouter();
   const supabase = createClient();
 
@@ -378,7 +380,7 @@ export default function ReportsTab() {
     } else {
       const { data, error } = await supabase
         .from("crm_reports")
-        .insert({ ...reportPayload, user_id: user.id })
+        .insert({ ...reportPayload, user_id: user.id, org_id: orgId })
         .select()
         .single();
       if (!error && data) {
