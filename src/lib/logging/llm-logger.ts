@@ -3,6 +3,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emitEventInBackground } from "@/lib/agentic/event-emitter";
 
 /* ── Cost constants (Claude Sonnet 4) ── */
 const COST_PER_INPUT_TOKEN = 3.0 / 1_000_000;   // $3.00 per 1M input tokens
@@ -21,6 +22,7 @@ export interface LLMLogEntry {
   userMessage?: string;
   stopReason?: string;
   error?: string;
+  sessionId?: string;
 }
 
 /** Calculate costs from token counts */
@@ -71,6 +73,7 @@ export async function logLLMCall(
 
 /**
  * Fire-and-forget log — call this at the end of a chat request.
+ * Also emits an event to the agentic event stream.
  */
 export function logInBackground(
   supabase: SupabaseClient,
@@ -79,4 +82,26 @@ export function logInBackground(
   Promise.resolve()
     .then(() => logLLMCall(supabase, entry))
     .catch((err) => console.error("Background LLM log failed:", err));
+
+  // Also emit to event stream
+  if (entry.orgId) {
+    emitEventInBackground(supabase, {
+      org_id: entry.orgId,
+      event_type: "ai.chat.completed",
+      event_category: "ai",
+      actor_type: "ai",
+      actor_id: entry.userId,
+      session_id: entry.sessionId ?? null,
+      payload: {
+        model: entry.model,
+        input_tokens: entry.inputTokens,
+        output_tokens: entry.outputTokens,
+        total_tokens: entry.inputTokens + entry.outputTokens,
+        latency_ms: entry.latencyMs,
+        tool_calls: entry.toolCalls ?? [],
+        tool_rounds: entry.toolRounds ?? 0,
+        error: entry.error ?? null,
+      },
+    });
+  }
 }

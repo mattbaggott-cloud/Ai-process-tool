@@ -2,6 +2,8 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
 import { hasMinRole } from "@/lib/org";
 import type { OrgRole } from "@/lib/types/database";
+import { emitToolEvent } from "@/lib/agentic/event-emitter";
+import { syncRecordToGraphInBackground } from "@/lib/agentic/graph-sync";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -18,7 +20,8 @@ export async function executeTool(
   supabase: SupabaseClient,
   userId: string,
   orgId: string,
-  userRole: OrgRole = "viewer"
+  userRole: OrgRole = "viewer",
+  sessionId?: string
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
@@ -119,8 +122,120 @@ export async function executeTool(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
+    // Emit failure event
+    emitToolEvent(supabase, {
+      orgId, userId, toolName, success: false, sessionId,
+      output: { message: msg },
+    });
     return { success: false, message: `Tool execution failed: ${msg}` };
   }
+}
+
+/**
+ * Wrapper that calls executeTool and emits events + syncs graph.
+ * This is the entry point called from route.ts.
+ */
+export async function executeToolWithGraph(
+  toolName: string,
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+  userRole: OrgRole = "viewer",
+  sessionId?: string
+): Promise<ToolResult> {
+  const result = await executeTool(toolName, input, supabase, userId, orgId, userRole, sessionId);
+
+  // Fire-and-forget: emit event + sync graph
+  const entityInfo = inferEntityFromTool(toolName, input, result);
+  emitToolEvent(supabase, {
+    orgId,
+    userId,
+    toolName,
+    success: result.success,
+    entityType: entityInfo?.entityType,
+    entityId: entityInfo?.entityId,
+    input,
+    output: { message: result.message },
+    sessionId,
+  });
+
+  // If the tool created/updated an entity, sync to graph
+  if (result.success && entityInfo?.entityType && entityInfo?.entityId) {
+    syncRecordToGraphInBackground(
+      supabase,
+      orgId,
+      entityInfo.entityType,
+      entityInfo.entityId,
+      { ...input, id: entityInfo.entityId },
+      userId
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Infer entity type and id from tool name + result.
+ * Used to link events and graph nodes to the affected entity.
+ */
+function inferEntityFromTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  result: ToolResult
+): { entityType: string; entityId: string } | null {
+  // Map tool names to entity types
+  const TOOL_ENTITY_MAP: Record<string, string> = {
+    create_team: "teams",
+    update_team_description: "teams",
+    create_goal: "goals",
+    add_sub_goals: "sub_goals",
+    update_goal_status: "goals",
+    delete_goal: "goals",
+    create_pain_point: "pain_points",
+    update_pain_point_status: "pain_points",
+    delete_pain_point: "pain_points",
+    create_library_item: "library_items",
+    create_project: "projects",
+    update_canvas: "projects",
+    create_contact: "crm_contacts",
+    update_contact: "crm_contacts",
+    create_company: "crm_companies",
+    create_deal: "crm_deals",
+    update_deal_stage: "crm_deals",
+    log_activity: "crm_activities",
+    create_product: "crm_products",
+    update_organization: "org_profiles",
+    invite_member: "org_invites",
+    update_member_role: "org_members",
+    remove_member: "org_members",
+    create_department: "org_departments",
+    create_report: "crm_reports",
+    update_report: "crm_reports",
+  };
+
+  const entityType = TOOL_ENTITY_MAP[toolName];
+  if (!entityType) return null;
+
+  // Try to extract entity id from input or result message
+  const entityId =
+    (input.id as string) ||
+    (input.contact_id as string) ||
+    (input.company_id as string) ||
+    (input.deal_id as string) ||
+    (input.goal_id as string) ||
+    extractIdFromResult(result.message);
+
+  if (!entityId) return null;
+  return { entityType, entityId };
+}
+
+/** Try to extract a UUID from a result message */
+function extractIdFromResult(message: string): string | null {
+  const uuidMatch = message.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+  );
+  return uuidMatch ? uuidMatch[0] : null;
 }
 
 /* ── Helper: resolve team name → id ────────────────────── */

@@ -461,6 +461,20 @@ export interface WorkflowExecution {
   created_at: string;
 }
 
+/* ── Agentic Graph ────────────────────────────────────── */
+
+// Re-export agentic types for convenience
+export type {
+  GraphNode,
+  GraphEdge,
+  AgenticEvent,
+  EventInput,
+  EventCategory,
+  EventType,
+  ActorType,
+  TraversalNode,
+} from "@/lib/agentic/types";
+
 /* ── CRM Module ────────────────────────────────────────── */
 
 export type ContactStatus = "lead" | "active" | "inactive" | "churned";

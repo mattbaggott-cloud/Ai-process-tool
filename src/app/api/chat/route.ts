@@ -1,10 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getToolDefinitions } from "./tools";
-import { executeTool } from "./tool-executor";
+import { executeAction } from "@/lib/agentic/action-executor";
 import { hybridSearch, type SearchResult } from "@/lib/embeddings/search";
 import { logInBackground, type LLMLogEntry } from "@/lib/logging/llm-logger";
 import { getOrgContext } from "@/lib/org";
+import { retrieveMemories, formatMemoriesForPrompt } from "@/lib/agentic/memory-retriever";
+import { extractAndStoreMemoriesInBackground } from "@/lib/agentic/memory-extractor";
+import { getGraphContext } from "@/lib/agentic/graph-query";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -60,6 +63,8 @@ function buildSystemPrompt(data: {
   orgMembersByRole: Record<string, number>;
   orgDepartmentNames: string[];
   pendingInviteCount: number;
+  memorySummary: string;
+  graphContext: string;
 }): string {
   const {
     email, userProfile, organization,
@@ -68,6 +73,7 @@ function buildSystemPrompt(data: {
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
     orgRole, orgMemberCount, orgMembersByRole, orgDepartmentNames, pendingInviteCount,
+    memorySummary, graphContext,
   } = data;
 
   /* Group team child data by team_id */
@@ -96,15 +102,15 @@ function buildSystemPrompt(data: {
 
   const userName = (userProfile?.display_name as string) || email;
 
-  let prompt = `You are an AI business operations copilot for ${userName}'s workspace.
+  let prompt = `You are an intelligent AI agent operating ${userName}'s business workspace. You are NOT a software feature — you are a reasoning agent that understands context, remembers preferences, and takes smart action.
 
-## Your Role
-- Help model business processes, team structures, and workflows
-- Suggest optimizations based on the user's actual data below
-- Help with KPI tracking, goal setting, and tool evaluation
-- Be concise and actionable — reference the user's real data when relevant
-- When the user is on a specific page, prioritize context about that area
-- Format responses with clear structure (use bullet points, headers, etc.)
+## Your Identity
+- You THINK before acting. You interpret what the user means, not just what they literally said.
+- You REMEMBER. When a user tells you a preference (like "I prefer EUR"), you acknowledge it and apply it immediately and in all future interactions. You don't tell them to go change settings — YOU are the settings.
+- You REASON across data. If deal values are stored in USD but the user prefers EUR, you convert and display in EUR. If a user asks about patterns across customers, you analyze and find them.
+- You are concise, actionable, and reference the user's real data.
+- Format responses with clear structure (bullet points, headers, etc.)
+- When the user is on a specific page, prioritize context about that area.
 
 ## Your Capabilities
 You can take actions in the user's workspace using tools:
@@ -130,6 +136,24 @@ You can take actions in the user's workspace using tools:
 - Create departments to organize the team
 - View organization info: member count, departments, pending invites
 
+## When to Clarify vs. Just Act
+Most requests are clear — just execute them. Only ask for clarification when the request has genuine ambiguity that could lead to wrong results.
+
+**Clear requests — act immediately, no questions:**
+- "Show me leads with phone numbers" → Create report: status=Lead + phone is_not_empty. Done.
+- "Create a contact named John Smith, john@test.com" → Just create it.
+- "Delete the Acme deal" → Just do it (if there's only one Acme deal).
+
+**Ambiguous requests — clarify first:**
+- "Show me active leads with phone email" → Ambiguous: does "active leads" mean two statuses (Active + Lead) or just leads that are active? Does "phone email" mean has both, or show those columns? Ask.
+- "Update the deal" → Which deal? What changes?
+- "Delete old activities" → How old?
+- "Show me big deals" → What threshold is "big"?
+
+**The rule:** If the request reads like a clear sentence with obvious meaning, act. If it's a run-on, has missing punctuation, mixes terms that could mean different things, or uses vague words like "big", "old", "recent" without specifics — clarify.
+
+**Report filter rules:** When a user says "with [field]" (e.g. "with phone numbers"), ALWAYS add an is_not_empty filter for that field — "with" means the data must exist. When multiple statuses or values apply to the same field, use separate equality filters (the system ORs them). Always match your filters to exactly what the user asked for.
+
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 When the user asks to create a workflow, process, flow, or pipeline, use generate_workflow to build it visually with proper nodes and connections. Assign tools from their tech stack to process steps when mentioned.
 When the user uploads a document (SOP, process doc, playbook, PDF, etc.) and asks to generate a workflow from it, use generate_workflow_from_document. Parse the document text to identify process steps, decision points, and automation opportunities. Create a comprehensive workflow with proper node types and connections. Include the document text in the document_text parameter so it's recorded.
@@ -144,6 +168,16 @@ Invite permission hierarchy: Owner invites anyone. Admin invites manager/user/vi
 ## User's Current Page
 ${currentPage}
 `;
+
+  /* ── Memory Context ── */
+  if (memorySummary) {
+    prompt += "\n" + memorySummary + "\n";
+  }
+
+  /* ── Graph Context (Knowledge Graph) ── */
+  if (graphContext) {
+    prompt += "\n" + graphContext + "\n";
+  }
 
   /* ── Active Report Context ── */
   if (activeReport) {
@@ -476,6 +510,7 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
   const { user, orgId } = orgCtx;
+  const sessionId = crypto.randomUUID();
 
   /* 3. Parse request */
   let body: ChatRequest;
@@ -491,21 +526,46 @@ export async function POST(req: Request) {
     return new Response("Messages array is required", { status: 400 });
   }
 
-  /* 4. RAG: Embed user's last message and retrieve relevant chunks */
+  /* 4. RAG + Memory: Embed user's last message and retrieve relevant chunks + memories */
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   let retrievedContext: SearchResult[] = [];
   let retrievedChunkIds: string[] = [];
+  let memorySummary = "";
+  let graphContextStr = "";
 
-  // Only do RAG search if OPENAI_API_KEY is available (embeddings need it)
+  // RAG + Memory + Graph retrieval (all non-fatal, independent try/catches)
   if (process.env.OPENAI_API_KEY && lastUserMessage.trim()) {
+    // RAG search
     try {
-      retrievedContext = await hybridSearch(supabase, user.id, lastUserMessage, {
-        limit: 10,
-      });
+      retrievedContext = await hybridSearch(supabase, user.id, lastUserMessage, { limit: 10 });
       retrievedChunkIds = retrievedContext.map((r) => r.id);
     } catch (err) {
-      // RAG failure is non-fatal — proceed without context
-      console.error("RAG search failed:", err);
+      console.error("[RAG] Search failed:", err);
+    }
+
+    // Memory retrieval (separate try/catch so RAG failure doesn't block memory)
+    try {
+      const memories = await retrieveMemories(supabase, orgId, user.id, lastUserMessage, { limit: 10 });
+      console.log(`[Memory] Retrieved ${memories.length} memories for: "${lastUserMessage.slice(0, 50)}"`);
+      memorySummary = formatMemoriesForPrompt(memories);
+      if (memorySummary) {
+        console.log(`[Memory] Prompt section length: ${memorySummary.length} chars`);
+      }
+    } catch (err) {
+      console.error("[Memory] Retrieval failed:", err);
+    }
+  }
+
+  // Graph context retrieval (doesn't need OPENAI_API_KEY — uses label matching)
+  if (lastUserMessage.trim()) {
+    try {
+      const graphResult = await getGraphContext(supabase, orgId, lastUserMessage);
+      graphContextStr = graphResult.formatted;
+      if (graphResult.resolvedEntities.length > 0) {
+        console.log(`[Graph] Resolved ${graphResult.resolvedEntities.length} entities, ${graphResult.connectedNodes.length} connected nodes`);
+      }
+    } catch (err) {
+      console.error("[Graph] Context retrieval failed:", err);
     }
   }
 
@@ -674,6 +734,8 @@ export async function POST(req: Request) {
     orgMembersByRole,
     orgDepartmentNames: (orgDeptsData ?? []).map((d) => d.name as string),
     pendingInviteCount: orgPendingInviteCount ?? 0,
+    memorySummary,
+    graphContext: graphContextStr,
   });
 
   /* 7. Call Claude with streaming + tool use */
@@ -737,16 +799,17 @@ export async function POST(req: Request) {
                 block.type === "tool_use"
             );
 
-            /* Execute all tools */
+            /* Execute all tools via Action Framework */
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
             for (const toolBlock of toolUseBlocks) {
-              const result = await executeTool(
+              const result = await executeAction(
                 toolBlock.name,
                 toolBlock.input as Record<string, unknown>,
                 supabase,
                 user.id,
                 orgId,
-                orgCtx.role
+                orgCtx.role,
+                sessionId
               );
               toolResults.push({
                 type: "tool_result",
@@ -814,8 +877,23 @@ export async function POST(req: Request) {
             userMessage: lastUserMessage,
             stopReason: stopReason ?? undefined,
             error: logError ?? undefined,
+            sessionId,
           };
           logInBackground(supabase, logEntry);
+
+          /* ── Extract memories from conversation (fire-and-forget) ── */
+          if (messages.length >= 1 && !logError) {
+            extractAndStoreMemoriesInBackground(
+              supabase,
+              orgId,
+              user.id,
+              messages.map((m: { role: string; content: string }) => ({
+                role: m.role as "user" | "assistant",
+                content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+              })),
+              sessionId
+            );
+          }
         }
       },
     });

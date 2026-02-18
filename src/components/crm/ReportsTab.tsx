@@ -424,8 +424,8 @@ export default function ReportsTab() {
       case "lte": return query.lte(field, value);
       case "before": return query.lt(field, value);
       case "after": return query.gt(field, value);
-      case "is_empty": return query.is(field, null);
-      case "is_not_empty": return query.not(field, "is", null);
+      case "is_empty": return query.or(`${field}.is.null,${field}.eq.`);
+      case "is_not_empty": return query.not(field, "is", null).neq(field, "");
       case "is_true": return query.eq(field, true);
       case "is_false": return query.eq(field, false);
       default: return query;
@@ -596,10 +596,31 @@ export default function ReportsTab() {
       .order(isJoinSort ? "created_at" : sortField, { ascending: sortConfigDirection === "asc" });
 
     // Apply Supabase-native filters for standard fields
-    for (const filter of report.filters) {
-      if (!isClientSideFilter(filter)) {
-        query = applySupabaseFilter(query, filter);
+    // Group same-field equality filters (is/equals) into OR conditions
+    const serverFilters = report.filters.filter((f) => !isClientSideFilter(f));
+    const grouped = new Map<string, ReportFilter[]>();
+    const ungrouped: ReportFilter[] = [];
+    for (const filter of serverFilters) {
+      if (filter.operator === "equals" || filter.operator === "is") {
+        const key = filter.field;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(filter);
+      } else {
+        ungrouped.push(filter);
       }
+    }
+    // Apply grouped OR filters (e.g. status=Active OR status=Lead)
+    for (const [field, filters] of grouped) {
+      if (filters.length === 1) {
+        query = applySupabaseFilter(query, filters[0]);
+      } else {
+        const orClause = filters.map((f) => `${field}.eq.${f.value}`).join(",");
+        query = query.or(orClause);
+      }
+    }
+    // Apply remaining filters normally (AND)
+    for (const filter of ungrouped) {
+      query = applySupabaseFilter(query, filter);
     }
 
     const { data: primaryData } = await query;
@@ -615,12 +636,28 @@ export default function ReportsTab() {
     // Enrich rows
     let rows = enrichRows(report.entity_type, primaryData, joinData);
 
-    // Apply client-side filters
+    // Apply client-side filters (with OR grouping for same-field equality)
     const clientFilters = report.filters.filter(isClientSideFilter);
     if (clientFilters.length > 0) {
-      rows = rows.filter((row) =>
-        clientFilters.every((filter) => evaluateFilter(row[filter.field], filter))
-      );
+      const clientGrouped = new Map<string, ReportFilter[]>();
+      const clientUngrouped: ReportFilter[] = [];
+      for (const filter of clientFilters) {
+        if (filter.operator === "equals" || filter.operator === "is") {
+          const key = filter.field;
+          if (!clientGrouped.has(key)) clientGrouped.set(key, []);
+          clientGrouped.get(key)!.push(filter);
+        } else {
+          clientUngrouped.push(filter);
+        }
+      }
+      rows = rows.filter((row) => {
+        // Grouped: any match within same field (OR)
+        for (const [, filters] of clientGrouped) {
+          if (!filters.some((f) => evaluateFilter(row[f.field], f))) return false;
+        }
+        // Ungrouped: all must match (AND)
+        return clientUngrouped.every((f) => evaluateFilter(row[f.field], f));
+      });
     }
 
     // Sort by custom/join field if needed
