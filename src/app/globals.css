@@ -526,6 +526,94 @@ body {
 
 .ai-send-btn:hover { background: var(--color-primary-600); }
 
+/* ── Inline Rich Content (charts + tables in chat) ──────── */
+
+.ai-inline-loading {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-gray-400);
+  font-size: 12px;
+}
+
+.ai-inline-table {
+  margin: 8px 0;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-gray-50);
+}
+
+.ai-inline-table-title {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-gray-700);
+  border-bottom: 1px solid var(--color-gray-200);
+  background: white;
+}
+
+.ai-inline-table-scroll {
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ai-inline-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.ai-inline-table th {
+  position: sticky;
+  top: 0;
+  background: white;
+  padding: 6px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-gray-600);
+  border-bottom: 1px solid var(--color-gray-200);
+  white-space: nowrap;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ai-inline-table td {
+  padding: 5px 10px;
+  color: var(--color-gray-700);
+  border-bottom: 1px solid var(--color-gray-100);
+  white-space: nowrap;
+}
+
+.ai-inline-table tbody tr:hover {
+  background: var(--color-primary-50);
+}
+
+.ai-inline-table-footer {
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--color-gray-400);
+  border-top: 1px solid var(--color-gray-200);
+  background: white;
+}
+
+.ai-inline-chart {
+  margin: 8px 0;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  padding: 8px 4px 4px;
+}
+
+.ai-inline-chart-title {
+  padding: 0 8px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-gray-700);
+}
+
 /* ═══════════════════════════════════════════════════════════
    SHARED COMPONENTS
    ═══════════════════════════════════════════════════════════ */
@@ -10255,5 +10343,228 @@ a.sidebar-user-avatar:hover {
   .settings-invite-link-banner {
     flex-direction: column;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   EXPLORER — Unified Data Explorer
+   ═══════════════════════════════════════════════════════════ */
+
+.explorer-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 24px 32px 0;
+}
+
+.explorer-header {
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.explorer-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  margin: 0 0 4px;
+}
+
+.explorer-subtitle {
+  font-size: 13px;
+  color: var(--color-gray-500);
+  margin: 0;
+}
+
+/* ── Entity type pills ─────────────────────────────────── */
+
+.explorer-pills {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.explorer-pill {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-gray-200);
+  background: var(--color-white);
+  color: var(--color-gray-600);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.explorer-pill:hover {
+  border-color: var(--color-gray-400);
+  color: var(--color-gray-800);
+}
+
+.explorer-pill-active {
+  background: var(--color-primary-600);
+  color: white;
+  border-color: var(--color-primary-600);
+}
+
+.explorer-pill-active:hover {
+  background: var(--color-primary-700);
+  border-color: var(--color-primary-700);
+  color: white;
+}
+
+/* ── Source filter pills ───────────────────────────────── */
+
+.explorer-source-pills {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.explorer-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--color-gray-200);
+  background: var(--color-white);
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.explorer-source-pill:hover:not(:disabled) {
+  border-color: var(--color-gray-400);
+  color: var(--color-gray-700);
+}
+
+.explorer-source-pill-active {
+  background: var(--color-gray-100);
+  border-color: var(--color-gray-400);
+  color: var(--color-gray-800);
+  font-weight: 600;
+}
+
+.explorer-pill-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Source dot (in pills and table cells) ──────────────── */
+
+.explorer-source-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── Source badge (in table cells) ──────────────────────── */
+
+.explorer-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+/* ── Metrics bar ───────────────────────────────────────── */
+
+.explorer-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.explorer-metric-card {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--color-gray-200);
+  background: var(--color-white);
+}
+
+.explorer-metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  line-height: 1.2;
+}
+
+.explorer-metric-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-top: 2px;
+}
+
+/* ── Scrollable content area (table + pagination) ──────── */
+
+.explorer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+/* ── Table enhancements ────────────────────────────────── */
+
+.explorer-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.explorer-sortable:hover {
+  color: var(--color-primary-600);
+}
+
+.explorer-sort-arrow {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.explorer-table-loading {
+  padding: 60px 0;
+  text-align: center;
+  color: var(--color-gray-500);
+  font-size: 14px;
+}
+
+.explorer-table-empty {
+  padding: 60px 0;
+  text-align: center;
+}
+
+.explorer-table-empty p {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-gray-700);
+}
+
+.explorer-table-empty span {
+  font-size: 13px;
+  color: var(--color-gray-500);
+}
+
+.explorer-cell-empty {
+  color: var(--color-gray-400);
 }
 

@@ -1,14 +1,169 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useLayout } from "@/context/LayoutContext";
+import dynamic from "next/dynamic";
+
+/* Lazy-load ChartRenderer (uses Recharts which is heavy) */
+const ChartRenderer = dynamic(
+  () => import("@/components/canvas/blocks/ChartRenderer"),
+  { ssr: false, loading: () => <div className="ai-inline-loading">Loading chart...</div> }
+);
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
+
+/* ── Inline block types ─────────────────────────────────── */
+
+interface InlineTableData {
+  title?: string;
+  headers: string[];
+  rows: string[][];
+  footer?: string;
+}
+
+interface InlineChartData {
+  chart_type: "bar" | "line" | "pie" | "area";
+  title?: string;
+  data: Record<string, unknown>[];
+  x_key: string;
+  y_keys: string[];
+  colors?: string[];
+}
+
+type ContentSegment =
+  | { type: "text"; content: string }
+  | { type: "table"; data: InlineTableData }
+  | { type: "chart"; data: InlineChartData };
+
+/* ── Parse message content for inline blocks ────────────── */
+
+const INLINE_PATTERN = /<!--INLINE_(TABLE|CHART):([\s\S]*?)-->/g;
+
+function parseMessageContent(content: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  let lastIndex = 0;
+
+  for (const match of content.matchAll(INLINE_PATTERN)) {
+    const matchStart = match.index!;
+    // Add text before this match
+    if (matchStart > lastIndex) {
+      const text = content.slice(lastIndex, matchStart).trim();
+      if (text) segments.push({ type: "text", content: text });
+    }
+
+    const blockType = match[1]; // TABLE or CHART
+    const jsonStr = match[2];
+
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (blockType === "TABLE") {
+        segments.push({ type: "table", data: parsed as InlineTableData });
+      } else {
+        segments.push({ type: "chart", data: parsed as InlineChartData });
+      }
+    } catch {
+      // If JSON parsing fails, render as text
+      segments.push({ type: "text", content: match[0] });
+    }
+
+    lastIndex = matchStart + match[0].length;
+  }
+
+  // Add remaining text after last match
+  if (lastIndex < content.length) {
+    const text = content.slice(lastIndex).trim();
+    if (text) segments.push({ type: "text", content: text });
+  }
+
+  // If no matches found, return the whole content as text
+  if (segments.length === 0 && content.trim()) {
+    segments.push({ type: "text", content });
+  }
+
+  return segments;
+}
+
+/* ── Inline Table Component ──────────────────────────────── */
+
+function InlineTable({ data }: { data: InlineTableData }) {
+  return (
+    <div className="ai-inline-table">
+      {data.title && <div className="ai-inline-table-title">{data.title}</div>}
+      <div className="ai-inline-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              {data.headers.map((h, i) => (
+                <th key={i}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.rows.map((row, rIdx) => (
+              <tr key={rIdx}>
+                {row.map((cell, cIdx) => (
+                  <td key={cIdx}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.footer && <div className="ai-inline-table-footer">{data.footer}</div>}
+    </div>
+  );
+}
+
+/* ── Inline Chart Component ──────────────────────────────── */
+
+function InlineChart({ data }: { data: InlineChartData }) {
+  return (
+    <div className="ai-inline-chart">
+      {data.title && <div className="ai-inline-chart-title">{data.title}</div>}
+      <ChartRenderer
+        chartType={data.chart_type}
+        chartData={data.data}
+        chartConfig={{
+          title: data.title,
+          xKey: data.x_key,
+          yKeys: data.y_keys,
+          colors: data.colors,
+        }}
+      />
+    </div>
+  );
+}
+
+/* ── Rich Message Renderer ───────────────────────────────── */
+
+function RichMessageContent({ content }: { content: string }) {
+  const segments = useMemo(() => parseMessageContent(content), [content]);
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === "table") {
+          return <InlineTable key={i} data={seg.data} />;
+        }
+        if (seg.type === "chart") {
+          return <InlineChart key={i} data={seg.data} />;
+        }
+        return (
+          <p key={i} style={{ whiteSpace: "pre-wrap" }}>
+            {seg.content}
+          </p>
+        );
+      })}
+    </>
+  );
+}
+
+/* ── Main Chat Component ─────────────────────────────────── */
 
 export default function AIChat() {
   const { toggleChat } = useLayout();
@@ -59,10 +214,15 @@ export default function AIChat() {
       // Read active report context if on reports page
       const activeReport = (window as unknown as Record<string, unknown>).__activeReport ?? null;
 
+      /* Abort controller — 5 min max per request (complex multi-tool queries need time) */
+      const abortCtrl = new AbortController();
+      const abortTimer = setTimeout(() => abortCtrl.abort(), 300_000);
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: abortCtrl.signal,
           body: JSON.stringify({
             messages: updatedMessages,
             currentPage: pathname,
@@ -105,15 +265,19 @@ export default function AIChat() {
         window.dispatchEvent(new Event("workspace-updated"));
         /* Dispatch again after a short delay to catch any DB propagation lag */
         setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
-      } catch {
+      } catch (err) {
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
         setMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            content: "Sorry, something went wrong. Please try again.",
+            content: isAbort
+              ? "Request timed out — this question may require too many steps. Try breaking it into simpler parts."
+              : "Sorry, something went wrong. Please try again.",
           },
         ]);
       } finally {
+        clearTimeout(abortTimer);
         setSending(false);
       }
     },
@@ -161,6 +325,8 @@ export default function AIChat() {
             {/* Show pulsing dots while streaming hasn't started yet */}
             {msg.role === "assistant" && msg.content === "" && sending ? (
               <p className="ai-typing">Thinking...</p>
+            ) : msg.role === "assistant" && msg.content.includes("<!--INLINE_") ? (
+              <RichMessageContent content={msg.content} />
             ) : (
               <p style={{ whiteSpace: "pre-wrap" }}>{msg.content}</p>
             )}

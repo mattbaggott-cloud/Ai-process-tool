@@ -107,6 +107,13 @@ export async function executeTool(
       /* E-Commerce tools */
       case "query_ecommerce":
         return await handleQueryEcommerce(input, supabase, orgId);
+      case "query_ecommerce_analytics":
+        return await handleQueryEcommerceAnalytics(input, supabase, orgId);
+      /* Inline rendering tools */
+      case "create_inline_table":
+        return await handleCreateInlineTable(input);
+      case "create_inline_chart":
+        return await handleCreateInlineChart(input);
       /* Org management tools */
       case "invite_member":
         return await handleInviteMember(input, supabase, userId, orgId, userRole);
@@ -3111,4 +3118,327 @@ function formatUnifiedResults(data: Record<string, unknown>[]): string {
   }
 
   return result;
+}
+
+/* ── E-Commerce Analytics Handler ────────────────────────── */
+
+async function handleQueryEcommerceAnalytics(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const metric = input.metric as string;
+  const timeRange = (input.time_range as string) || "12m";
+  const groupBy = (input.group_by as string) || "month";
+  const limit = Math.min((input.limit as number) || 10, 50);
+  const sortBy = (input.sort_by as string) || "revenue";
+  const comparePrevious = (input.compare_previous as boolean) || false;
+
+  // Calculate date cutoff based on time range
+  const now = new Date();
+  let cutoffDate: Date;
+  switch (timeRange) {
+    case "30d": cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+    case "90d": cutoffDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); break;
+    case "6m": cutoffDate = new Date(now.getFullYear(), now.getMonth() - 6, 1); break;
+    case "12m": cutoffDate = new Date(now.getFullYear(), now.getMonth() - 12, 1); break;
+    default: cutoffDate = new Date(0); // "all"
+  }
+  const cutoffISO = cutoffDate.toISOString();
+
+  try {
+    switch (metric) {
+      case "revenue": {
+        const { data: periods, error } = await supabase.rpc("analytics_revenue_by_period", {
+          p_org_id: orgId,
+          p_cutoff: cutoffISO,
+          p_group_by: groupBy,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const grouped = (periods as Array<{ period: string; revenue: number; order_count: number }>) || [];
+        if (grouped.length === 0) return { success: true, message: "No orders found in the selected time range." };
+
+        let comparisonText = "";
+        if (comparePrevious && grouped.length >= 2) {
+          const current = grouped[grouped.length - 1];
+          const previous = grouped[grouped.length - 2];
+          const change = current.revenue - previous.revenue;
+          const pct = previous.revenue > 0 ? ((change / previous.revenue) * 100).toFixed(1) : "N/A";
+          comparisonText = `\n\n**Period comparison:** ${current.period} ($${current.revenue.toLocaleString()}) vs ${previous.period} ($${previous.revenue.toLocaleString()}) — ${change >= 0 ? "+" : ""}$${change.toLocaleString()} (${change >= 0 ? "+" : ""}${pct}%)`;
+        }
+
+        const totalRevenue = grouped.reduce((sum, g) => sum + g.revenue, 0);
+        const totalOrders = grouped.reduce((sum, g) => sum + g.order_count, 0);
+        const chartData = grouped.map((g) => ({ period: g.period, revenue: Math.round(g.revenue * 100) / 100 }));
+
+        return {
+          success: true,
+          message: `**Revenue Analysis (${timeRange})**\nTotal: $${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nOrders: ${totalOrders}\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "bar", title: `Revenue by ${groupBy}`, data: chartData, x_key: "period", y_keys: ["revenue"], colors: ["#2563eb"] })}-->${comparisonText}`,
+        };
+      }
+
+      case "aov": {
+        const { data: periods, error } = await supabase.rpc("analytics_revenue_by_period", {
+          p_org_id: orgId,
+          p_cutoff: cutoffISO,
+          p_group_by: groupBy,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const grouped = (periods as Array<{ period: string; revenue: number; order_count: number }>) || [];
+        if (grouped.length === 0) return { success: true, message: "No orders found in the selected time range." };
+
+        const totalRevenue = grouped.reduce((sum, g) => sum + g.revenue, 0);
+        const totalOrders = grouped.reduce((sum, g) => sum + g.order_count, 0);
+        const overallAOV = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+        const chartData = grouped.map((g) => ({
+          period: g.period,
+          aov: g.order_count > 0 ? Math.round((g.revenue / g.order_count) * 100) / 100 : 0,
+        }));
+
+        return {
+          success: true,
+          message: `**Average Order Value (${timeRange})**\nOverall AOV: $${overallAOV.toFixed(2)}\nOrders analyzed: ${totalOrders}\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "line", title: `AOV by ${groupBy}`, data: chartData, x_key: "period", y_keys: ["aov"], colors: ["#16a34a"] })}-->`,
+        };
+      }
+
+      case "ltv": {
+        const { data: customers, error } = await supabase
+          .from("ecom_customers")
+          .select("first_name, last_name, email, total_spent, orders_count, avg_order_value, first_order_at, last_order_at")
+          .eq("org_id", orgId)
+          .gt("total_spent", 0)
+          .order("total_spent", { ascending: false })
+          .limit(limit);
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        if (!customers || customers.length === 0) return { success: true, message: "No customers with purchases found." };
+
+        const headers = ["Customer", "LTV", "Orders", "AOV", "First Order", "Last Order"];
+        const rows = customers.map((c) => {
+          const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || (c.email as string) || "Unknown";
+          return [
+            name,
+            `$${Number(c.total_spent).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            String(c.orders_count ?? 0),
+            `$${Number(c.avg_order_value || 0).toFixed(2)}`,
+            c.first_order_at ? new Date(c.first_order_at as string).toLocaleDateString() : "N/A",
+            c.last_order_at ? new Date(c.last_order_at as string).toLocaleDateString() : "N/A",
+          ];
+        });
+
+        const chartData = customers.slice(0, 10).map((c) => ({
+          customer: [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unknown",
+          ltv: Math.round(Number(c.total_spent) * 100) / 100,
+        }));
+
+        return {
+          success: true,
+          message: `**Top ${customers.length} Customers by Lifetime Value**\n\n<!--INLINE_TABLE:${JSON.stringify({ title: "Customer LTV Rankings", headers, rows, footer: `Showing top ${customers.length} customers by total spend` })}-->\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "bar", title: "Top Customers by LTV", data: chartData, x_key: "customer", y_keys: ["ltv"], colors: ["#8b5cf6"] })}-->`,
+        };
+      }
+
+      case "repeat_rate": {
+        const { data: stats, error } = await supabase.rpc("analytics_repeat_rate", {
+          p_org_id: orgId,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const rr = stats as { total: number; one_time: number; repeat: number; repeat_pct: number; distribution: Array<{ order_bucket: string; customers: number }> };
+        if (!rr || rr.total === 0) return { success: true, message: "No customers with orders found." };
+
+        const chartData = (rr.distribution || []).map((d) => ({
+          orders: `${d.order_bucket} order${d.order_bucket === "1" ? "" : "s"}`,
+          customers: d.customers,
+        }));
+
+        return {
+          success: true,
+          message: `**Repeat Purchase Rate**\n- Total customers: ${rr.total}\n- Repeat customers (2+ orders): ${rr.repeat} (${rr.repeat_pct}%)\n- One-time buyers: ${rr.one_time}\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "bar", title: "Customer Order Distribution", data: chartData, x_key: "orders", y_keys: ["customers"], colors: ["#f59e0b"] })}-->`,
+        };
+      }
+
+      case "top_products": {
+        const { data: products, error } = await supabase.rpc("analytics_top_products", {
+          p_org_id: orgId,
+          p_cutoff: cutoffISO,
+          p_limit: limit,
+          p_sort_by: sortBy,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const sorted = (products as Array<{ title: string; revenue: number; quantity_sold: number; order_count: number }>) || [];
+        if (sorted.length === 0) return { success: true, message: "No orders found in the selected time range." };
+
+        const headers = ["Product", "Revenue", "Units Sold", "Orders"];
+        const rows = sorted.map((p) => [
+          p.title,
+          `$${p.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          String(p.quantity_sold),
+          String(p.order_count),
+        ]);
+
+        const chartData = sorted.slice(0, 10).map((p) => ({
+          product: p.title.length > 25 ? p.title.slice(0, 22) + "..." : p.title,
+          revenue: Math.round(p.revenue * 100) / 100,
+        }));
+
+        return {
+          success: true,
+          message: `**Top ${sorted.length} Products (${timeRange}, sorted by ${sortBy})**\n\n<!--INLINE_TABLE:${JSON.stringify({ title: "Product Performance", headers, rows, footer: `Top ${sorted.length} products by ${sortBy}` })}-->\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "bar", title: "Top Products by Revenue", data: chartData, x_key: "product", y_keys: ["revenue"], colors: ["#ec4899"] })}-->`,
+        };
+      }
+
+      case "cohort": {
+        const { data: cohorts, error } = await supabase.rpc("analytics_cohort", {
+          p_org_id: orgId,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const cohortData = (cohorts as Array<{ cohort: string; customers: number; total_revenue: number; total_orders: number; repeat_pct: number; avg_ltv: number }>) || [];
+        if (cohortData.length === 0) return { success: true, message: "No customer cohort data found." };
+
+        const headers = ["Cohort", "Customers", "Revenue", "Avg LTV", "Repeat %"];
+        const rows = cohortData.map((c) => [
+          c.cohort,
+          String(c.customers),
+          `$${c.total_revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          `$${c.avg_ltv.toFixed(2)}`,
+          `${(c.repeat_pct || 0).toFixed(0)}%`,
+        ]);
+
+        const chartData = cohortData.map((c) => ({
+          cohort: c.cohort,
+          customers: c.customers,
+          avg_ltv: Math.round(c.avg_ltv * 100) / 100,
+        }));
+
+        return {
+          success: true,
+          message: `**Customer Cohort Analysis**\n\n<!--INLINE_TABLE:${JSON.stringify({ title: "Cohort Breakdown", headers, rows })}-->\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "bar", title: "Customers by Cohort", data: chartData, x_key: "cohort", y_keys: ["customers"], colors: ["#2563eb"] })}-->`,
+        };
+      }
+
+      case "rfm": {
+        const { data: rfmResult, error } = await supabase.rpc("analytics_rfm_segments", {
+          p_org_id: orgId,
+          p_limit: limit,
+        });
+
+        if (error) return { success: false, message: `Query error: ${error.message}` };
+        const rfm = rfmResult as { segments: Array<{ segment: string; customers: number }>; top_customers: Array<{ name: string; email: string; recency_days: number; frequency: number; monetary: number; r_score: number; f_score: number; m_score: number; segment: string }> };
+        if (!rfm || !rfm.segments || rfm.segments.length === 0) return { success: true, message: "No customers with orders found for RFM analysis." };
+
+        const segChartData = rfm.segments.map((s) => ({ segment: s.segment, customers: s.customers }));
+
+        const topScored = rfm.top_customers || [];
+        const headers = ["Customer", "Segment", "R", "F", "M", "Days Since Order", "Orders", "Spend"];
+        const rows = topScored.map((c) => [
+          c.name?.trim() || c.email || "Unknown",
+          c.segment,
+          String(c.r_score),
+          String(c.f_score),
+          String(c.m_score),
+          String(c.recency_days),
+          String(c.frequency),
+          `$${c.monetary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        ]);
+
+        return {
+          success: true,
+          message: `**RFM Customer Segmentation**\n\n<!--INLINE_CHART:${JSON.stringify({ chart_type: "pie", title: "Customer Segments", data: segChartData, x_key: "segment", y_keys: ["customers"], colors: ["#2563eb", "#16a34a", "#f59e0b", "#ef4444", "#8b5cf6", "#6b7280"] })}-->\n\n<!--INLINE_TABLE:${JSON.stringify({ title: `Top ${topScored.length} Customers (RFM Scored)`, headers, rows, footer: "R=Recency, F=Frequency, M=Monetary (1=best, 5=worst)" })}-->`,
+        };
+      }
+
+      default:
+        return { success: false, message: `Unknown metric: ${metric}. Use: revenue, aov, ltv, repeat_rate, top_products, cohort, rfm.` };
+    }
+  } catch (err) {
+    return { success: false, message: `Analytics query failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/** Group orders by time period for trend analysis */
+function groupOrdersByPeriod(
+  orders: Array<{ total_price: unknown; processed_at?: unknown; created_at?: unknown }>,
+  groupBy: string
+): Array<{ period: string; revenue: number; count: number }> {
+  const groups: Record<string, { revenue: number; count: number }> = {};
+
+  for (const order of orders) {
+    const dateStr = (order.processed_at || order.created_at) as string;
+    if (!dateStr) continue;
+    const date = new Date(dateStr);
+    let key: string;
+
+    switch (groupBy) {
+      case "day":
+        key = date.toISOString().split("T")[0];
+        break;
+      case "week": {
+        const weekStart = new Date(date);
+        weekStart.setDate(date.getDate() - date.getDay());
+        key = `Week of ${weekStart.toISOString().split("T")[0]}`;
+        break;
+      }
+      default: // month
+        key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    if (!groups[key]) groups[key] = { revenue: 0, count: 0 };
+    groups[key].revenue += Number(order.total_price || 0);
+    groups[key].count += 1;
+  }
+
+  return Object.entries(groups)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([period, data]) => ({ period, ...data }));
+}
+
+/* ── Inline Table Handler ─────────────────────────────────── */
+
+async function handleCreateInlineTable(
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const title = (input.title as string) || "";
+  const headers = input.headers as string[];
+  const rows = input.rows as string[][];
+  const footer = (input.footer as string) || "";
+
+  if (!headers || !rows) {
+    return { success: false, message: "headers and rows are required." };
+  }
+
+  const tablePayload = { title, headers, rows, footer };
+
+  return {
+    success: true,
+    message: `<!--INLINE_TABLE:${JSON.stringify(tablePayload)}-->`,
+  };
+}
+
+/* ── Inline Chart Handler ─────────────────────────────────── */
+
+async function handleCreateInlineChart(
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const chartType = (input.chart_type as string) || "bar";
+  const title = (input.title as string) || "";
+  const data = input.data as Record<string, unknown>[];
+  const xKey = input.x_key as string;
+  const yKeys = input.y_keys as string[];
+  const colors = (input.colors as string[]) || [];
+
+  if (!data || !xKey || !yKeys) {
+    return { success: false, message: "data, x_key, and y_keys are required." };
+  }
+
+  const chartPayload = { chart_type: chartType, title, data, x_key: xKey, y_keys: yKeys, colors };
+
+  return {
+    success: true,
+    message: `<!--INLINE_CHART:${JSON.stringify(chartPayload)}-->`,
+  };
 }

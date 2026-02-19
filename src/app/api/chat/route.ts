@@ -8,6 +8,7 @@ import { getOrgContext } from "@/lib/org";
 import { retrieveMemories, formatMemoriesForPrompt } from "@/lib/agentic/memory-retriever";
 import { extractAndStoreMemoriesInBackground } from "@/lib/agentic/memory-extractor";
 import { getGraphContext } from "@/lib/agentic/graph-query";
+import { getIdentityStats } from "@/lib/shopify/identity-linker";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -63,6 +64,20 @@ function buildSystemPrompt(data: {
   orgMembersByRole: Record<string, number>;
   orgDepartmentNames: string[];
   pendingInviteCount: number;
+  ecomSummary: {
+    customerCount: number;
+    orderCount: number;
+    productCount: number;
+    shopifyConnected: boolean;
+    lastSyncAt: string | null;
+  };
+  identityStats: {
+    total_crm_contacts: number;
+    total_ecom_customers: number;
+    linked: number;
+    crm_only: number;
+    ecom_only: number;
+  } | null;
   memorySummary: string;
   graphContext: string;
 }): string {
@@ -73,7 +88,7 @@ function buildSystemPrompt(data: {
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
     orgRole, orgMemberCount, orgMembersByRole, orgDepartmentNames, pendingInviteCount,
-    memorySummary, graphContext,
+    ecomSummary, identityStats, memorySummary, graphContext,
   } = data;
 
   /* Group team child data by team_id */
@@ -135,6 +150,8 @@ You can take actions in the user's workspace using tools:
 - Manage organization members: invite new members, list current members, change roles, remove members
 - Create departments to organize the team
 - View organization info: member count, departments, pending invites
+- **E-Commerce Analytics:** Run deep analytics on Shopify data — revenue trends, AOV over time, customer LTV rankings, repeat purchase rates, top products by revenue/quantity, customer cohort analysis, and RFM segmentation
+- **Rich Inline Content:** Render data tables and charts directly in chat responses for visual, actionable insights
 
 ## When to Clarify vs. Just Act
 Most requests are clear — just execute them. Only ask for clarification when the request has genuine ambiguity that could lead to wrong results.
@@ -164,6 +181,37 @@ When the user asks about tools, use search_tool_catalog to look up details. When
 When the user asks to invite someone, add a team member, or manage roles, use the org management tools (invite_member, update_member_role, remove_member, list_members).
 For invite_member, update_member_role, and remove_member: ALWAYS call with confirmed=false first, present the summary to the user, and only call again with confirmed=true after the user explicitly confirms. Never skip the confirmation step.
 Invite permission hierarchy: Owner invites anyone. Admin invites manager/user/viewer. Manager invites user/viewer. User and Viewer cannot invite.
+
+## E-Commerce Intelligence
+When the user asks about e-commerce metrics, analytics, or business performance, use the query_ecommerce_analytics tool. Choose the right metric:
+- "Show me revenue" / "How are sales trending?" → metric: revenue (use compare_previous: true if they ask for comparisons)
+- "What's my average order value?" / "AOV trends" → metric: aov
+- "Who are my best customers?" / "Customer lifetime value" → metric: ltv
+- "What's my repeat purchase rate?" / "How many customers reorder?" → metric: repeat_rate
+- "What are my top products?" / "Best sellers" → metric: top_products (supports sort_by: "revenue" | "quantity" | "orders")
+- "Show me customer cohorts" / "When did customers first buy?" → metric: cohort
+- "Segment my customers" / "RFM analysis" → metric: rfm
+
+**CRITICAL EFFICIENCY RULES — READ CAREFULLY:**
+1. **query_ecommerce_analytics is your ONLY analytics tool.** NEVER query ecom_orders, ecom_products, or ecom_customers tables directly to compute metrics. The analytics tool handles all aggregation via optimized database functions.
+2. **For multi-metric questions, call query_ecommerce_analytics MULTIPLE TIMES in the SAME tool round** (parallel tool calls). For example, if asked "give me a full business overview", call revenue + repeat_rate + top_products + rfm ALL AT ONCE — not one per round.
+3. **NEVER use query_ecommerce (raw table queries) for analytics.** query_ecommerce is ONLY for looking up specific customer records, searching by name/email, or listing recent orders. If you need aggregated numbers (revenue, AOV, top products, cohort, RFM, repeat rate), ALWAYS use query_ecommerce_analytics.
+4. **You have a maximum of 5 tool rounds.** Plan efficiently. A "full business health" question should take 1-2 rounds, not 5+. Gather all metrics in parallel on the first round, then present results.
+5. **NEVER say "let me try a different approach" and re-query.** If a tool returns data, use it. Don't second-guess and re-query the same data differently.
+
+**Cross-Source Data Rules:**
+When comparing people/contacts across HubSpot and Shopify, ALWAYS use the identity resolution stats provided in the "Customer Identity Resolution" section below. NEVER estimate or guess at overlap between systems — the exact numbers are provided. For detailed cross-source queries, use query_ecommerce with entity_type "unified".
+
+For presenting data visually, use create_inline_chart and create_inline_table tools. These render rich content (charts and tables) directly in the chat. Always prefer visual presentation over walls of text:
+- Use create_inline_chart for trends, comparisons, and distributions
+- Use create_inline_table for ranked lists, detailed breakdowns, and structured data
+- The query_ecommerce_analytics tool automatically embeds charts and tables, but you can also create them manually when combining data from multiple sources or presenting CRM + ecommerce data together
+
+**CRITICAL — Inline Rendering Rules:**
+When a tool result contains \`<!--INLINE_CHART:...-->\` or \`<!--INLINE_TABLE:...-->\` markers, you MUST include them **exactly as-is** in your response text. These are special rendering directives that the frontend uses to display charts and tables visually. Do NOT strip, summarize, or paraphrase these markers. Copy them verbatim into your response, then add your analysis text around them. Example flow:
+1. Tool returns: \`<!--INLINE_CHART:{"chart_type":"bar",...}-->\`
+2. Your response: "Here's your revenue breakdown:\\n\\n<!--INLINE_CHART:{"chart_type":"bar",...}-->\\n\\nKey observations: ..."
+Never describe the data in text when a chart/table marker is available — let the visual render and add insights alongside it.
 
 ## User's Current Page
 ${currentPage}
@@ -349,6 +397,29 @@ ${currentPage}
     if (crmSummary.reportCount > 0) prompt += `**Reports:** ${crmSummary.reportCount} saved report(s)\n`;
   }
 
+  /* ── E-Commerce Summary ── */
+  if (ecomSummary.shopifyConnected) {
+    prompt += `\n## E-Commerce Data (Shopify)\n`;
+    prompt += `**Status:** Connected${ecomSummary.lastSyncAt ? ` (last sync: ${new Date(ecomSummary.lastSyncAt).toLocaleDateString()})` : ""}\n`;
+    if (ecomSummary.customerCount > 0) prompt += `**Customers:** ${ecomSummary.customerCount}\n`;
+    if (ecomSummary.orderCount > 0) prompt += `**Orders:** ${ecomSummary.orderCount}\n`;
+    if (ecomSummary.productCount > 0) prompt += `**Products:** ${ecomSummary.productCount}\n`;
+    prompt += `Use query_ecommerce_analytics for deep analytics (revenue, AOV, LTV, repeat rate, top products, cohorts, RFM).\n`;
+    prompt += `Use create_inline_chart and create_inline_table to present data visually in chat.\n`;
+  }
+
+  /* ── Customer Identity Resolution ── */
+  if (identityStats && (identityStats.linked > 0 || identityStats.crm_only > 0 || identityStats.ecom_only > 0)) {
+    const totalUnique = identityStats.crm_only + identityStats.linked + identityStats.ecom_only;
+    prompt += `\n## Customer Identity Resolution\n`;
+    prompt += `These are **exact counts** from the database — use them, do not estimate:\n`;
+    prompt += `- **Linked** (in both CRM + Shopify): ${identityStats.linked}\n`;
+    prompt += `- **CRM only** (not in Shopify): ${identityStats.crm_only}\n`;
+    prompt += `- **Shopify only** (not in CRM): ${identityStats.ecom_only}\n`;
+    prompt += `- **Total unique people** across all sources: ${totalUnique}\n`;
+    prompt += `IMPORTANT: CRM Contacts (${identityStats.total_crm_contacts}) + Shopify Customers (${identityStats.total_ecom_customers}) ≠ total people because ${identityStats.linked} are the same person in both. Never simply add these numbers.\n`;
+  }
+
   /* ── Tech Stack ── */
   if (stackTools.length > 0) {
     prompt += `\n## User's Tech Stack\n`;
@@ -499,7 +570,8 @@ export async function POST(req: Request) {
   const requestStart = Date.now();
 
   /* 1. Check API key */
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
     return new Response("ANTHROPIC_API_KEY not configured", { status: 500 });
   }
 
@@ -591,6 +663,11 @@ export async function POST(req: Request) {
     { data: crmDeals },
     { data: crmRecentActivities },
     { count: crmReportCount },
+    // E-commerce lean queries
+    { count: ecomCustomerCount },
+    { count: ecomOrderCount },
+    { count: ecomProductCount },
+    { data: ecomConnector },
     // Org context
     { data: orgMembersData },
     { data: orgDeptsData },
@@ -617,11 +694,24 @@ export async function POST(req: Request) {
     supabase.from("crm_deals").select("stage, value"),
     supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
     supabase.from("crm_reports").select("id", { count: "exact", head: true }),
+    // E-commerce
+    supabase.from("ecom_customers").select("id", { count: "exact", head: true }),
+    supabase.from("ecom_orders").select("id", { count: "exact", head: true }),
+    supabase.from("ecom_products").select("id", { count: "exact", head: true }),
+    supabase.from("data_connectors").select("connector_type, status, last_sync_at").eq("connector_type", "shopify").limit(1),
     // Org context
     supabase.from("org_members").select("role").eq("org_id", orgId),
     supabase.from("org_departments").select("name").eq("org_id", orgId).order("name"),
     supabase.from("org_invites").select("id", { count: "exact", head: true }).eq("org_id", orgId).is("accepted_at", null),
   ]);
+
+  /* Fetch identity stats (non-blocking — null if no linked customers) */
+  let identityStats: Awaited<ReturnType<typeof getIdentityStats>> | null = null;
+  try {
+    identityStats = await getIdentityStats(supabase, orgId);
+  } catch {
+    // Non-fatal — identity stats are informational
+  }
 
   /* Build goal summary */
   const goalStatusCounts: Record<string, number> = {};
@@ -734,6 +824,14 @@ export async function POST(req: Request) {
     orgMembersByRole,
     orgDepartmentNames: (orgDeptsData ?? []).map((d) => d.name as string),
     pendingInviteCount: orgPendingInviteCount ?? 0,
+    ecomSummary: {
+      customerCount: ecomCustomerCount ?? 0,
+      orderCount: ecomOrderCount ?? 0,
+      productCount: ecomProductCount ?? 0,
+      shopifyConnected: (ecomConnector ?? []).some((c: Record<string, unknown>) => c.status === "connected"),
+      lastSyncAt: (ecomConnector ?? []).length > 0 ? ((ecomConnector as Record<string, unknown>[])[0].last_sync_at as string | null) : null,
+    },
+    identityStats,
     memorySummary,
     graphContext: graphContextStr,
   });
@@ -757,8 +855,29 @@ export async function POST(req: Request) {
       content: m.content,
     }));
 
+    /* ── Timeout helper ── */
+    function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+      return Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout: ${label} exceeded ${ms / 1000}s`)), ms)
+        ),
+      ]);
+    }
+
+    const TOOL_TIMEOUT = 30_000;   // 30s per tool execution
+    const STREAM_TIMEOUT = 90_000; // 90s per Anthropic API round
+
     const readable = new ReadableStream({
       async start(controller) {
+        let closed = false;
+        const safeEnqueue = (chunk: Uint8Array) => {
+          if (!closed) controller.enqueue(chunk);
+        };
+        const safeClose = () => {
+          if (!closed) { closed = true; controller.close(); }
+        };
+
         try {
           /* ── First API call (may trigger tool use) ── */
           const stream = anthropic.messages.stream({
@@ -775,11 +894,10 @@ export async function POST(req: Request) {
               event.type === "content_block_delta" &&
               event.delta.type === "text_delta"
             ) {
-              controller.enqueue(encoder.encode(event.delta.text));
+              safeEnqueue(encoder.encode(event.delta.text));
             }
           }
 
-          /* Check if Claude wants to use tools — support up to 5 rounds */
           let currentMessage = await stream.finalMessage();
           let currentMessages = [...apiMessages];
 
@@ -799,18 +917,29 @@ export async function POST(req: Request) {
                 block.type === "tool_use"
             );
 
-            /* Execute all tools via Action Framework */
+            /* Execute all tools via Action Framework (with per-tool timeout) */
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
             for (const toolBlock of toolUseBlocks) {
-              const result = await executeAction(
-                toolBlock.name,
-                toolBlock.input as Record<string, unknown>,
-                supabase,
-                user.id,
-                orgId,
-                orgCtx.role,
-                sessionId
-              );
+              let result: { success: boolean; message: string };
+              try {
+                result = await withTimeout(
+                  executeAction(
+                    toolBlock.name,
+                    toolBlock.input as Record<string, unknown>,
+                    supabase,
+                    user.id,
+                    orgId,
+                    orgCtx.role,
+                    sessionId
+                  ),
+                  TOOL_TIMEOUT,
+                  `tool:${toolBlock.name}`
+                );
+              } catch (toolErr) {
+                const errMsg = toolErr instanceof Error ? toolErr.message : "Tool execution failed";
+                console.error(`[chat] Tool ${toolBlock.name} failed: ${errMsg}`);
+                result = { success: false, message: errMsg };
+              }
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
@@ -845,7 +974,7 @@ export async function POST(req: Request) {
                 event.type === "content_block_delta" &&
                 event.delta.type === "text_delta"
               ) {
-                controller.enqueue(encoder.encode(event.delta.text));
+                safeEnqueue(encoder.encode(event.delta.text));
               }
             }
 
@@ -857,10 +986,16 @@ export async function POST(req: Request) {
             stopReason = currentMessage.stop_reason;
           }
 
-          controller.close();
+          if (toolRounds >= MAX_TOOL_ROUNDS && currentMessage.stop_reason === "tool_use") {
+            safeEnqueue(encoder.encode("\n\n*I reached the maximum number of tool rounds. Please try a simpler question or break it into parts.*"));
+          }
+
+          safeClose();
         } catch (err) {
           logError = err instanceof Error ? err.message : "Stream error";
-          controller.error(err);
+          console.error("[chat] Stream error:", logError);
+          safeEnqueue(encoder.encode(`\n\n*Error: ${logError}. Please try again.*`));
+          safeClose();
         } finally {
           /* ── Log the LLM call (fire-and-forget) ── */
           const latencyMs = Date.now() - requestStart;

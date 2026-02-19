@@ -1206,6 +1206,121 @@ Always include a start and end node. Map document sections/steps to process node
       },
     },
 
+    /* ── E-Commerce Analytics tools ─────────────────────────── */
+    {
+      name: "query_ecommerce_analytics",
+      description:
+        "Run advanced e-commerce analytics queries. Use when the user asks about revenue trends, average order value (AOV), customer lifetime value (LTV), repeat purchase rates, top products, cohort analysis, or RFM segmentation. Returns computed metrics with data suitable for inline charts and tables.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          metric: {
+            type: "string",
+            enum: ["revenue", "aov", "ltv", "repeat_rate", "top_products", "cohort", "rfm"],
+            description:
+              "Which metric to compute. 'revenue' = revenue over time (monthly). 'aov' = average order value over time. 'ltv' = customer lifetime value distribution. 'repeat_rate' = percentage of customers who ordered more than once. 'top_products' = best-selling products by revenue or quantity. 'cohort' = customer cohort analysis by first-order month. 'rfm' = RFM (Recency, Frequency, Monetary) customer segmentation.",
+          },
+          time_range: {
+            type: "string",
+            enum: ["30d", "90d", "6m", "12m", "all"],
+            description: "Time range for the analysis. Defaults to '12m'.",
+          },
+          group_by: {
+            type: "string",
+            enum: ["day", "week", "month"],
+            description: "Time grouping for trend metrics (revenue, aov). Defaults to 'month'.",
+          },
+          limit: {
+            type: "number",
+            description: "Max results for ranked lists (top_products, ltv, rfm). Defaults to 10.",
+          },
+          sort_by: {
+            type: "string",
+            enum: ["revenue", "quantity", "orders"],
+            description: "Sort field for top_products. Defaults to 'revenue'.",
+          },
+          compare_previous: {
+            type: "boolean",
+            description: "Include comparison to previous period (e.g. this month vs last month). Defaults to false.",
+          },
+        },
+        required: ["metric"],
+      },
+    },
+
+    /* ── Inline Rendering tools ────────────────────────────── */
+    {
+      name: "create_inline_table",
+      description:
+        "Render a data table inline in the chat response. Use this when presenting structured data like customer lists, product rankings, comparisons, or any tabular data. The table will be rendered as a rich interactive element in the chat message. Return the table data and the AI will continue its response after the table.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          title: {
+            type: "string",
+            description: "Table title displayed above the table",
+          },
+          headers: {
+            type: "array",
+            items: { type: "string" },
+            description: "Column headers (e.g. ['Customer', 'Orders', 'LTV', 'AOV'])",
+          },
+          rows: {
+            type: "array",
+            items: {
+              type: "array",
+              items: { type: "string" },
+            },
+            description: "2D array of row data. Each inner array is one row matching the headers.",
+          },
+          footer: {
+            type: "string",
+            description: "Optional footer text (e.g. 'Showing top 10 of 150 customers')",
+          },
+        },
+        required: ["headers", "rows"],
+      },
+    },
+    {
+      name: "create_inline_chart",
+      description:
+        "Render a chart inline in the chat response. Use this when visualizing trends, comparisons, or distributions. The chart will be rendered as a rich interactive element in the chat. Supports bar, line, pie, and area charts.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          chart_type: {
+            type: "string",
+            enum: ["bar", "line", "pie", "area"],
+            description: "Chart type. Use 'bar' for comparisons, 'line' for trends over time, 'pie' for proportions, 'area' for cumulative trends.",
+          },
+          title: {
+            type: "string",
+            description: "Chart title displayed above the chart",
+          },
+          data: {
+            type: "array",
+            items: { type: "object" },
+            description: "Chart data points. Each object should have keys matching x_key and y_keys. Example: [{\"month\":\"Jan\",\"revenue\":5000},{\"month\":\"Feb\",\"revenue\":7500}]",
+          },
+          x_key: {
+            type: "string",
+            description: "Key for X axis labels (e.g. 'month', 'product', 'segment')",
+          },
+          y_keys: {
+            type: "array",
+            items: { type: "string" },
+            description: "Keys for Y axis data series (e.g. ['revenue'], or ['this_period', 'last_period'] for comparison)",
+          },
+          colors: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional hex colors for each series (e.g. ['#2563eb', '#16a34a'])",
+          },
+        },
+        required: ["chart_type", "data", "x_key", "y_keys"],
+      },
+    },
+
     /* ── Org Management tools ─────────────────────────────── */
     {
       name: "invite_member",

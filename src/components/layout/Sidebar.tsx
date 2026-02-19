@@ -14,6 +14,7 @@ const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
   { label: "Dashboards", href: "/dashboards",  icon: "chart" },
   { label: "CRM",        href: "/crm",         icon: "briefcase" },
+  { label: "Explorer",   href: "/explorer",    icon: "target" },
   { label: "Reports",    href: "/reports",     icon: "report" },
   { label: "Data",       href: "/data",        icon: "database" },
   { label: "Library",    href: "/library",     icon: "book" },
