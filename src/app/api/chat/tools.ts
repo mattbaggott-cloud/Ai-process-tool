@@ -1144,6 +1144,68 @@ Always include a start and end node. Map document sections/steps to process node
       },
     },
 
+    /* ── E-Commerce tools ──────────────────────────────────── */
+    {
+      name: "query_ecommerce",
+      description:
+        "Query e-commerce and unified customer data. Use when the user asks about store data, customer insights, order history, product catalog, revenue, AOV, LTV, top customers, recent orders, who is a customer vs lead, etc. The 'unified' entity type combines CRM contacts and Shopify customers into a single view with classifications: 'customer' (has orders), 'lead' (CRM only), 'prospect' (CRM + ecom but no orders), 'ecom_only' (Shopify only, not in CRM).",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          entity_type: {
+            type: "string",
+            enum: ["customers", "orders", "products", "unified"],
+            description: "Which entity to query. 'customers' = ecom_customers, 'orders' = ecom_orders, 'products' = ecom_products, 'unified' = cross-silo view combining CRM contacts + ecom customers with classification (customer/lead/prospect/ecom_only)",
+          },
+          query_type: {
+            type: "string",
+            enum: ["list", "count", "aggregate", "search"],
+            description: "Type of query. 'list' returns records, 'count' returns a count, 'aggregate' returns sum/avg/min/max, 'search' searches by keyword. Defaults to 'list'.",
+          },
+          filters: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string", description: "Field to filter on (e.g. 'email', 'financial_status', 'total_spent', 'product_type', 'tags')" },
+                operator: { type: "string", enum: ["eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "contains", "is_null", "is_not_null"], description: "Filter operator" },
+                value: { type: "string", description: "Filter value" },
+              },
+              required: ["field", "operator"],
+            },
+            description: "Filter conditions for the query",
+          },
+          aggregate_field: {
+            type: "string",
+            description: "Field to aggregate (for 'aggregate' query_type). E.g. 'total_price', 'total_spent', 'orders_count'.",
+          },
+          aggregate_function: {
+            type: "string",
+            enum: ["sum", "avg", "min", "max", "count"],
+            description: "Aggregation function. Defaults to 'sum'.",
+          },
+          search_query: {
+            type: "string",
+            description: "Search keyword (for 'search' query_type). Searches across email, name, title, order_number.",
+          },
+          sort_field: {
+            type: "string",
+            description: "Field to sort by. Defaults to 'created_at'.",
+          },
+          sort_direction: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort direction. Defaults to 'desc'.",
+          },
+          limit: {
+            type: "number",
+            description: "Maximum records to return (for 'list' query_type). Defaults to 20, max 100.",
+          },
+        },
+        required: ["entity_type"],
+      },
+    },
+
     /* ── Org Management tools ─────────────────────────────── */
     {
       name: "invite_member",

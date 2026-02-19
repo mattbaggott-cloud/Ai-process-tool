@@ -1,0 +1,16 @@
+First Name,Last Name,Email,Phone Number,Job Title,Company Name,Lifecycle Stage,Lead Status
+Sarah,Chen,sarah.chen@acmecorp.com,415-555-1201,VP of Engineering,Acme Corp,lead,New
+Marcus,Johnson,marcus.j@techforge.io,212-555-3344,CEO,TechForge Solutions,lead,Open
+Emily,Rodriguez,emily.r@greenleafco.com,305-555-7788,Marketing Director,GreenLeaf Co,lead,In Progress
+James,Park,james.park@novadigital.com,628-555-4455,CTO,Nova Digital,customer,Connected
+Priya,Sharma,priya.s@blueridgehq.com,720-555-9900,Head of Sales,BlueRidge HQ,lead,New
+David,Mueller,d.mueller@alpineventures.com,503-555-2211,Managing Partner,Alpine Ventures,opportunity,Attempting to Contact
+Rachel,Kim,rachel.kim@swiftlogistics.com,469-555-6677,Operations Manager,Swift Logistics,lead,Open
+Tom,Bradley,tom.b@crescentmedia.com,312-555-8844,Creative Director,Crescent Media Group,lead,New
+Aisha,Okonkwo,aisha.o@quantumleap.ai,650-555-3399,Head of Product,QuantumLeap AI,opportunity,In Progress
+Carlos,Mendez,carlos.m@harborfinance.com,617-555-1155,CFO,Harbor Financial,customer,Connected
+Lisa,Tanaka,lisa.t@brightspark.dev,206-555-4422,Lead Developer,BrightSpark Dev,lead,New
+Ryan,Foster,ryan.f@summitadvisors.com,404-555-7733,Senior Consultant,Summit Advisors,lead,Open
+Nina,Volkov,nina.v@aurorahealth.io,773-555-8866,Chief Medical Officer,Aurora Health Systems,opportunity,Attempting to Contact
+Michael,O'Brien,michael.ob@crestline.co,512-555-2299,Director of Partnerships,Crestline Partners,lead,In Progress
+Sophia,Laurent,sophia.l@meridiangroup.com,858-555-5544,VP of Business Dev,Meridian Group,customer,Connected

@@ -104,6 +104,9 @@ export async function executeTool(
         return await handleCreateReport(input, supabase, userId, orgId);
       case "update_report":
         return await handleUpdateReport(input, supabase, userId, orgId);
+      /* E-Commerce tools */
+      case "query_ecommerce":
+        return await handleQueryEcommerce(input, supabase, orgId);
       /* Org management tools */
       case "invite_member":
         return await handleInviteMember(input, supabase, userId, orgId, userRole);
@@ -2828,4 +2831,284 @@ async function handleListOrgInfo(
     : `**Pending Invites:** None\n`;
 
   return { success: true, message: result };
+}
+
+/* ── E-Commerce handlers ────────────────────────────────── */
+
+async function handleQueryEcommerce(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const entityType = input.entity_type as string;
+  const queryType = (input.query_type as string) || "list";
+  const filters = (input.filters as Array<{ field: string; operator: string; value?: string }>) || [];
+  const sortField = (input.sort_field as string) || "created_at";
+  const sortDirection = (input.sort_direction as string) || "desc";
+  const limit = Math.min((input.limit as number) || 20, 100);
+  const searchQuery = (input.search_query as string) || "";
+  const aggregateField = (input.aggregate_field as string) || "";
+  const aggregateFunction = (input.aggregate_function as string) || "sum";
+
+  // Handle unified query separately (uses the unified_customers view)
+  if (entityType === "unified") {
+    return await handleUnifiedCustomerQuery(input, supabase, orgId);
+  }
+
+  const tableMap: Record<string, string> = {
+    customers: "ecom_customers",
+    orders: "ecom_orders",
+    products: "ecom_products",
+  };
+
+  const table = tableMap[entityType];
+  if (!table) {
+    return { success: false, message: `Unknown entity type: ${entityType}. Use customers, orders, products, or unified.` };
+  }
+
+  try {
+    if (queryType === "count") {
+      let query = supabase.from(table).select("id", { count: "exact", head: true }).eq("org_id", orgId);
+      for (const f of filters) {
+        query = applyEcomFilter(query, f);
+      }
+      const { count, error } = await query;
+      if (error) return { success: false, message: `Query error: ${error.message}` };
+      return { success: true, message: `Found ${count ?? 0} ${entityType}.` };
+    }
+
+    if (queryType === "aggregate") {
+      // Supabase doesn't have native aggregation in the client, so we fetch values and compute
+      if (!aggregateField) {
+        return { success: false, message: "aggregate_field is required for aggregate queries." };
+      }
+      let query = supabase.from(table).select(aggregateField).eq("org_id", orgId);
+      for (const f of filters) {
+        query = applyEcomFilter(query, f);
+      }
+      const { data, error } = await query;
+      if (error) return { success: false, message: `Query error: ${error.message}` };
+      if (!data || data.length === 0) return { success: true, message: `No ${entityType} found matching filters.` };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const values = (data as any[]).map((r) => Number(r[aggregateField]) || 0);
+      let result: number;
+      switch (aggregateFunction) {
+        case "sum": result = values.reduce((a, b) => a + b, 0); break;
+        case "avg": result = values.reduce((a, b) => a + b, 0) / values.length; break;
+        case "min": result = Math.min(...values); break;
+        case "max": result = Math.max(...values); break;
+        case "count": result = values.length; break;
+        default: result = values.reduce((a, b) => a + b, 0);
+      }
+
+      const formatted = aggregateField.includes("price") || aggregateField.includes("spent") || aggregateField.includes("value") || aggregateField.includes("revenue")
+        ? `$${result.toFixed(2)}`
+        : result.toFixed(2);
+
+      return {
+        success: true,
+        message: `**${aggregateFunction.toUpperCase()}(${aggregateField})** across ${values.length} ${entityType}: ${formatted}`,
+      };
+    }
+
+    if (queryType === "search" && searchQuery) {
+      // Search across relevant text fields
+      const searchFields: Record<string, string[]> = {
+        ecom_customers: ["email", "first_name", "last_name"],
+        ecom_orders: ["order_number", "email"],
+        ecom_products: ["title", "vendor", "product_type"],
+      };
+
+      const fields = searchFields[table] || [];
+      const orClause = fields.map((f) => `${f}.ilike.%${searchQuery}%`).join(",");
+
+      const { data, error } = await supabase
+        .from(table)
+        .select("*")
+        .eq("org_id", orgId)
+        .or(orClause)
+        .order(sortField, { ascending: sortDirection === "asc" })
+        .limit(limit);
+
+      if (error) return { success: false, message: `Search error: ${error.message}` };
+      if (!data || data.length === 0) return { success: true, message: `No ${entityType} found matching "${searchQuery}".` };
+
+      return {
+        success: true,
+        message: formatEcomResults(entityType, data),
+      };
+    }
+
+    // Default: list query
+    let query = supabase.from(table).select("*").eq("org_id", orgId);
+    for (const f of filters) {
+      query = applyEcomFilter(query, f);
+    }
+    query = query.order(sortField, { ascending: sortDirection === "asc" }).limit(limit);
+
+    const { data, error } = await query;
+    if (error) return { success: false, message: `Query error: ${error.message}` };
+    if (!data || data.length === 0) return { success: true, message: `No ${entityType} found matching the specified criteria.` };
+
+    return {
+      success: true,
+      message: formatEcomResults(entityType, data),
+    };
+  } catch (err) {
+    return { success: false, message: `E-commerce query failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyEcomFilter(query: any, filter: { field: string; operator: string; value?: string }) {
+  const { field, operator, value } = filter;
+  switch (operator) {
+    case "eq": return query.eq(field, value);
+    case "neq": return query.neq(field, value);
+    case "gt": return query.gt(field, value);
+    case "gte": return query.gte(field, value);
+    case "lt": return query.lt(field, value);
+    case "lte": return query.lte(field, value);
+    case "like": return query.like(field, value);
+    case "ilike": return query.ilike(field, `%${value}%`);
+    case "contains": return query.contains(field, [value]);
+    case "is_null": return query.is(field, null);
+    case "is_not_null": return query.not(field, "is", null);
+    default: return query;
+  }
+}
+
+function formatEcomResults(entityType: string, data: Record<string, unknown>[]): string {
+  if (entityType === "customers") {
+    const lines = data.map((c) => {
+      const name = [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unknown";
+      const spent = c.total_spent ? `$${Number(c.total_spent).toFixed(2)}` : "$0";
+      const orders = c.orders_count ?? 0;
+      const aov = c.avg_order_value ? `$${Number(c.avg_order_value).toFixed(2)}` : "$0";
+      return `- **${name}** (${c.email || "no email"}) — ${orders} orders, LTV: ${spent}, AOV: ${aov}${c.tags && (c.tags as string[]).length ? ` [${(c.tags as string[]).join(", ")}]` : ""}`;
+    });
+    return `**${data.length} customers:**\n${lines.join("\n")}`;
+  }
+
+  if (entityType === "orders") {
+    const lines = data.map((o) => {
+      const total = o.total_price ? `$${Number(o.total_price).toFixed(2)}` : "N/A";
+      const date = o.processed_at ? new Date(o.processed_at as string).toLocaleDateString() : "N/A";
+      const items = Array.isArray(o.line_items) ? (o.line_items as unknown[]).length : 0;
+      return `- **${o.order_number || o.external_id}** — ${total}, ${o.financial_status || "unknown"}, ${items} items, ${date}`;
+    });
+    return `**${data.length} orders:**\n${lines.join("\n")}`;
+  }
+
+  if (entityType === "products") {
+    const lines = data.map((p) => {
+      const variants = Array.isArray(p.variants) ? (p.variants as unknown[]).length : 0;
+      return `- **${p.title}** — ${p.product_type || "no type"}, ${p.vendor || "no vendor"}, ${variants} variants, ${p.status || "active"}${p.tags && (p.tags as string[]).length ? ` [${(p.tags as string[]).join(", ")}]` : ""}`;
+    });
+    return `**${data.length} products:**\n${lines.join("\n")}`;
+  }
+
+  return `Found ${data.length} records.`;
+}
+
+/**
+ * Query the unified_customers view that combines CRM + ecom data.
+ * Supports filtering by classification (customer, lead, prospect, ecom_only).
+ */
+async function handleUnifiedCustomerQuery(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const queryType = (input.query_type as string) || "list";
+  const filters = (input.filters as Array<{ field: string; operator: string; value?: string }>) || [];
+  const sortField = (input.sort_field as string) || "last_updated";
+  const sortDirection = (input.sort_direction as string) || "desc";
+  const limit = Math.min((input.limit as number) || 20, 100);
+  const searchQuery = (input.search_query as string) || "";
+
+  try {
+    // The unified_customers view doesn't have RLS but filters by org_id
+    // We use it via the Supabase client which respects the view
+
+    if (queryType === "count") {
+      let query = supabase.from("unified_customers").select("crm_contact_id", { count: "exact", head: true }).eq("org_id", orgId);
+      for (const f of filters) {
+        query = applyEcomFilter(query, f);
+      }
+      const { count, error } = await query;
+      if (error) return { success: false, message: `Query error: ${error.message}` };
+      return { success: true, message: `Found ${count ?? 0} unified customer records.` };
+    }
+
+    if (queryType === "search" && searchQuery) {
+      const orClause = `email.ilike.%${searchQuery}%,first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%`;
+      const { data, error } = await supabase
+        .from("unified_customers")
+        .select("*")
+        .eq("org_id", orgId)
+        .or(orClause)
+        .order(sortField, { ascending: sortDirection === "asc" })
+        .limit(limit);
+
+      if (error) return { success: false, message: `Search error: ${error.message}` };
+      if (!data || data.length === 0) return { success: true, message: `No customers found matching "${searchQuery}".` };
+
+      return { success: true, message: formatUnifiedResults(data) };
+    }
+
+    // Default: list
+    let query = supabase.from("unified_customers").select("*").eq("org_id", orgId);
+    for (const f of filters) {
+      query = applyEcomFilter(query, f);
+    }
+    query = query.order(sortField, { ascending: sortDirection === "asc" }).limit(limit);
+
+    const { data, error } = await query;
+    if (error) return { success: false, message: `Query error: ${error.message}` };
+    if (!data || data.length === 0) return { success: true, message: `No unified customer records found matching the criteria.` };
+
+    return { success: true, message: formatUnifiedResults(data) };
+  } catch (err) {
+    return { success: false, message: `Unified query failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+function formatUnifiedResults(data: Record<string, unknown>[]): string {
+  // Group by classification
+  const byClass: Record<string, Record<string, unknown>[]> = {};
+  for (const row of data) {
+    const cls = (row.classification as string) || "unknown";
+    if (!byClass[cls]) byClass[cls] = [];
+    byClass[cls].push(row);
+  }
+
+  const classLabels: Record<string, string> = {
+    customer: "🛒 Customers (has purchases)",
+    lead: "📋 Leads (CRM only, no purchases)",
+    prospect: "🔍 Prospects (in CRM + ecom, no orders yet)",
+    ecom_only: "📦 E-com Only (not in CRM)",
+  };
+
+  let result = `**${data.length} people across CRM + e-commerce:**\n\n`;
+
+  for (const [cls, rows] of Object.entries(byClass)) {
+    result += `### ${classLabels[cls] || cls} (${rows.length})\n`;
+    for (const r of rows) {
+      const name = [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown";
+      const email = (r.email as string) || "no email";
+      const parts: string[] = [];
+
+      if (r.total_spent && Number(r.total_spent) > 0) parts.push(`LTV: $${Number(r.total_spent).toFixed(2)}`);
+      if (r.orders_count && Number(r.orders_count) > 0) parts.push(`${r.orders_count} orders`);
+      if (r.crm_status) parts.push(`CRM: ${r.crm_status}`);
+      if (r.title) parts.push(r.title as string);
+
+      result += `- **${name}** (${email})${parts.length ? " — " + parts.join(", ") : ""}\n`;
+    }
+    result += "\n";
+  }
+
+  return result;
 }

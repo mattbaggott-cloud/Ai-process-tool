@@ -698,9 +698,136 @@ export interface HubSpotConfig {
 
 export type HubSpotSyncDirection = 'import' | 'export' | 'both';
 
+/* ── Shopify Connector ─────────────────────────────────── */
+
+export interface ShopifyConfig {
+  access_token: string;
+  shop: string;                       // e.g. "my-store.myshopify.com"
+  scopes: string[];
+}
+
+/* ── E-Commerce (Shopify + future platforms) ──────────── */
+
+export interface EcomCustomer {
+  id: string;
+  org_id: string;
+  external_id: string;
+  external_source: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  orders_count: number;
+  total_spent: number;
+  avg_order_value: number;
+  first_order_at: string | null;
+  last_order_at: string | null;
+  tags: string[];
+  accepts_marketing: boolean;
+  default_address: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  synced_at: string;
+}
+
+export interface EcomOrderLineItem {
+  product_id: string | null;
+  variant_id: string | null;
+  title: string;
+  variant_title: string | null;
+  quantity: number;
+  price: number;
+  sku: string | null;
+}
+
+export interface EcomOrder {
+  id: string;
+  org_id: string;
+  external_id: string;
+  external_source: string;
+  customer_id: string | null;
+  customer_external_id: string | null;
+  order_number: string | null;
+  email: string | null;
+  financial_status: string | null;
+  fulfillment_status: string | null;
+  total_price: number | null;
+  subtotal_price: number | null;
+  total_tax: number | null;
+  total_discounts: number | null;
+  total_shipping: number | null;
+  currency: string;
+  line_items: EcomOrderLineItem[];
+  shipping_address: Record<string, unknown> | null;
+  billing_address: Record<string, unknown> | null;
+  discount_codes: Record<string, unknown>[];
+  tags: string[];
+  note: string | null;
+  source_name: string | null;
+  referring_site: string | null;
+  landing_site: string | null;
+  cancelled_at: string | null;
+  closed_at: string | null;
+  processed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  synced_at: string;
+}
+
+export interface EcomProductVariant {
+  id: string;
+  title: string;
+  price: number;
+  sku: string | null;
+  inventory_quantity: number | null;
+  weight: number | null;
+  weight_unit: string | null;
+}
+
+export interface EcomProduct {
+  id: string;
+  org_id: string;
+  external_id: string;
+  external_source: string;
+  title: string;
+  handle: string | null;
+  body_html: string | null;
+  vendor: string | null;
+  product_type: string | null;
+  status: string;
+  tags: string[];
+  variants: EcomProductVariant[];
+  images: Record<string, unknown>[];
+  options: Record<string, unknown>[];
+  metadata: Record<string, unknown>;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+  synced_at: string;
+}
+
+/* ── Customer Identity Linking ────────────────────────── */
+
+export type MatchType = 'email_exact' | 'phone_match' | 'name_match' | 'manual';
+export type CustomerClassification = 'customer' | 'lead' | 'prospect' | 'ecom_only';
+
+export interface CustomerIdentityLink {
+  id: string;
+  org_id: string;
+  crm_contact_id: string;
+  ecom_customer_id: string;
+  match_type: MatchType;
+  confidence: number;
+  matched_on: string | null;
+  is_active: boolean;
+  linked_at: string;
+  linked_by: string | null;
+}
+
 /* ── Data Home types ──────────────────────────────────── */
 
-export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'dynamics' | 'sharepoint' | 'google_workspace';
+export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'shopify' | 'klaviyo' | 'meta_ads' | 'dynamics' | 'sharepoint' | 'google_workspace';
 export type ConnectorStatus = 'available' | 'connected' | 'error' | 'coming_soon';
 export type ImportStatus = 'pending' | 'mapping' | 'importing' | 'completed' | 'failed';
 export type SyncEventType = 'info' | 'warning' | 'error' | 'success';

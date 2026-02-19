@@ -124,6 +124,53 @@ const TABLE_MAPPINGS: Record<string, TableGraphMapping> = {
     },
     edges: [],
   },
+
+  /* ── E-Commerce entities ── */
+  ecom_customers: {
+    entity: {
+      entityType: "ecom_customers",
+      labelField: "email",
+      labelBuilder: (r) => {
+        const first = (r.first_name as string) || "";
+        const last = (r.last_name as string) || "";
+        const name = `${first} ${last}`.trim();
+        return name || (r.email as string) || "Unknown Customer";
+      },
+      sublabelBuilder: (r) => {
+        const spent = r.total_spent ? `$${r.total_spent}` : "";
+        const orders = r.orders_count ? `${r.orders_count} orders` : "";
+        return [spent, orders].filter(Boolean).join(" · ") || null;
+      },
+    },
+    edges: [],
+  },
+  ecom_orders: {
+    entity: {
+      entityType: "ecom_orders",
+      labelField: "order_number",
+      labelBuilder: (r) => (r.order_number as string) || `Order ${(r.external_id as string) || ""}`,
+      sublabelBuilder: (r) => {
+        const price = r.total_price ? `$${r.total_price}` : "";
+        const status = (r.financial_status as string) || "";
+        return [price, status].filter(Boolean).join(" · ") || null;
+      },
+    },
+    edges: [
+      { foreignKey: "customer_id", targetEntityType: "ecom_customers", relationType: "placed_by" },
+    ],
+  },
+  ecom_products: {
+    entity: {
+      entityType: "ecom_products",
+      labelField: "title",
+      sublabelBuilder: (r) => {
+        const type = (r.product_type as string) || "";
+        const vendor = (r.vendor as string) || "";
+        return [type, vendor].filter(Boolean).join(" · ") || null;
+      },
+    },
+    edges: [],
+  },
 };
 
 /* ── Core sync functions ─────────────────────────────── */

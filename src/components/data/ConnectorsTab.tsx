@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { DataConnector } from "@/lib/types/database";
 import HubSpotConnectorCard from "./HubSpotConnectorCard";
 import HubSpotFieldMappingModal from "./HubSpotFieldMappingModal";
+import ShopifyConnectorCard from "./ShopifyConnectorCard";
 
 /* ── Static connector registry ──────────────────────────── */
 
@@ -13,7 +14,7 @@ interface ConnectorDef {
   name: string;
   description: string;
   status: "available" | "coming_soon";
-  category: "import" | "crm" | "email" | "spreadsheets" | "storage" | "analytics" | "marketing" | "productivity";
+  category: "import" | "ecommerce" | "crm" | "email" | "spreadsheets" | "storage" | "analytics" | "marketing" | "productivity";
   icon: React.ReactNode;
 }
 
@@ -30,6 +31,21 @@ const CONNECTORS: ConnectorDef[] = [
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
         <path d="M14 2v6h6" />
         <path d="M8 13h8M8 17h8M8 9h2" />
+      </svg>
+    ),
+  },
+
+  // ── E-Commerce ──
+  {
+    type: "shopify",
+    name: "Shopify",
+    description: "Sync customers, orders, and products from your Shopify store",
+    status: "available",
+    category: "ecommerce",
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M15.5 3.5L14.5 2.5C14.3 2.3 14 2.2 13.7 2.3L12 3L10 2L7.5 3.5V15L12 22L16.5 15V3.5H15.5Z" />
+        <path d="M12 3V22" />
       </svg>
     ),
   },
@@ -366,6 +382,7 @@ const CONNECTORS: ConnectorDef[] = [
 
 const CATEGORY_LABELS: Record<string, string> = {
   import: "Import",
+  ecommerce: "E-Commerce",
   crm: "CRM Platforms",
   email: "Email & Calendar",
   spreadsheets: "Spreadsheets & Databases",
@@ -375,7 +392,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   productivity: "Productivity & Automation",
 };
 
-const CATEGORY_ORDER = ["import", "crm", "email", "spreadsheets", "storage", "analytics", "marketing", "productivity"];
+const CATEGORY_ORDER = ["import", "ecommerce", "crm", "email", "spreadsheets", "storage", "analytics", "marketing", "productivity"];
 
 const statusBadge = (status: string) => {
   if (status === "available") {
@@ -401,16 +418,18 @@ interface Props {
 export default function ConnectorsTab({ onNavigate }: Props) {
   const supabase = createClient();
   const [hubspotConnector, setHubspotConnector] = useState<DataConnector | null>(null);
+  const [shopifyConnector, setShopifyConnector] = useState<DataConnector | null>(null);
   const [showFieldMapping, setShowFieldMapping] = useState(false);
 
   const loadConnectors = useCallback(async () => {
     const { data } = await supabase
       .from("data_connectors")
       .select("*")
-      .eq("connector_type", "hubspot")
-      .maybeSingle();
+      .in("connector_type", ["hubspot", "shopify"]);
 
-    setHubspotConnector(data as DataConnector | null);
+    const connectors = (data || []) as DataConnector[];
+    setHubspotConnector(connectors.find((c) => c.connector_type === "hubspot") || null);
+    setShopifyConnector(connectors.find((c) => c.connector_type === "shopify") || null);
   }, [supabase]);
 
   useEffect(() => {
@@ -450,6 +469,14 @@ export default function ConnectorsTab({ onNavigate }: Props) {
                   </div>
                 </div>
               ))}
+
+              {/* Render Shopify in the E-Commerce section */}
+              {cat === "ecommerce" && (
+                <ShopifyConnectorCard
+                  connector={shopifyConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
 
               {/* Render HubSpot in the CRM section */}
               {cat === "crm" && (
