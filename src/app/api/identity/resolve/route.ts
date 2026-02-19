@@ -52,12 +52,25 @@ export async function POST() {
       // Logging failure is non-fatal
     }
 
+    // Count existing identity edges (for "all unified" message)
+    let existingLinks = 0;
+    try {
+      const { count } = await supabase
+        .from("graph_edges")
+        .select("id", { count: "exact", head: true })
+        .eq("org_id", orgId)
+        .eq("relation_type", "same_person")
+        .is("valid_until", null);
+      existingLinks = count ?? 0;
+    } catch { /* non-fatal */ }
+
     return NextResponse.json({
       success: true,
       run_id: result.runId,
       total_records_scanned: result.totalRecordsScanned,
       unique_emails: result.uniqueEmails,
       total_candidates: result.totalCandidates,
+      existing_links: existingLinks,
       by_tier: result.byTier,
       needs_review_count: result.needsReviewCount,
       duration_ms: result.durationMs,

@@ -40,6 +40,7 @@ interface RunInfo {
 type PanelState =
   | { step: "idle" }
   | { step: "computing" }
+  | { step: "unified"; totalScanned: number; linkedCount: number }
   | { step: "review"; runId: string; byTier: TierStat[]; candidates: Candidate[]; totalScanned: number; durationMs: number }
   | { step: "applying" }
   | { step: "applied"; runId: string; edgesCreated: number; edgesExisting: number }
@@ -109,6 +110,17 @@ export default function IdentityResolutionPanel({
         throw new Error(data.error || "Compute failed");
       }
       const data = await res.json();
+      const totalCandidates = data.total_candidates as number ?? 0;
+
+      // If no new candidates found, everything is already unified
+      if (totalCandidates === 0) {
+        setState({
+          step: "unified",
+          totalScanned: data.total_records_scanned,
+          linkedCount: data.existing_links ?? 0,
+        });
+        return;
+      }
 
       // Load candidates for this run
       const candidatesRes = await fetch(`/api/identity/resolve?_=${Date.now()}`);
@@ -276,6 +288,28 @@ export default function IdentityResolutionPanel({
         <span className="explorer-resolve-desc">
           Running waterfall matching across {multiSourceCount} sources
         </span>
+      </div>
+    );
+  }
+
+  /* ── Unified state: all data already resolved ── */
+  if (state.step === "unified") {
+    return (
+      <div className="explorer-resolve-banner" style={{ borderColor: "var(--color-green-200, #bbf7d0)", background: "var(--color-green-50, #f0fdf4)" }}>
+        <span className="explorer-resolve-icon">✅</span>
+        <span className="explorer-resolve-label" style={{ color: "var(--color-green-700, #15803d)" }}>
+          All Data Unified
+        </span>
+        <span className="explorer-resolve-desc" style={{ color: "var(--color-green-600, #16a34a)" }}>
+          {state.totalScanned.toLocaleString()} records scanned{state.linkedCount > 0 ? `, ${state.linkedCount} identities linked` : ""} — no new matches found
+        </span>
+        <span className="explorer-resolve-spacer" />
+        <button
+          className="ir-btn ir-btn-ghost"
+          onClick={() => setState({ step: "idle" })}
+        >
+          Dismiss
+        </button>
       </div>
     );
   }
