@@ -6,7 +6,7 @@
 /* ── Types ──────────────────────────────────────────────── */
 
 export type EntityType = "customers" | "companies" | "orders" | "products" | "deals";
-export type SourceFilter = "all" | "hubspot" | "shopify";
+export type SourceFilter = "all" | "hubspot" | "shopify" | "klaviyo";
 
 export type CellRender = "text" | "currency" | "date" | "status" | "tags" | "source_badge" | "number" | "boolean";
 
@@ -39,11 +39,12 @@ export const SOURCES: { key: SourceFilter; label: string; color: string }[] = [
   { key: "all",     label: "All Sources", color: "#6b7280" },
   { key: "hubspot", label: "HubSpot",     color: "#ff7a59" },
   { key: "shopify", label: "Shopify",     color: "#96bf48" },
+  { key: "klaviyo", label: "Klaviyo",     color: "#2dd4bf" },
 ];
 
 /* Which sources are available for each entity type */
 export const ENTITY_SOURCE_MAP: Record<EntityType, SourceFilter[]> = {
-  customers: ["all", "hubspot", "shopify"],
+  customers: ["all", "hubspot", "shopify", "klaviyo"],
   companies: ["all", "hubspot"],
   orders:    ["all", "shopify"],
   products:  ["all", "shopify"],
@@ -79,6 +80,17 @@ const CUSTOMER_COLUMNS_SHOPIFY: ColumnDef[] = [
   { key: "avg_order_value", label: "Avg Order Value", sortable: true,  render: "currency" },
   { key: "last_order_at",   label: "Last Order",      sortable: true,  render: "date" },
   { key: "_source",         label: "Source",           sortable: false, render: "source_badge" },
+];
+
+const CUSTOMER_COLUMNS_KLAVIYO: ColumnDef[] = [
+  { key: "name",           label: "Name",         sortable: true,  render: "text" },
+  { key: "email",          label: "Email",        sortable: true,  render: "text" },
+  { key: "phone_number",   label: "Phone",        sortable: true,  render: "text" },
+  { key: "company_name",   label: "Organization", sortable: true,  render: "text" },
+  { key: "title",          label: "Title",        sortable: true,  render: "text" },
+  { key: "city",           label: "City",         sortable: true,  render: "text" },
+  { key: "last_activity",  label: "Synced",       sortable: true,  render: "date" },
+  { key: "_source",        label: "Source",       sortable: false, render: "source_badge" },
 ];
 
 const COMPANY_COLUMNS: ColumnDef[] = [
@@ -127,6 +139,7 @@ export function getColumns(entity: EntityType, source: SourceFilter): ColumnDef[
   if (entity === "customers") {
     if (source === "hubspot") return CUSTOMER_COLUMNS_HUBSPOT;
     if (source === "shopify") return CUSTOMER_COLUMNS_SHOPIFY;
+    if (source === "klaviyo") return CUSTOMER_COLUMNS_KLAVIYO;
     return CUSTOMER_COLUMNS_ALL;
   }
   if (entity === "companies") return COMPANY_COLUMNS;
@@ -151,6 +164,7 @@ export const DEFAULT_SORT: Record<EntityType, { field: string; dir: "asc" | "des
 export const SOURCE_COLORS: Record<string, string> = {
   hubspot: "#ff7a59",
   shopify: "#96bf48",
+  klaviyo: "#2dd4bf",
   both:    "#7c3aed",
   manual:  "#6b7280",
 };

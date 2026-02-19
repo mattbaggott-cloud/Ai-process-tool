@@ -6,6 +6,7 @@ import type { DataConnector } from "@/lib/types/database";
 import HubSpotConnectorCard from "./HubSpotConnectorCard";
 import HubSpotFieldMappingModal from "./HubSpotFieldMappingModal";
 import ShopifyConnectorCard from "./ShopifyConnectorCard";
+import KlaviyoConnectorCard from "./KlaviyoConnectorCard";
 
 /* ── Static connector registry ──────────────────────────── */
 
@@ -307,8 +308,8 @@ const CONNECTORS: ConnectorDef[] = [
   {
     type: "klaviyo",
     name: "Klaviyo",
-    description: "Sync customer segments, email flows, and campaign performance data",
-    status: "coming_soon",
+    description: "Sync email lists, campaigns, templates, and performance data from Klaviyo",
+    status: "available",
     category: "marketing",
     icon: (
       <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -419,17 +420,19 @@ export default function ConnectorsTab({ onNavigate }: Props) {
   const supabase = createClient();
   const [hubspotConnector, setHubspotConnector] = useState<DataConnector | null>(null);
   const [shopifyConnector, setShopifyConnector] = useState<DataConnector | null>(null);
+  const [klaviyoConnector, setKlaviyoConnector] = useState<DataConnector | null>(null);
   const [showFieldMapping, setShowFieldMapping] = useState(false);
 
   const loadConnectors = useCallback(async () => {
     const { data } = await supabase
       .from("data_connectors")
       .select("*")
-      .in("connector_type", ["hubspot", "shopify"]);
+      .in("connector_type", ["hubspot", "shopify", "klaviyo"]);
 
     const connectors = (data || []) as DataConnector[];
     setHubspotConnector(connectors.find((c) => c.connector_type === "hubspot") || null);
     setShopifyConnector(connectors.find((c) => c.connector_type === "shopify") || null);
+    setKlaviyoConnector(connectors.find((c) => c.connector_type === "klaviyo") || null);
   }, [supabase]);
 
   useEffect(() => {
@@ -487,9 +490,17 @@ export default function ConnectorsTab({ onNavigate }: Props) {
                 />
               )}
 
+              {/* Render Klaviyo in the Marketing section */}
+              {cat === "marketing" && (
+                <KlaviyoConnectorCard
+                  connector={klaviyoConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
+
               {/* Render all other connectors as coming soon cards */}
               {connectors
-                .filter((c) => c.type !== "csv") // csv already rendered
+                .filter((c) => c.type !== "csv" && c.status !== "available") // csv, shopify, hubspot, klaviyo rendered separately
                 .map((c) => (
                   <div
                     key={c.type}

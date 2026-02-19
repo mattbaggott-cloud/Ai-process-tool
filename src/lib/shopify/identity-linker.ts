@@ -186,6 +186,146 @@ async function createIdentityGraphEdge(
 }
 
 /**
+ * Link Klaviyo profiles to ecom customers and CRM contacts by email.
+ * This creates graph edges so that Klaviyo engagement data (opens, clicks)
+ * is connected to the same person's purchase history and CRM record.
+ *
+ * Creates three types of links:
+ * - klaviyo_profile → ecom_customer ("same_person" graph edge)
+ * - klaviyo_profile → crm_contact ("same_person" graph edge)
+ * - Ensures klaviyo_profiles have graph nodes
+ */
+export async function linkKlaviyoProfiles(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId?: string
+): Promise<{ klaviyo_to_ecom: number; klaviyo_to_crm: number; graph_nodes_created: number; errors: number }> {
+  const result = { klaviyo_to_ecom: 0, klaviyo_to_crm: 0, graph_nodes_created: 0, errors: 0 };
+
+  try {
+    // 1. Get all Klaviyo profiles with emails
+    const { data: klaviyoProfiles } = await supabase
+      .from("klaviyo_profiles")
+      .select("id, email, first_name, last_name, external_id")
+      .eq("org_id", orgId)
+      .not("email", "is", null)
+      .neq("email", "");
+
+    if (!klaviyoProfiles || klaviyoProfiles.length === 0) return result;
+
+    // 2. Build email lookup maps for ecom customers and CRM contacts
+    const { data: ecomCustomers } = await supabase
+      .from("ecom_customers")
+      .select("id, email")
+      .eq("org_id", orgId)
+      .not("email", "is", null)
+      .neq("email", "");
+
+    const { data: crmContacts } = await supabase
+      .from("crm_contacts")
+      .select("id, email")
+      .eq("org_id", orgId)
+      .not("email", "is", null)
+      .neq("email", "");
+
+    const ecomByEmail = new Map<string, string>();
+    for (const ec of ecomCustomers ?? []) {
+      if (ec.email) ecomByEmail.set((ec.email as string).toLowerCase().trim(), ec.id as string);
+    }
+
+    const crmByEmail = new Map<string, string>();
+    for (const c of crmContacts ?? []) {
+      if (c.email) crmByEmail.set((c.email as string).toLowerCase().trim(), c.id as string);
+    }
+
+    // 3. For each Klaviyo profile: ensure graph node, then link to ecom/CRM
+    for (const profile of klaviyoProfiles) {
+      try {
+        const email = ((profile.email as string) || "").toLowerCase().trim();
+        if (!email) continue;
+
+        const first = (profile.first_name as string) || "";
+        const last = (profile.last_name as string) || "";
+        const label = `${first} ${last}`.trim() || email;
+
+        // Ensure graph node for this Klaviyo profile
+        const nodeId = await ensureGraphNode(
+          supabase,
+          orgId,
+          "klaviyo_profiles",
+          profile.id as string,
+          label,
+          `Klaviyo subscriber`,
+          userId
+        );
+
+        if (nodeId) result.graph_nodes_created++;
+
+        // Link to ecom customer by email
+        const ecomId = ecomByEmail.get(email);
+        if (ecomId && nodeId) {
+          const { data: ecomNode } = await supabase
+            .from("graph_nodes")
+            .select("id")
+            .eq("org_id", orgId)
+            .eq("entity_type", "ecom_customers")
+            .eq("entity_id", ecomId)
+            .maybeSingle();
+
+          if (ecomNode?.id) {
+            await supabase.from("graph_edges").upsert(
+              {
+                org_id: orgId,
+                source_node_id: nodeId,
+                target_node_id: ecomNode.id as string,
+                relation_type: "same_person",
+                valid_from: new Date().toISOString(),
+              },
+              { onConflict: "org_id,source_node_id,target_node_id,relation_type,valid_from", ignoreDuplicates: true }
+            );
+            result.klaviyo_to_ecom++;
+          }
+        }
+
+        // Link to CRM contact by email
+        const crmId = crmByEmail.get(email);
+        if (crmId && nodeId) {
+          const { data: crmNode } = await supabase
+            .from("graph_nodes")
+            .select("id")
+            .eq("org_id", orgId)
+            .eq("entity_type", "crm_contacts")
+            .eq("entity_id", crmId)
+            .maybeSingle();
+
+          if (crmNode?.id) {
+            await supabase.from("graph_edges").upsert(
+              {
+                org_id: orgId,
+                source_node_id: nodeId,
+                target_node_id: crmNode.id as string,
+                relation_type: "same_person",
+                valid_from: new Date().toISOString(),
+              },
+              { onConflict: "org_id,source_node_id,target_node_id,relation_type,valid_from", ignoreDuplicates: true }
+            );
+            result.klaviyo_to_crm++;
+          }
+        }
+      } catch (err) {
+        console.error("Error linking Klaviyo profile:", err);
+        result.errors++;
+      }
+    }
+
+    return result;
+  } catch (err) {
+    console.error("Klaviyo profile linking failed:", err);
+    return result;
+  }
+}
+
+/**
  * Get identity stats for the org — how many are linked, unlinked, etc.
  */
 export async function getIdentityStats(

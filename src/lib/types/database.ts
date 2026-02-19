@@ -706,6 +706,14 @@ export interface ShopifyConfig {
   scopes: string[];
 }
 
+/* ── Klaviyo Connector ──────────────────────────────────── */
+
+export interface KlaviyoConfig {
+  api_key: string;
+  api_revision?: string;        // e.g. "2025-01-15"
+  account_name?: string;        // from GET /accounts/
+}
+
 /* ── E-Commerce (Shopify + future platforms) ──────────── */
 
 export interface EcomCustomer {
@@ -887,6 +895,142 @@ export interface DataSyncLog {
   message: string;
   details: Record<string, unknown>;
   created_at: string;
+}
+
+/* ── Segmentation types ──────────────────────────────────── */
+
+export type SegmentStatus = 'active' | 'paused' | 'archived';
+export type SegmentType = 'behavioral' | 'rfm' | 'product_affinity' | 'lifecycle' | 'custom';
+export type IntervalTrend = 'accelerating' | 'stable' | 'decelerating' | 'erratic' | 'insufficient_data';
+export type LifecycleStage = 'new' | 'active' | 'loyal' | 'at_risk' | 'lapsed' | 'win_back' | 'champion';
+export type CommStyle = 'casual' | 'data_driven' | 'aspirational' | 'urgency_responsive' | 'social_proof' | 'unknown';
+
+export interface SegmentRule {
+  type: 'and' | 'or' | 'rule';
+  field?: string;
+  operator?: string;
+  value?: string | number | boolean;
+  children?: SegmentRule[];
+}
+
+export interface Segment {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string | null;
+  status: SegmentStatus;
+  segment_type: SegmentType;
+  rules: SegmentRule;
+  behavioral_insights: Record<string, unknown>;
+  parent_id: string | null;
+  depth: number;
+  path: string[];
+  branch_dimension: string | null;
+  branch_value: string | null;
+  customer_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SegmentMember {
+  id: string;
+  org_id: string;
+  segment_id: string;
+  ecom_customer_id: string;
+  behavioral_data: Record<string, unknown>;
+  score: number;
+  assigned_at: string;
+  expires_at: string | null;
+}
+
+export interface CustomerBehavioralProfile {
+  id: string;
+  org_id: string;
+  ecom_customer_id: string;
+  purchase_intervals_days: number[];
+  avg_interval_days: number | null;
+  interval_stddev: number | null;
+  interval_trend: IntervalTrend | null;
+  predicted_next_purchase: string | null;
+  days_until_predicted: number | null;
+  product_affinities: ProductAffinity[];
+  top_product_type: string | null;
+  top_product_title: string | null;
+  recency_score: number | null;
+  frequency_score: number | null;
+  monetary_score: number | null;
+  velocity_score: number | null;
+  consistency_score: number | null;
+  engagement_score: number | null;
+  lifecycle_stage: LifecycleStage | null;
+  inferred_comm_style: CommStyle | null;
+  computed_at: string;
+}
+
+export interface ProductAffinity {
+  product_title: string;
+  product_type: string;
+  purchase_count: number;
+  total_quantity: number;
+  pct_of_orders: number;
+}
+
+export interface DiscoveredSegment {
+  lifecycle_stage: string;
+  top_product_type: string;
+  interval_trend: string;
+  comm_style: string;
+  customer_count: number;
+  avg_engagement: number;
+  avg_purchase_interval_days: number | null;
+  avg_consistency: number;
+  avg_rfm: { recency: number; frequency: number; monetary: number };
+  suggested_name: string;
+}
+
+/* ── Email Content Engine types ─────────────────────────── */
+
+export type BrandAssetType = 'template' | 'example' | 'style_guide' | 'image' | 'html_template';
+export type EmailStatus = 'draft' | 'approved' | 'sent' | 'archived';
+export type EmailType = 'promotional' | 'win_back' | 'nurture' | 'announcement' | 'educational' | 'milestone' | 'custom';
+
+export interface EmailBrandAsset {
+  id: string;
+  org_id: string;
+  name: string;
+  asset_type: BrandAssetType;
+  content_text: string | null;
+  content_html: string | null;
+  storage_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  metadata: Record<string, unknown>;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmailGeneratedContent {
+  id: string;
+  org_id: string;
+  segment_id: string | null;
+  name: string;
+  status: EmailStatus;
+  email_type: EmailType;
+  subject_line: string;
+  preview_text: string | null;
+  body_html: string | null;
+  body_text: string | null;
+  prompt_used: string | null;
+  brand_asset_ids: string[];
+  segment_context: Record<string, unknown>;
+  generation_model: string;
+  personalization_fields: string[];
+  variants: Record<string, unknown>[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /* ── Workflow Builder types ────────────────────────────── */

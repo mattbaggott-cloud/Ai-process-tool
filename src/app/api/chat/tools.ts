@@ -1426,5 +1426,251 @@ Always include a start and end node. Map document sections/steps to process node
         required: [],
       },
     },
+
+    /* ── Segmentation tools ────────────────────────────────── */
+    {
+      name: "discover_segments",
+      description:
+        "Analyze customer behavioral data to discover natural segments. First computes behavioral profiles (purchase intervals, product affinities, lifecycle stage, RFM scores) for all customers, then finds clusters. Use when the user asks to find patterns, discover segments, or analyze customer behavior.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          min_size: {
+            type: "number",
+            description: "Minimum number of customers for a segment to be reported. Defaults to 5.",
+          },
+          focus: {
+            type: "string",
+            enum: ["behavioral", "product", "lifecycle"],
+            description: "Optional focus area for discovery. 'behavioral' emphasizes purchase patterns, 'product' emphasizes product affinities, 'lifecycle' emphasizes customer lifecycle stages.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "create_segment",
+      description:
+        `Create a new customer segment with rules. Rules define which customers belong to the segment. Supports tree-structured segments with parent/child branches.
+
+Available rule fields and operators:
+- lifecycle_stage: eq, in (values: new, active, loyal, at_risk, lapsed, win_back, champion)
+- interval_trend: eq (values: accelerating, stable, decelerating, erratic, insufficient_data)
+- avg_interval_days: lt, gt, between (numeric, e.g. "14" or "7,21")
+- engagement_score: gt, lt (0-1 scale)
+- top_product_type: eq, contains
+- days_until_predicted: lt, gt (integer days)
+- orders_count: gt, eq, between (integer, e.g. "3" or "2,5")
+- inferred_comm_style: eq (values: casual, data_driven, aspirational, urgency_responsive, social_proof)
+- consistency_score: gt (0-1 scale)
+- recency_score, frequency_score, monetary_score: gte (1-5)
+
+Rule format: { "type": "rule", "field": "...", "operator": "...", "value": "..." }
+AND rules: { "type": "and", "children": [ ...rules ] }`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Segment name (e.g. 'Loyal Coffee Buyers - Accelerating')",
+          },
+          description: {
+            type: "string",
+            description: "Description of what this segment represents",
+          },
+          segment_type: {
+            type: "string",
+            enum: ["behavioral", "rfm", "product_affinity", "lifecycle", "custom"],
+            description: "Type of segment. Defaults to 'behavioral'.",
+          },
+          rules: {
+            type: "object",
+            description: "Rule tree defining segment membership. See tool description for format.",
+          },
+          parent_segment_id: {
+            type: "string",
+            description: "UUID of parent segment to create a sub-branch under (optional)",
+          },
+          branch_dimension: {
+            type: "string",
+            description: "What dimension this branch represents (e.g. 'product_preference', 'communication_style')",
+          },
+          branch_value: {
+            type: "string",
+            description: "The value of this branch (e.g. 'Coffee lovers', 'casual_tone')",
+          },
+        },
+        required: ["name", "rules"],
+      },
+    },
+    {
+      name: "list_segments",
+      description:
+        "List all active customer segments with their tree structure and member counts. Use when the user asks about existing segments, wants to see segments, or asks 'what segments do we have'.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          segment_type: {
+            type: "string",
+            enum: ["behavioral", "rfm", "product_affinity", "lifecycle", "custom"],
+            description: "Optional filter by segment type",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_segment_details",
+      description:
+        "Get detailed information about a specific segment including its rules, behavioral insights, and top members. Use when the user asks about a specific segment or wants to drill into segment data.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          segment_id_or_name: {
+            type: "string",
+            description: "Segment UUID or name to look up",
+          },
+          limit: {
+            type: "number",
+            description: "Max number of member records to return. Defaults to 10.",
+          },
+        },
+        required: ["segment_id_or_name"],
+      },
+    },
+    {
+      name: "get_customer_behavioral_profile",
+      description:
+        "Get the full behavioral analysis for a specific customer — purchase intervals, product affinities, RFM scores, lifecycle stage, predicted next purchase, and communication style. Use when the user asks about a specific customer's behavior or profile.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          email_or_name: {
+            type: "string",
+            description: "Customer email or name to look up",
+          },
+        },
+        required: ["email_or_name"],
+      },
+    },
+
+    /* ── Email Content Engine tools ────────────────────── */
+
+    {
+      name: "save_brand_asset",
+      description:
+        "Save a brand asset (email template, example email, style guide, or HTML template) that the AI will use as a reference when generating emails. Users can paste email content, upload templates from Klaviyo/Mailchimp, or describe their brand voice. The AI will match the tone, style, and formatting of these assets when creating new emails.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Name for this brand asset (e.g. 'Welcome Email Template', 'Black Friday Style')",
+          },
+          asset_type: {
+            type: "string",
+            enum: ["template", "example", "style_guide", "html_template"],
+            description: "Type of asset: template (reusable structure), example (sample email to learn from), style_guide (brand voice/tone rules), html_template (raw HTML from Klaviyo/Mailchimp)",
+          },
+          content_text: {
+            type: "string",
+            description: "The text content of the asset — email body, style notes, or template text. For HTML templates, put the raw HTML in content_html instead.",
+          },
+          content_html: {
+            type: "string",
+            description: "Raw HTML content (for HTML templates from Klaviyo, Mailchimp, etc.)",
+          },
+          metadata: {
+            type: "object",
+            description: "Optional metadata — tone (e.g. 'casual', 'professional'), source_tool (e.g. 'klaviyo', 'mailchimp'), tags (array of strings), notes",
+          },
+        },
+        required: ["name", "asset_type"],
+      },
+    },
+    {
+      name: "list_brand_assets",
+      description:
+        "List all saved brand assets (email templates, examples, style guides). Shows what reference material is available for email generation.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          asset_type: {
+            type: "string",
+            enum: ["template", "example", "style_guide", "html_template"],
+            description: "Filter by asset type (optional — omit to see all)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "generate_email",
+      description:
+        "Generate personalized email content using AI, informed by the brand's style assets and the target segment's behavioral profile. The generated email matches the brand's tone and is tailored to the segment's purchase patterns, product preferences, and communication style. Can generate one-off emails or emails for automated cadences/flows.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          prompt: {
+            type: "string",
+            description: "What kind of email to generate — describe the goal, offer, message, or context. E.g. 'Write a win-back email offering 15% off for customers who haven't purchased in 30+ days' or 'Create a product launch announcement for our new summer collection'",
+          },
+          email_type: {
+            type: "string",
+            enum: ["promotional", "win_back", "nurture", "announcement", "educational", "milestone", "custom"],
+            description: "Type of email: promotional (sale/offer), win_back (re-engage lapsed), nurture (build relationship), announcement (news/launch), educational (tips/content), milestone (birthday/anniversary), custom",
+          },
+          segment_id: {
+            type: "string",
+            description: "Target segment ID — the email will be tailored to this segment's behavioral profile, communication style, and product preferences. Use list_segments first if needed.",
+          },
+          name: {
+            type: "string",
+            description: "Name for this email (optional — auto-generated from type + segment if omitted)",
+          },
+          brand_asset_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Specific brand asset IDs to reference (optional — all assets are included by default)",
+          },
+        },
+        required: ["prompt", "email_type"],
+      },
+    },
+    {
+      name: "list_generated_emails",
+      description:
+        "List previously generated email content. Can filter by segment, status (draft/approved/sent/archived), or view all.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          segment_id: {
+            type: "string",
+            description: "Filter to emails for a specific segment",
+          },
+          status: {
+            type: "string",
+            enum: ["draft", "approved", "sent", "archived"],
+            description: "Filter by status",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_generated_email",
+      description:
+        "Get the full content of a generated email — subject line, preview text, HTML body, plain text, and personalization fields. Use to review or present email content to the user.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          email_id: {
+            type: "string",
+            description: "The email content ID",
+          },
+        },
+        required: ["email_id"],
+      },
+    },
   ];
 }

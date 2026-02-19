@@ -1,9 +1,24 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
 import { hasMinRole } from "@/lib/org";
-import type { OrgRole } from "@/lib/types/database";
+import type { OrgRole, SegmentRule, BrandAssetType, EmailType } from "@/lib/types/database";
 import { emitToolEvent } from "@/lib/agentic/event-emitter";
 import { syncRecordToGraphInBackground } from "@/lib/agentic/graph-sync";
+import {
+  discoverSegments,
+  createSegment as createSegmentFn,
+  getSegmentTree,
+  getSegmentMembers,
+  getCustomerProfile,
+  findCustomerByEmailOrName,
+} from "@/lib/segmentation/behavioral-engine";
+import {
+  saveBrandAsset,
+  listBrandAssets,
+  generateEmailContent,
+  listGeneratedEmails,
+  getGeneratedEmail,
+} from "@/lib/email/email-generator";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -127,6 +142,29 @@ export async function executeTool(
         return await handleCreateDepartmentTool(input, supabase, orgId, userRole);
       case "list_org_info":
         return await handleListOrgInfo(input, supabase, orgId);
+      /* Segmentation tools */
+      case "discover_segments":
+        return await handleDiscoverSegments(input, supabase, orgId);
+      case "create_segment":
+        return await handleCreateSegment(input, supabase, userId, orgId);
+      case "list_segments":
+        return await handleListSegments(input, supabase, orgId);
+      case "get_segment_details":
+        return await handleGetSegmentDetails(input, supabase, orgId);
+      case "get_customer_behavioral_profile":
+        return await handleGetCustomerBehavioralProfile(input, supabase, orgId);
+
+      // Email Content Engine
+      case "save_brand_asset":
+        return await handleSaveBrandAsset(input, supabase, orgId, userId);
+      case "list_brand_assets":
+        return await handleListBrandAssets(input, supabase, orgId);
+      case "generate_email":
+        return await handleGenerateEmail(input, supabase, orgId, userId);
+      case "list_generated_emails":
+        return await handleListGeneratedEmails(input, supabase, orgId);
+      case "get_generated_email":
+        return await handleGetGeneratedEmail(input, supabase, orgId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -3441,4 +3479,500 @@ async function handleCreateInlineChart(
     success: true,
     message: `<!--INLINE_CHART:${JSON.stringify(chartPayload)}-->`,
   };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Segmentation tools
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleDiscoverSegments(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const minSize = (input.min_size as number) ?? 5;
+
+  try {
+    const discovered = await discoverSegments(supabase, orgId, { minSize: minSize });
+
+    if (discovered.length === 0) {
+      return {
+        success: true,
+        message: "No segments found with the minimum size criteria. Try lowering the min_size or ensuring behavioral profiles have been computed (need customers with 2+ orders).",
+      };
+    }
+
+    // Build table for discovered segments
+    const headers = ["Segment", "Customers", "Lifecycle", "Product Focus", "Interval", "Engagement", "Comm Style"];
+    const rows = discovered.map((s) => [
+      s.suggested_name,
+      String(s.customer_count),
+      s.lifecycle_stage,
+      s.top_product_type || "varied",
+      s.avg_purchase_interval_days ? `${s.avg_purchase_interval_days}d` : "—",
+      String(s.avg_engagement),
+      s.comm_style || "unknown",
+    ]);
+
+    const tablePayload = {
+      title: `Discovered Customer Segments (min ${minSize} customers)`,
+      headers,
+      rows,
+      footer: `${discovered.length} natural segments found. Use create_segment to save any of these.`,
+    };
+
+    return {
+      success: true,
+      message: `Found ${discovered.length} natural customer segments:\n\n<!--INLINE_TABLE:${JSON.stringify(tablePayload)}-->\n\n${discovered.map((s, i) =>
+        `**${i + 1}. ${s.suggested_name}** (${s.customer_count} customers)\n` +
+        `   Avg purchase interval: ${s.avg_purchase_interval_days ? s.avg_purchase_interval_days + ' days' : 'N/A'}\n` +
+        `   Engagement: ${s.avg_engagement} | Consistency: ${s.avg_consistency}\n` +
+        `   RFM: R=${s.avg_rfm.recency} F=${s.avg_rfm.frequency} M=${s.avg_rfm.monetary}`
+      ).join('\n\n')}`,
+    };
+  } catch (err) {
+    return { success: false, message: `Segment discovery failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleCreateSegment(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  const name = input.name as string;
+  const description = input.description as string | undefined;
+  const segmentType = input.segment_type as string | undefined;
+  const rules = input.rules as Record<string, unknown>;
+  const parentSegmentId = input.parent_segment_id as string | undefined;
+  const branchDimension = input.branch_dimension as string | undefined;
+  const branchValue = input.branch_value as string | undefined;
+
+  if (!name || !rules) {
+    return { success: false, message: "name and rules are required." };
+  }
+
+  try {
+    const segment = await createSegmentFn(supabase, orgId, userId, {
+      name,
+      description,
+      segment_type: (segmentType as "behavioral" | "rfm" | "product_affinity" | "lifecycle" | "custom") ?? "behavioral",
+      rules: rules as unknown as SegmentRule,
+      parent_segment_id: parentSegmentId,
+      branch_dimension: branchDimension,
+      branch_value: branchValue,
+    });
+
+    return {
+      success: true,
+      message: `Segment "${segment.name}" created successfully!\n` +
+        `- **ID:** ${segment.id}\n` +
+        `- **Type:** ${segment.segment_type}\n` +
+        `- **Members assigned:** ${segment.members_assigned} customers\n` +
+        (segment.parent_id ? `- **Parent:** ${segment.parent_id}\n` : "") +
+        (segment.branch_dimension ? `- **Branch:** ${segment.branch_dimension} = ${segment.branch_value}\n` : ""),
+    };
+  } catch (err) {
+    return { success: false, message: `Failed to create segment: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleListSegments(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const segmentType = input.segment_type as string | undefined;
+
+  try {
+    const segments = await getSegmentTree(supabase, orgId);
+
+    if (segments.length === 0) {
+      return {
+        success: true,
+        message: "No segments created yet. Use discover_segments to find natural behavioral clusters, then create_segment to save them.",
+      };
+    }
+
+    // Filter by type if specified
+    const filtered = segmentType
+      ? segments.filter((s) => s.segment_type === segmentType)
+      : segments;
+
+    const headers = ["Name", "Type", "Customers", "Depth", "Branch", "Status"];
+    const rows = filtered.map((s) => [
+      "  ".repeat(s.depth) + s.name,
+      s.segment_type,
+      String(s.customer_count),
+      String(s.depth),
+      s.branch_dimension ? `${s.branch_dimension}: ${s.branch_value}` : "—",
+      s.status,
+    ]);
+
+    const tablePayload = {
+      title: "Customer Segments",
+      headers,
+      rows,
+      footer: `${filtered.length} active segment${filtered.length !== 1 ? "s" : ""}`,
+    };
+
+    return {
+      success: true,
+      message: `<!--INLINE_TABLE:${JSON.stringify(tablePayload)}-->`,
+    };
+  } catch (err) {
+    return { success: false, message: `Failed to list segments: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetSegmentDetails(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const idOrName = input.segment_id_or_name as string;
+  const limit = (input.limit as number) ?? 10;
+
+  if (!idOrName) {
+    return { success: false, message: "segment_id_or_name is required." };
+  }
+
+  try {
+    // Try UUID first, then name
+    let segmentData: Record<string, unknown> | null = null;
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(idOrName)) {
+      const { data } = await supabase
+        .from("segments")
+        .select("*")
+        .eq("id", idOrName)
+        .eq("org_id", orgId)
+        .single();
+      segmentData = data;
+    } else {
+      const { data } = await supabase
+        .from("segments")
+        .select("*")
+        .eq("org_id", orgId)
+        .ilike("name", `%${idOrName}%`)
+        .limit(1)
+        .single();
+      segmentData = data;
+    }
+
+    if (!segmentData) {
+      return { success: false, message: `Segment "${idOrName}" not found.` };
+    }
+
+    const segmentId = segmentData.id as string;
+    const members = await getSegmentMembers(supabase, orgId, segmentId, { limit });
+
+    // Get customer names for the members
+    const customerIds = members.map((m) => m.ecom_customer_id);
+    const { data: customers } = await supabase
+      .from("ecom_customers")
+      .select("id, email, first_name, last_name, orders_count, total_spent")
+      .in("id", customerIds);
+
+    const customerMap = new Map(
+      (customers ?? []).map((c) => [c.id, c])
+    );
+
+    let message = `**Segment: ${segmentData.name}**\n`;
+    message += `- Type: ${segmentData.segment_type}\n`;
+    message += `- Status: ${segmentData.status}\n`;
+    message += `- Members: ${segmentData.customer_count}\n`;
+    if (segmentData.description) message += `- Description: ${segmentData.description}\n`;
+    if (segmentData.branch_dimension) message += `- Branch: ${segmentData.branch_dimension} = ${segmentData.branch_value}\n`;
+
+    if (members.length > 0) {
+      const headers = ["Customer", "Email", "Orders", "Spent", "Score", "Lifecycle", "Interval Trend"];
+      const rows = members.map((m) => {
+        const cust = customerMap.get(m.ecom_customer_id) as Record<string, unknown> | undefined;
+        const bd = m.behavioral_data as Record<string, unknown>;
+        return [
+          cust ? `${cust.first_name} ${cust.last_name}` : "Unknown",
+          (cust?.email as string) ?? "—",
+          String(cust?.orders_count ?? 0),
+          `$${Number(cust?.total_spent ?? 0).toFixed(2)}`,
+          String(Math.round(m.score)),
+          (bd.lifecycle_stage as string) ?? "—",
+          (bd.interval_trend as string) ?? "—",
+        ];
+      });
+
+      const tablePayload = {
+        title: `Top Members: ${segmentData.name}`,
+        headers,
+        rows,
+        footer: `Showing top ${members.length} of ${segmentData.customer_count} members`,
+      };
+
+      message += `\n<!--INLINE_TABLE:${JSON.stringify(tablePayload)}-->`;
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return { success: false, message: `Failed to get segment details: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetCustomerBehavioralProfile(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const query = input.email_or_name as string;
+
+  if (!query) {
+    return { success: false, message: "email_or_name is required." };
+  }
+
+  try {
+    const customer = await findCustomerByEmailOrName(supabase, orgId, query);
+
+    if (!customer) {
+      return { success: false, message: `Customer "${query}" not found.` };
+    }
+
+    const profile = await getCustomerProfile(supabase, orgId, customer.id);
+
+    if (!profile) {
+      return {
+        success: true,
+        message: `Customer found: ${customer.first_name} ${customer.last_name} (${customer.email}), but no behavioral profile computed yet. Use discover_segments first to compute behavioral profiles for all customers.`,
+      };
+    }
+
+    const affinities = (profile.product_affinities ?? []) as { product_title: string; pct_of_orders: number; purchase_count: number }[];
+
+    let message = `**Behavioral Profile: ${customer.first_name} ${customer.last_name}**\n`;
+    message += `- Email: ${customer.email}\n\n`;
+
+    message += `**Purchase Behavior:**\n`;
+    message += `- Avg purchase interval: ${profile.avg_interval_days ? profile.avg_interval_days + ' days' : 'N/A'}\n`;
+    message += `- Interval trend: ${profile.interval_trend ?? 'N/A'}\n`;
+    message += `- Consistency: ${profile.consistency_score ?? 'N/A'}\n`;
+    if (profile.predicted_next_purchase) {
+      message += `- Predicted next purchase: ${new Date(profile.predicted_next_purchase).toLocaleDateString()}\n`;
+      message += `- Days until predicted: ${profile.days_until_predicted}\n`;
+    }
+
+    message += `\n**Scores:**\n`;
+    message += `- Recency: ${profile.recency_score}/5 | Frequency: ${profile.frequency_score}/5 | Monetary: ${profile.monetary_score}/5\n`;
+    message += `- Velocity: ${profile.velocity_score}/5 | Engagement: ${profile.engagement_score}\n`;
+    message += `- Lifecycle: ${profile.lifecycle_stage}\n`;
+    message += `- Communication style: ${profile.inferred_comm_style}\n`;
+
+    if (affinities.length > 0) {
+      message += `\n**Product Affinities:**\n`;
+      for (const aff of affinities.slice(0, 5)) {
+        message += `- ${aff.product_title}: ${Math.round(aff.pct_of_orders * 100)}% of orders (${aff.purchase_count} purchases)\n`;
+      }
+    }
+
+    // Show segments this customer belongs to
+    const { data: memberships } = await supabase
+      .from("segment_members")
+      .select("segment_id, score, segments(name)")
+      .eq("org_id", orgId)
+      .eq("ecom_customer_id", customer.id)
+      .order("score", { ascending: false })
+      .limit(5);
+
+    if (memberships && memberships.length > 0) {
+      message += `\n**Segment Memberships:**\n`;
+      for (const m of memberships) {
+        const segName = (m.segments as unknown as Record<string, unknown>)?.name ?? "Unknown";
+        message += `- ${segName} (score: ${Math.round(m.score as number)})\n`;
+      }
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return { success: false, message: `Failed to get profile: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── Email Content Engine handlers ─────────────────────── */
+
+async function handleSaveBrandAsset(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const asset = await saveBrandAsset(supabase, orgId, userId, {
+      name: input.name as string,
+      assetType: (input.asset_type as BrandAssetType) ?? "template",
+      contentText: input.content_text as string | undefined,
+      contentHtml: input.content_html as string | undefined,
+      metadata: input.metadata as Record<string, unknown> | undefined,
+    });
+
+    return {
+      success: true,
+      message: `Brand asset saved: **${asset.name}** (${asset.asset_type})\nID: ${asset.id}\n\nThis will be used as a style reference when generating emails.`,
+    };
+  } catch (err) {
+    return { success: false, message: `Failed to save brand asset: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleListBrandAssets(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const assets = await listBrandAssets(supabase, orgId, {
+      assetType: input.asset_type as BrandAssetType | undefined,
+    });
+
+    if (assets.length === 0) {
+      return {
+        success: true,
+        message: "No brand assets saved yet. Upload email templates, paste example emails, or describe your brand voice to get started. These help the AI match your tone and style when generating emails.",
+      };
+    }
+
+    const typeIcons: Record<string, string> = {
+      template: "📄",
+      example: "📧",
+      style_guide: "🎨",
+      image: "🖼",
+      html_template: "🔧",
+    };
+
+    const headers = ["Name", "Type", "Content", "Created"];
+    const rows = assets.map((a) => [
+      a.name,
+      `${typeIcons[a.asset_type] ?? ""} ${a.asset_type}`,
+      a.content_text ? `${a.content_text.slice(0, 60)}...` : a.content_html ? "HTML template" : "—",
+      new Date(a.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    ]);
+
+    const table = `<!--INLINE_TABLE:${JSON.stringify({ title: `Brand Assets (${assets.length})`, headers, rows })}-->`;
+
+    return { success: true, message: table };
+  } catch (err) {
+    return { success: false, message: `Failed to list brand assets: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGenerateEmail(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const result = await generateEmailContent(supabase, orgId, userId, {
+      prompt: input.prompt as string,
+      emailType: (input.email_type as EmailType) ?? "custom",
+      segmentId: input.segment_id as string | undefined,
+      name: input.name as string | undefined,
+      brandAssetIds: input.brand_asset_ids as string[] | undefined,
+    });
+
+    let message = `**Email Generated: ${result.name}**\n`;
+    message += `**ID:** ${result.id}\n`;
+    if (result.segment_name) message += `**Segment:** ${result.segment_name}\n`;
+    message += `**Status:** Draft\n\n`;
+    message += `**Subject:** ${result.subject_line}\n`;
+    message += `**Preview:** ${result.preview_text}\n\n`;
+
+    if (result.personalization_fields.length > 0) {
+      message += `**Personalization fields:** ${result.personalization_fields.map((f) => `{{${f}}}`).join(", ")}\n\n`;
+    }
+
+    message += `---\n\n`;
+    message += result.body_text || "(No plain text version generated)";
+    message += `\n\n---\n*Full HTML version saved. Use get_generated_email to retrieve the complete content.*`;
+
+    return { success: true, message };
+  } catch (err) {
+    return { success: false, message: `Failed to generate email: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleListGeneratedEmails(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const emails = await listGeneratedEmails(supabase, orgId, {
+      segmentId: input.segment_id as string | undefined,
+      status: input.status as string | undefined,
+    });
+
+    if (emails.length === 0) {
+      return {
+        success: true,
+        message: "No generated emails yet. Use generate_email to create personalized email content for your segments.",
+      };
+    }
+
+    const statusIcons: Record<string, string> = {
+      draft: "📝",
+      approved: "✅",
+      sent: "📤",
+      archived: "📦",
+    };
+
+    const headers = ["Name", "Type", "Subject", "Status", "Created"];
+    const rows = emails.map((e) => [
+      e.name,
+      e.email_type,
+      e.subject_line.length > 50 ? e.subject_line.slice(0, 50) + "..." : e.subject_line,
+      `${statusIcons[e.status] ?? ""} ${e.status}`,
+      new Date(e.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    ]);
+
+    const table = `<!--INLINE_TABLE:${JSON.stringify({ title: `Generated Emails (${emails.length})`, headers, rows })}-->`;
+
+    return { success: true, message: table };
+  } catch (err) {
+    return { success: false, message: `Failed to list emails: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetGeneratedEmail(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const email = await getGeneratedEmail(supabase, orgId, input.email_id as string);
+    if (!email) {
+      return { success: false, message: "Email not found." };
+    }
+
+    let message = `**${email.name}**\n`;
+    message += `**Status:** ${email.status} | **Type:** ${email.email_type}\n`;
+    message += `**Subject:** ${email.subject_line}\n`;
+    message += `**Preview:** ${email.preview_text || "—"}\n\n`;
+
+    if (email.personalization_fields.length > 0) {
+      message += `**Personalization:** ${email.personalization_fields.map((f) => `{{${f}}}`).join(", ")}\n\n`;
+    }
+
+    message += `### Plain Text\n${email.body_text || "(none)"}\n\n`;
+
+    if (email.body_html) {
+      message += `### HTML Preview\nThe HTML version is ${email.body_html.length} characters. It includes inline styles for email client compatibility.\n`;
+    }
+
+    if (email.prompt_used) {
+      message += `\n### Generation Prompt\n${email.prompt_used}\n`;
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return { success: false, message: `Failed to get email: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
 }

@@ -1,20 +1,24 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { type ShopifyConfig } from "@/lib/types/database";
+import { type KlaviyoConfig } from "@/lib/types/database";
 import { getOrgContext } from "@/lib/org";
 import {
-  importCustomers,
-  importOrders,
-  importProducts,
-  syncGraphNodes,
+  importLists,
+  importProfiles,
+  importCampaigns,
+  importCampaignMetrics,
+  importCampaignTemplates,
   logSync,
-} from "@/lib/shopify/sync-service";
+} from "@/lib/klaviyo/sync-service";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * POST /api/klaviyo/sync
+ * SSE streaming sync of Klaviyo data: lists, profiles, campaigns, metrics, templates.
+ */
 export async function POST() {
-  // Auth and connector loading happen before the stream
-  // so we can return proper error responses
+  // Auth and connector loading before the stream
   const supabase = await createClient();
   const orgCtx = await getOrgContext(supabase);
 
@@ -23,46 +27,56 @@ export async function POST() {
   }
   const { user, orgId } = orgCtx;
 
-  // Load the Shopify connector
+  // Load the Klaviyo connector
   const { data: connector } = await supabase
     .from("data_connectors")
     .select("*")
     .eq("user_id", user.id)
-    .eq("connector_type", "shopify")
+    .eq("connector_type", "klaviyo")
     .eq("status", "connected")
     .single();
 
   if (!connector) {
     return NextResponse.json(
-      { error: "Shopify is not connected" },
+      { error: "Klaviyo is not connected" },
       { status: 400 }
     );
   }
 
-  const config = connector.config as unknown as ShopifyConfig;
+  const config = connector.config as unknown as KlaviyoConfig;
 
   // Build the list of sync steps
   type SyncStep = {
     key: string;
     label: string;
-    fn: (cfg: ShopifyConfig) => Promise<{ created: number; updated: number; skipped: number; errors: number }>;
+    fn: (cfg: KlaviyoConfig) => Promise<{ created: number; updated: number; skipped: number; errors: number }>;
   };
 
   const steps: SyncStep[] = [
     {
-      key: "customers_import",
-      label: "Importing customers",
-      fn: (cfg) => importCustomers(cfg, supabase, user.id, orgId, connector.id),
+      key: "lists_import",
+      label: "Importing lists",
+      fn: (cfg) => importLists(cfg, supabase, user.id, orgId, connector.id as string),
     },
     {
-      key: "orders_import",
-      label: "Importing orders",
-      fn: (cfg) => importOrders(cfg, supabase, user.id, orgId, connector.id),
+      key: "profiles_import",
+      label: "Importing subscriber profiles",
+      fn: (cfg) => importProfiles(cfg, supabase, user.id, orgId, connector.id as string),
     },
     {
-      key: "products_import",
-      label: "Importing products",
-      fn: (cfg) => importProducts(cfg, supabase, user.id, orgId, connector.id),
+      key: "campaigns_import",
+      label: "Importing campaigns",
+      fn: (cfg) => importCampaigns(cfg, supabase, user.id, orgId, connector.id as string),
+    },
+    {
+      key: "metrics_import",
+      label: "Importing campaign performance",
+      fn: (cfg) => importCampaignMetrics(cfg, supabase, user.id, orgId, connector.id as string),
+    },
+    {
+      key: "templates_import",
+      label: "Importing email templates as brand assets",
+      fn: (cfg) => importCampaignTemplates(cfg, supabase, user.id, orgId, connector.id as string),
     },
   ];
 
@@ -78,8 +92,8 @@ export async function POST() {
       };
 
       try {
-        await logSync(supabase, user.id, orgId, connector.id, "info",
-          "Starting Shopify sync: customers, orders, products");
+        await logSync(supabase, user.id, orgId, connector.id as string, "info",
+          "Starting Klaviyo sync: lists, profiles, campaigns, metrics, templates");
 
         const results: Record<string, { created: number; updated: number; skipped: number; errors: number }> = {};
 
@@ -111,7 +125,7 @@ export async function POST() {
               result,
             });
           } catch (stepError) {
-            console.error(`Shopify sync step ${step.key} error:`, stepError);
+            console.error(`Klaviyo sync step ${step.key} error:`, stepError);
             results[step.key] = { created: 0, updated: 0, skipped: 0, errors: -1 };
 
             send("progress", {
@@ -126,18 +140,6 @@ export async function POST() {
           }
         }
 
-        // ── Post-sync: Graph nodes + Identity linking ──
-        // These run silently (no SSE step) as fast finalization
-
-        try {
-          // Create/update graph nodes for all synced entities
-          const graphCounts = await syncGraphNodes(supabase, orgId);
-          await logSync(supabase, user.id, orgId, connector.id, "info",
-            `Graph nodes synced: ${graphCounts.customers} customers, ${graphCounts.orders} orders, ${graphCounts.products} products`);
-        } catch (postSyncError) {
-          console.error("Post-sync error (non-fatal):", postSyncError);
-        }
-
         // Update last_sync_at
         await supabase
           .from("data_connectors")
@@ -146,9 +148,9 @@ export async function POST() {
 
         const totalErrors = Object.values(results).reduce((sum, r) => sum + Math.max(0, r.errors), 0);
 
-        await logSync(supabase, user.id, orgId, connector.id,
+        await logSync(supabase, user.id, orgId, connector.id as string,
           totalErrors > 0 ? "warning" : "success",
-          `Shopify sync completed: ${JSON.stringify(results)}`,
+          `Klaviyo sync completed: ${JSON.stringify(results)}`,
           results
         );
 
@@ -159,7 +161,7 @@ export async function POST() {
           totalErrors,
         });
       } catch (error) {
-        console.error("Shopify sync stream error:", error);
+        console.error("Klaviyo sync stream error:", error);
         send("error", {
           type: "error",
           error: error instanceof Error ? error.message : "Sync failed",

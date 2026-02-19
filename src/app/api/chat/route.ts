@@ -8,7 +8,9 @@ import { getOrgContext } from "@/lib/org";
 import { retrieveMemories, formatMemoriesForPrompt } from "@/lib/agentic/memory-retriever";
 import { extractAndStoreMemoriesInBackground } from "@/lib/agentic/memory-extractor";
 import { getGraphContext } from "@/lib/agentic/graph-query";
-import { getIdentityStats } from "@/lib/shopify/identity-linker";
+import { getIdentityResolutionSummary } from "@/lib/identity/resolver";
+import { getSegmentSummary } from "@/lib/segmentation/behavioral-engine";
+import { getEmailSummary } from "@/lib/email/email-generator";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -72,12 +74,15 @@ function buildSystemPrompt(data: {
     lastSyncAt: string | null;
   };
   identityStats: {
-    total_crm_contacts: number;
-    total_ecom_customers: number;
-    linked: number;
-    crm_only: number;
-    ecom_only: number;
+    total_unified_people: number;
+    cross_source_linked: number;
+    sources_active: string[];
+    crm_contacts: number;
+    ecom_customers: number;
+    klaviyo_profiles: number;
   } | null;
+  segmentSummary: { total: number; byType: Record<string, number>; totalMembers: number };
+  emailSummary: { totalEmails: number; byStatus: Record<string, number>; brandAssetCount: number };
   memorySummary: string;
   graphContext: string;
 }): string {
@@ -88,7 +93,7 @@ function buildSystemPrompt(data: {
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
     chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
     orgRole, orgMemberCount, orgMembersByRole, orgDepartmentNames, pendingInviteCount,
-    ecomSummary, identityStats, memorySummary, graphContext,
+    ecomSummary, identityStats, segmentSummary, emailSummary, memorySummary, graphContext,
   } = data;
 
   /* Group team child data by team_id */
@@ -206,6 +211,32 @@ For presenting data visually, use create_inline_chart and create_inline_table to
 - Use create_inline_chart for trends, comparisons, and distributions
 - Use create_inline_table for ranked lists, detailed breakdowns, and structured data
 - The query_ecommerce_analytics tool automatically embeds charts and tables, but you can also create them manually when combining data from multiple sources or presenting CRM + ecommerce data together
+
+## AI Segmentation Engine
+You can discover behavioral patterns in customer data and create branching segment trees. Segments go beyond flat rules — they capture purchase intervals, product affinities, lifecycle stages, and communication styles.
+- "Find customer segments" / "Discover patterns" → discover_segments
+- "Create a segment for repeat buyers" / "Segment customers who buy every 2 weeks" → create_segment
+- "Show my segments" / "What segments exist?" → list_segments
+- "Tell me about the loyal segment" / "Drill into champions" → get_segment_details
+- "What's John's behavioral profile?" / "Analyze customer sarah@example.com" → get_customer_behavioral_profile
+
+**Segmentation workflow:** discover_segments first computes behavioral profiles for all customers, then finds natural clusters. Once you see interesting patterns, use create_segment with appropriate rules to save them. Segments support tree structures — create sub-branches by product preference or communication style.
+
+## AI Email Content Engine
+You can generate personalized email content that matches the brand's voice and is tailored to each segment's behavioral profile. The system supports two workflows:
+1. **One-off emails** — user crafts a single email with AI help, reviews it, and sends it manually
+2. **Automated cadences** — emails generated per-segment (or per-customer) that fire when behavioral triggers are met
+
+**Key tools:**
+- "Save my email template" / "Here's how we write emails" → save_brand_asset (saves templates, examples, style guides, HTML from Klaviyo/Mailchimp as brand references)
+- "Show my brand assets" / "What templates do I have?" → list_brand_assets
+- "Write a win-back email for the at-risk segment" / "Create a promotional email" → generate_email (generates subject, preview, HTML body, plain text — all matching brand style)
+- "Show my generated emails" / "List email drafts" → list_generated_emails
+- "Show me that email" / "Get the full email content" → get_generated_email
+
+**Email workflow:** Users first upload brand assets (templates, examples, style guides) so the AI learns their tone and style. Then when generating emails, the AI references those assets + the target segment's behavioral profile (purchase intervals, product affinities, communication style) to produce personalized, on-brand content. Emails are saved as drafts for review before sending.
+
+When users paste or describe email content, proactively save it as a brand asset using save_brand_asset. When they ask to generate emails, always reference the brand assets and segment context.
 
 **CRITICAL — Inline Rendering Rules:**
 When a tool result contains \`<!--INLINE_CHART:...-->\` or \`<!--INLINE_TABLE:...-->\` markers, you MUST include them **exactly as-is** in your response text. These are special rendering directives that the frontend uses to display charts and tables visually. Do NOT strip, summarize, or paraphrase these markers. Copy them verbatim into your response, then add your analysis text around them. Example flow:
@@ -408,16 +439,46 @@ ${currentPage}
     prompt += `Use create_inline_chart and create_inline_table to present data visually in chat.\n`;
   }
 
-  /* ── Customer Identity Resolution ── */
-  if (identityStats && (identityStats.linked > 0 || identityStats.crm_only > 0 || identityStats.ecom_only > 0)) {
-    const totalUnique = identityStats.crm_only + identityStats.linked + identityStats.ecom_only;
-    prompt += `\n## Customer Identity Resolution\n`;
+  /* ── Universal Identity Resolution ── */
+  if (identityStats && identityStats.sources_active.length > 0) {
+    prompt += `\n## Universal Identity Resolution\n`;
     prompt += `These are **exact counts** from the database — use them, do not estimate:\n`;
-    prompt += `- **Linked** (in both CRM + Shopify): ${identityStats.linked}\n`;
-    prompt += `- **CRM only** (not in Shopify): ${identityStats.crm_only}\n`;
-    prompt += `- **Shopify only** (not in CRM): ${identityStats.ecom_only}\n`;
-    prompt += `- **Total unique people** across all sources: ${totalUnique}\n`;
-    prompt += `IMPORTANT: CRM Contacts (${identityStats.total_crm_contacts}) + Shopify Customers (${identityStats.total_ecom_customers}) ≠ total people because ${identityStats.linked} are the same person in both. Never simply add these numbers.\n`;
+    prompt += `**Active sources:** ${identityStats.sources_active.join(", ")}\n`;
+    if (identityStats.crm_contacts > 0) prompt += `- **CRM Contacts:** ${identityStats.crm_contacts}\n`;
+    if (identityStats.ecom_customers > 0) prompt += `- **E-Commerce Customers (Shopify):** ${identityStats.ecom_customers}\n`;
+    if (identityStats.klaviyo_profiles > 0) prompt += `- **Klaviyo Profiles:** ${identityStats.klaviyo_profiles}\n`;
+    prompt += `- **Cross-source linked** (same person in 2+ systems): ${identityStats.cross_source_linked}\n`;
+    prompt += `- **Estimated unique people:** ~${identityStats.total_unified_people}\n`;
+    prompt += `IMPORTANT: A single customer may appear in CRM + Shopify + Klaviyo. The identity resolver links them by email into "same_person" graph edges. ` +
+      `Never simply add source counts — they overlap. Use the unified count.\n`;
+  }
+
+  /* ── Segment Summary ── */
+  if (segmentSummary.total > 0) {
+    prompt += `\n## Customer Segments\n`;
+    prompt += `**Active segments:** ${segmentSummary.total}\n`;
+    const types = Object.entries(segmentSummary.byType)
+      .map(([t, c]) => `${t}: ${c}`)
+      .join(", ");
+    if (types) prompt += `**By type:** ${types}\n`;
+    prompt += `**Total members across all segments:** ${segmentSummary.totalMembers}\n`;
+    prompt += `Use list_segments to see details, or discover_segments to find new patterns.\n`;
+  }
+
+  /* ── Email Content ── */
+  if (emailSummary.totalEmails > 0 || emailSummary.brandAssetCount > 0) {
+    prompt += `\n## Email Content\n`;
+    if (emailSummary.brandAssetCount > 0) {
+      prompt += `**Brand assets:** ${emailSummary.brandAssetCount} (templates, examples, style guides)\n`;
+    }
+    if (emailSummary.totalEmails > 0) {
+      prompt += `**Generated emails:** ${emailSummary.totalEmails}\n`;
+      const statuses = Object.entries(emailSummary.byStatus)
+        .map(([s, c]) => `${s}: ${c}`)
+        .join(", ");
+      if (statuses) prompt += `**By status:** ${statuses}\n`;
+    }
+    prompt += `Use generate_email to create new content, or list_generated_emails to see existing drafts.\n`;
   }
 
   /* ── Tech Stack ── */
@@ -705,12 +766,28 @@ export async function POST(req: Request) {
     supabase.from("org_invites").select("id", { count: "exact", head: true }).eq("org_id", orgId).is("accepted_at", null),
   ]);
 
-  /* Fetch identity stats (non-blocking — null if no linked customers) */
-  let identityStats: Awaited<ReturnType<typeof getIdentityStats>> | null = null;
+  /* Fetch universal identity resolution stats (non-blocking) */
+  let identityStats: Awaited<ReturnType<typeof getIdentityResolutionSummary>> | null = null;
   try {
-    identityStats = await getIdentityStats(supabase, orgId);
+    identityStats = await getIdentityResolutionSummary(supabase, orgId);
   } catch {
     // Non-fatal — identity stats are informational
+  }
+
+  /* Fetch segment summary (non-blocking) */
+  let segmentSummary = { total: 0, byType: {} as Record<string, number>, totalMembers: 0 };
+  try {
+    segmentSummary = await getSegmentSummary(supabase, orgId);
+  } catch {
+    // Non-fatal
+  }
+
+  /* Fetch email summary (non-blocking) */
+  let emailSummary = { totalEmails: 0, byStatus: {} as Record<string, number>, brandAssetCount: 0 };
+  try {
+    emailSummary = await getEmailSummary(supabase, orgId);
+  } catch {
+    // Non-fatal
   }
 
   /* Build goal summary */
@@ -832,6 +909,8 @@ export async function POST(req: Request) {
       lastSyncAt: (ecomConnector ?? []).length > 0 ? ((ecomConnector as Record<string, unknown>[])[0].last_sync_at as string | null) : null,
     },
     identityStats,
+    segmentSummary,
+    emailSummary,
     memorySummary,
     graphContext: graphContextStr,
   });

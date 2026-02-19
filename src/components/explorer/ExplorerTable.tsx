@@ -16,9 +16,18 @@ export interface ExplorerRow {
 
 /* ── Source Badge ──────────────────────────────────────────── */
 
-function SourceBadge({ source }: { source: string }) {
+/** Label map for source names */
+const SOURCE_LABELS: Record<string, string> = {
+  hubspot: "HubSpot",
+  shopify: "Shopify",
+  klaviyo: "Klaviyo",
+  both: "Linked",
+  manual: "Manual",
+};
+
+function SourcePill({ source }: { source: string }) {
   const color = SOURCE_COLORS[source] ?? "#6b7280";
-  const label = source === "both" ? "Linked" : source.charAt(0).toUpperCase() + source.slice(1);
+  const label = SOURCE_LABELS[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
   return (
     <span
       className="explorer-source-badge"
@@ -30,9 +39,28 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
+/**
+ * SourceBadge — shows one or more source pills.
+ * When `_sources` array is available on the row, shows individual pills for each source.
+ * Falls back to single source string for backwards compat.
+ */
+function SourceBadge({ source, sources }: { source: string; sources?: string[] }) {
+  // Multi-source: show individual pills for each linked source
+  if (sources && sources.length > 1) {
+    return (
+      <span className="explorer-source-multi">
+        {sources.map((s) => (
+          <SourcePill key={s} source={s} />
+        ))}
+      </span>
+    );
+  }
+  return <SourcePill source={source} />;
+}
+
 /* ── Cell Renderer ────────────────────────────────────────── */
 
-function CellContent({ value, render }: { value: unknown; render: ColumnDef["render"] }) {
+function CellContent({ value, render, row }: { value: unknown; render: ColumnDef["render"]; row?: ExplorerRow }) {
   if (value == null || value === "") return <span className="explorer-cell-empty">—</span>;
 
   switch (render) {
@@ -43,7 +71,7 @@ function CellContent({ value, render }: { value: unknown; render: ColumnDef["ren
     case "status":
       return <StatusBadge status={value as string} />;
     case "source_badge":
-      return <SourceBadge source={value as string} />;
+      return <SourceBadge source={value as string} sources={row?._sources as string[] | undefined} />;
     case "number":
       return <>{formatNumber(value as number)}</>;
     case "boolean":
@@ -117,7 +145,7 @@ export default function ExplorerTable({
                   key={col.key}
                   className={ci === 0 ? "crm-cell-name" : ""}
                 >
-                  <CellContent value={row[col.key]} render={col.render} />
+                  <CellContent value={row[col.key]} render={col.render} row={row} />
                 </td>
               ))}
             </tr>

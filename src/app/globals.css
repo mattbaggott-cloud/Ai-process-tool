@@ -8,8 +8,13 @@
 @theme inline {
   --color-primary-50:  #eff6ff;
   --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
   --color-primary-500: #2563eb;
   --color-primary-600: #1d4ed8;
+  --color-primary-700: #1e40af;
+  --color-primary-800: #1e3a8a;
 
   --color-gray-50:  #f9fafb;
   --color-gray-100: #f3f4f6;
@@ -10409,8 +10414,8 @@ a.sidebar-user-avatar:hover {
 }
 
 .explorer-pill-active:hover {
-  background: var(--color-primary-700);
-  border-color: var(--color-primary-700);
+  background: var(--color-primary-700, #1e40af);
+  border-color: var(--color-primary-700, #1e40af);
   color: white;
 }
 
@@ -10478,6 +10483,373 @@ a.sidebar-user-avatar:hover {
   font-weight: 600;
   border: 1px solid;
   white-space: nowrap;
+}
+
+.explorer-source-multi {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.explorer-source-multi .explorer-source-badge {
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
+/* ── Identity Resolution Banner ────────────────────────── */
+
+.explorer-resolve-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--color-primary-200);
+  background: var(--color-primary-50);
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.explorer-resolve-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.explorer-resolve-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-gray-900);
+  white-space: nowrap;
+}
+
+.explorer-resolve-desc {
+  font-size: 12px;
+  color: var(--color-gray-500);
+  white-space: nowrap;
+}
+
+.explorer-resolve-spacer {
+  flex: 1 1 0;
+  min-width: 8px;
+}
+
+.explorer-resolve-result {
+  font-size: 12px;
+  color: var(--color-primary-700, #1e40af);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.explorer-resolve-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-primary-300, #93c5fd);
+  background: var(--color-primary-600, #1d4ed8);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.explorer-resolve-btn:hover:not(:disabled) {
+  background: var(--color-primary-700, #1e40af);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.explorer-resolve-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Identity Resolution Panel (review UI) ─────────────── */
+
+.ir-panel {
+  border: 1px solid var(--color-primary-200);
+  border-radius: 12px;
+  background: var(--color-primary-50);
+  margin-bottom: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ir-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-primary-200);
+  background: white;
+}
+
+.ir-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ir-header-icon {
+  font-size: 16px;
+}
+
+.ir-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-gray-900);
+}
+
+.ir-header-meta {
+  font-size: 11px;
+  color: var(--color-gray-500);
+  margin-top: 1px;
+}
+
+.ir-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ir-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  border: 1px solid transparent;
+}
+
+.ir-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ir-btn-primary {
+  background: var(--color-primary-600, #1d4ed8);
+  color: white;
+  border-color: var(--color-primary-600, #1d4ed8);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.ir-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-700, #1e40af);
+  border-color: var(--color-primary-700, #1e40af);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.ir-btn-ghost {
+  background: transparent;
+  color: var(--color-gray-600);
+  border-color: var(--color-gray-200);
+}
+
+.ir-btn-ghost:hover:not(:disabled) {
+  background: var(--color-gray-100);
+}
+
+.ir-btn-outline {
+  background: white;
+  color: var(--color-gray-700, #374151);
+  border-color: var(--color-gray-300, #d1d5db);
+}
+
+.ir-btn-outline:hover:not(:disabled) {
+  background: var(--color-gray-100, #f3f4f6);
+  border-color: var(--color-gray-400, #9ca3af);
+}
+
+.ir-tiers {
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+.ir-tier {
+  border-bottom: 1px solid var(--color-primary-100);
+}
+
+.ir-tier:last-child {
+  border-bottom: none;
+}
+
+.ir-tier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s;
+  text-align: left;
+  font-family: inherit;
+}
+
+.ir-tier-header:hover {
+  background: var(--color-primary-100);
+}
+
+.ir-tier-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ir-tier-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ir-confidence-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ir-tier-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-gray-800);
+}
+
+.ir-tier-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-primary-700, #1e40af);
+  background: var(--color-primary-100, #dbeafe);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.ir-needs-review {
+  font-size: 10px;
+  color: #ca8a04;
+  background: #fefce8;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.ir-confidence-badge {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.ir-tier-arrow {
+  font-size: 11px;
+  color: var(--color-gray-400);
+}
+
+.ir-candidates {
+  background: white;
+  border-top: 1px solid var(--color-primary-100);
+}
+
+.ir-candidates-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--color-gray-400);
+  text-align: center;
+  background: white;
+  border-top: 1px solid var(--color-primary-100);
+}
+
+.ir-candidate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--color-gray-100);
+  transition: opacity 0.15s;
+}
+
+.ir-candidate:last-child {
+  border-bottom: none;
+}
+
+.ir-candidate-rejected {
+  opacity: 0.4;
+}
+
+.ir-candidate-check {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.ir-candidate-check input {
+  cursor: pointer;
+  accent-color: var(--color-primary-600);
+}
+
+.ir-candidate-records {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ir-source-pill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ir-candidate-name {
+  font-size: 12px;
+  color: var(--color-gray-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.ir-candidate-arrow {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  flex-shrink: 0;
+}
+
+.ir-candidate-match {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ir-match-on {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ir-flag {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ir-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--color-primary-200);
+  background: white;
 }
 
 /* ── Metrics bar ───────────────────────────────────────── */
@@ -10566,5 +10938,256 @@ a.sidebar-user-avatar:hover {
 
 .explorer-cell-empty {
   color: var(--color-gray-400);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SEGMENTS — AI Segmentation Engine
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Stats bar ─────────────────────────────────────────── */
+
+.seg-stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 0 0 4px;
+  margin-bottom: 4px;
+  overflow-x: auto;
+}
+
+.seg-stat {
+  min-width: 90px;
+  padding: 14px 18px;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 10px;
+  text-align: center;
+  transition: border-color 0.15s;
+}
+
+.seg-stat:hover {
+  border-color: var(--color-gray-300);
+}
+
+.seg-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  line-height: 1.2;
+}
+
+.seg-stat-label {
+  font-size: 11px;
+  color: var(--color-gray-500);
+  margin-top: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+/* ── Compute banner ────────────────────────────────────── */
+
+.seg-compute-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin: 0 0 8px;
+  background: var(--color-primary-50);
+  border: 1px solid var(--color-primary-100);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--color-primary-600);
+  font-weight: 500;
+}
+
+.seg-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-primary-100);
+  border-top-color: var(--color-primary-500);
+  border-radius: 50%;
+  animation: seg-spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes seg-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Segment card grid ─────────────────────────────────── */
+
+.seg-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.seg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.seg-card-clickable {
+  cursor: pointer;
+}
+
+.seg-card-clickable:hover {
+  border-color: var(--color-primary-500);
+  box-shadow: 0 0 0 1px var(--color-primary-100);
+}
+
+.seg-card-child {
+  border-left: 3px solid var(--color-gray-300);
+}
+
+.seg-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.seg-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-gray-900);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seg-card-tree-line {
+  color: var(--color-gray-400);
+  margin-right: 4px;
+  font-weight: 400;
+}
+
+.seg-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.seg-type-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.seg-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.seg-card-desc {
+  font-size: 13px;
+  color: var(--color-gray-500);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg-card-branch {
+  font-size: 12px;
+  color: var(--color-gray-400);
+}
+
+.seg-card-branch strong {
+  color: var(--color-gray-600);
+  font-weight: 600;
+}
+
+.seg-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-gray-100);
+}
+
+.seg-card-members {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-gray-700);
+}
+
+.seg-card-date {
+  font-size: 11px;
+  color: var(--color-gray-400);
+  flex: 1;
+}
+
+/* ── Detail view — rules card ──────────────────────────── */
+
+.seg-rules-card {
+  margin-top: 12px;
+  padding: 16px 18px;
+  background: var(--color-gray-50);
+  border: 1px solid var(--color-gray-200);
+  border-radius: 10px;
+}
+
+.seg-rules-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-gray-500);
+  margin-bottom: 10px;
+}
+
+.seg-rules-json {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-gray-700);
+  background: #fff;
+  border: 1px solid var(--color-gray-200);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* ── Section titles ────────────────────────────────────── */
+
+.seg-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-gray-800);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ── Score badge ───────────────────────────────────────── */
+
+.seg-score-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  background: #f0fdf4;
+  color: #16a34a;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
