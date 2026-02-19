@@ -148,239 +148,237 @@ export default function ExplorerView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, orgId, entityType, sourceFilter]);
 
-  /* ── Customers (shows all sources; merging only via applied identity resolution) ── */
+  /* ── Customers — always loads ALL sources, merges via graph edges, then filters ── */
   async function loadCustomers(source: SourceFilter): Promise<ExplorerRow[]> {
     const out: ExplorerRow[] = [];
 
-    // ── Load CRM contacts ──
-    if (source === "all" || source === "hubspot") {
-      const { data: contacts } = await supabase
-        .from("crm_contacts")
-        .select("*, crm_companies(name)")
-        .order("created_at", { ascending: false });
+    // Always load ALL sources so identity-resolved records merge correctly.
+    // We filter by the selected source AFTER merging.
 
-      if (contacts) {
-        for (const c of contacts as (CrmContact & { crm_companies?: { name: string } | null })[]) {
-          out.push({
-            id: c.id,
-            _entityType: "customers",
-            _source: "hubspot",
-            _sources: ["hubspot"],
-            _primarySource: "hubspot",
-            name: [c.first_name, c.last_name].filter(Boolean).join(" "),
-            email: c.email,
-            status: c.status,
-            company_name: c.crm_companies?.name ?? "",
-            title: c.title,
-            orders_count: null,
-            total_spent: null,
-            avg_order_value: null,
-            last_activity: c.updated_at,
-            last_order_at: null,
-            _crm_id: c.id,
-          });
-        }
+    // ── Load CRM contacts ──
+    const { data: contacts } = await supabase
+      .from("crm_contacts")
+      .select("*, crm_companies(name)")
+      .order("created_at", { ascending: false });
+
+    if (contacts) {
+      for (const c of contacts as (CrmContact & { crm_companies?: { name: string } | null })[]) {
+        out.push({
+          id: c.id,
+          _entityType: "customers",
+          _source: "hubspot",
+          _sources: ["hubspot"],
+          _primarySource: "hubspot",
+          name: [c.first_name, c.last_name].filter(Boolean).join(" "),
+          email: c.email,
+          status: c.status,
+          company_name: c.crm_companies?.name ?? "",
+          title: c.title,
+          orders_count: null,
+          total_spent: null,
+          avg_order_value: null,
+          last_activity: c.updated_at,
+          last_order_at: null,
+          _crm_id: c.id,
+        });
       }
     }
 
     // ── Load ecom customers ──
-    if (source === "all" || source === "shopify") {
-      const { data: ecomCustomers } = await supabase
-        .from("ecom_customers")
-        .select("*")
-        .order("created_at", { ascending: false });
+    const { data: ecomCustomers } = await supabase
+      .from("ecom_customers")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      if (ecomCustomers) {
-        for (const e of ecomCustomers as EcomCustomer[]) {
-          out.push({
-            id: e.id,
-            _entityType: "customers",
-            _source: "shopify",
-            _sources: ["shopify"],
-            _primarySource: "shopify",
-            name: [e.first_name, e.last_name].filter(Boolean).join(" ") || e.email || "Unknown",
-            email: e.email,
-            status: null,
-            orders_count: e.orders_count,
-            total_spent: e.total_spent,
-            avg_order_value: e.avg_order_value,
-            last_activity: e.last_order_at,
-            last_order_at: e.last_order_at,
-            company_name: null,
-            title: null,
-          });
-        }
+    if (ecomCustomers) {
+      for (const e of ecomCustomers as EcomCustomer[]) {
+        out.push({
+          id: e.id,
+          _entityType: "customers",
+          _source: "shopify",
+          _sources: ["shopify"],
+          _primarySource: "shopify",
+          name: [e.first_name, e.last_name].filter(Boolean).join(" ") || e.email || "Unknown",
+          email: e.email,
+          status: null,
+          orders_count: e.orders_count,
+          total_spent: e.total_spent,
+          avg_order_value: e.avg_order_value,
+          last_activity: e.last_order_at,
+          last_order_at: e.last_order_at,
+          company_name: null,
+          title: null,
+        });
       }
     }
 
     // ── Load Klaviyo profiles ──
-    if (source === "all" || source === "klaviyo") {
-      const { data: profiles, error: klaviyoError } = await supabase
-        .from("klaviyo_profiles")
-        .select("id, org_id, email, phone_number, first_name, last_name, organization, title, city, region, country, synced_at, created_at")
-        .order("created_at", { ascending: false });
+    const { data: profiles, error: klaviyoError } = await supabase
+      .from("klaviyo_profiles")
+      .select("id, org_id, email, phone_number, first_name, last_name, organization, title, city, region, country, synced_at, created_at")
+      .order("created_at", { ascending: false });
 
-      if (klaviyoError) {
-        console.error("[Explorer] Klaviyo profiles query failed:", klaviyoError);
-      }
+    if (klaviyoError) {
+      console.error("[Explorer] Klaviyo profiles query failed:", klaviyoError);
+    }
 
-      if (profiles) {
-        for (const p of profiles as Record<string, unknown>[]) {
-          const email = (p.email as string) || "";
-          out.push({
-            id: p.id as string,
-            _entityType: "customers",
-            _source: "klaviyo",
-            _sources: ["klaviyo"],
-            _primarySource: "klaviyo",
-            name: [(p.first_name as string), (p.last_name as string)].filter(Boolean).join(" ") || email || "Unknown",
-            email,
-            status: null,
-            orders_count: null,
-            total_spent: null,
-            avg_order_value: null,
-            last_activity: (p.synced_at as string) || (p.created_at as string),
-            last_order_at: null,
-            company_name: (p.organization as string) || null,
-            title: (p.title as string) || null,
-            phone_number: (p.phone_number as string) || null,
-            city: (p.city as string) || null,
-          });
-        }
+    if (profiles) {
+      for (const p of profiles as Record<string, unknown>[]) {
+        const email = (p.email as string) || "";
+        out.push({
+          id: p.id as string,
+          _entityType: "customers",
+          _source: "klaviyo",
+          _sources: ["klaviyo"],
+          _primarySource: "klaviyo",
+          name: [(p.first_name as string), (p.last_name as string)].filter(Boolean).join(" ") || email || "Unknown",
+          email,
+          status: null,
+          orders_count: null,
+          total_spent: null,
+          avg_order_value: null,
+          last_activity: (p.synced_at as string) || (p.created_at as string),
+          last_order_at: null,
+          company_name: (p.organization as string) || null,
+          title: (p.title as string) || null,
+          phone_number: (p.phone_number as string) || null,
+          city: (p.city as string) || null,
+        });
       }
     }
 
-    // ── Merge records that are linked via applied identity resolution ──
-    // Only merge when viewing "All Sources" — single-source views show raw records.
-    if (source === "all" && out.length > 0) {
-      try {
-        // Build a map: "entity_type:entity_id" → row index
-        const SOURCE_TYPE_MAP: Record<string, string> = {
-          hubspot: "crm_contacts",
-          shopify: "ecom_customers",
-          klaviyo: "klaviyo_profiles",
-        };
+    // ── Merge records linked via identity resolution graph edges ──
+    let merged = out;
+    try {
+      const SOURCE_TYPE_MAP: Record<string, string> = {
+        hubspot: "crm_contacts",
+        shopify: "ecom_customers",
+        klaviyo: "klaviyo_profiles",
+      };
 
-        const entityKeyToIdx = new Map<string, number>();
-        for (let i = 0; i < out.length; i++) {
-          const src = out[i]._source as string;
-          const entityType = SOURCE_TYPE_MAP[src] || src;
-          entityKeyToIdx.set(`${entityType}:${out[i].id}`, i);
-        }
-
-        // Load all graph nodes for records we have
-        const entityIds = out.map((r) => r.id as string);
-        const { data: graphNodes } = await supabase
-          .from("graph_nodes")
-          .select("id, entity_type, entity_id")
-          .in("entity_type", ["crm_contacts", "ecom_customers", "klaviyo_profiles"])
-          .in("entity_id", entityIds);
-
-        if (graphNodes && graphNodes.length > 0) {
-          // Map graph_node_id → entity key
-          const nodeIdToEntityKey = new Map<string, string>();
-          const nodeIds: string[] = [];
-          for (const gn of graphNodes) {
-            nodeIdToEntityKey.set(gn.id, `${gn.entity_type}:${gn.entity_id}`);
-            nodeIds.push(gn.id);
-          }
-
-          // Load active same_person edges between these nodes
-          const { data: edges } = await supabase
-            .from("graph_edges")
-            .select("source_node_id, target_node_id")
-            .eq("relation_type", "same_person")
-            .is("valid_until", null)
-            .in("source_node_id", nodeIds)
-            .in("target_node_id", nodeIds);
-
-          if (edges && edges.length > 0) {
-            // Union-Find to group connected records
-            const parent = new Map<number, number>();
-            function find(x: number): number {
-              if (!parent.has(x)) parent.set(x, x);
-              let p = parent.get(x)!;
-              while (p !== parent.get(p)!) p = parent.get(p)!;
-              parent.set(x, p);
-              return p;
-            }
-            function union(a: number, b: number) {
-              const ra = find(a), rb = find(b);
-              if (ra !== rb) parent.set(rb, ra);
-            }
-
-            for (const edge of edges) {
-              const keyA = nodeIdToEntityKey.get(edge.source_node_id);
-              const keyB = nodeIdToEntityKey.get(edge.target_node_id);
-              if (!keyA || !keyB) continue;
-              const idxA = entityKeyToIdx.get(keyA);
-              const idxB = entityKeyToIdx.get(keyB);
-              if (idxA == null || idxB == null) continue;
-              union(idxA, idxB);
-            }
-
-            // Group rows by their root
-            const groups = new Map<number, number[]>();
-            for (let i = 0; i < out.length; i++) {
-              const root = find(i);
-              const group = groups.get(root);
-              if (group) group.push(i);
-              else groups.set(root, [i]);
-            }
-
-            // Merge each group into a single row
-            const merged: ExplorerRow[] = [];
-            for (const [, indices] of groups) {
-              if (indices.length === 1) {
-                merged.push(out[indices[0]]);
-                continue;
-              }
-
-              // Pick the "best" row as primary: prefer hubspot > shopify > klaviyo
-              const PRIORITY: Record<string, number> = { hubspot: 0, shopify: 1, klaviyo: 2 };
-              indices.sort((a, b) => {
-                const pa = PRIORITY[out[a]._source as string] ?? 9;
-                const pb = PRIORITY[out[b]._source as string] ?? 9;
-                return pa - pb;
-              });
-
-              const primary = { ...out[indices[0]] };
-              const allSources = new Set<string>();
-              for (const idx of indices) {
-                allSources.add(out[idx]._source as string);
-                const r = out[idx];
-                // Fill in any missing fields from other sources
-                if (!primary.email && r.email) primary.email = r.email;
-                if (!primary.name || primary.name === "Unknown") {
-                  if (r.name && r.name !== "Unknown") primary.name = r.name;
-                }
-                if (!primary.company_name && r.company_name) primary.company_name = r.company_name;
-                if (!primary.title && r.title) primary.title = r.title;
-                if (!primary.phone_number && r.phone_number) primary.phone_number = r.phone_number;
-                if (!primary.city && r.city) primary.city = r.city;
-                if (primary.orders_count == null && r.orders_count != null) primary.orders_count = r.orders_count;
-                if (primary.total_spent == null && r.total_spent != null) primary.total_spent = r.total_spent;
-                if (primary.avg_order_value == null && r.avg_order_value != null) primary.avg_order_value = r.avg_order_value;
-                if (!primary.last_order_at && r.last_order_at) primary.last_order_at = r.last_order_at;
-                if (!primary.status && r.status) primary.status = r.status;
-              }
-
-              const sourcesArr = [...allSources];
-              primary._sources = sourcesArr;
-              primary._source = sourcesArr.length > 1 ? "both" : sourcesArr[0];
-              merged.push(primary);
-            }
-
-            return merged;
-          }
-        }
-      } catch (err) {
-        console.error("[Explorer] Graph-based merge failed (showing unmerged):", err);
-        // Fall through to return unmerged records
+      const entityKeyToIdx = new Map<string, number>();
+      for (let i = 0; i < out.length; i++) {
+        const src = out[i]._source as string;
+        const entityType = SOURCE_TYPE_MAP[src] || src;
+        entityKeyToIdx.set(`${entityType}:${out[i].id}`, i);
       }
+
+      const entityIds = out.map((r) => r.id as string);
+      const { data: graphNodes } = await supabase
+        .from("graph_nodes")
+        .select("id, entity_type, entity_id")
+        .in("entity_type", ["crm_contacts", "ecom_customers", "klaviyo_profiles"])
+        .in("entity_id", entityIds);
+
+      if (graphNodes && graphNodes.length > 0) {
+        const nodeIdToEntityKey = new Map<string, string>();
+        const nodeIds: string[] = [];
+        for (const gn of graphNodes) {
+          nodeIdToEntityKey.set(gn.id, `${gn.entity_type}:${gn.entity_id}`);
+          nodeIds.push(gn.id);
+        }
+
+        const { data: edges } = await supabase
+          .from("graph_edges")
+          .select("source_node_id, target_node_id")
+          .eq("relation_type", "same_person")
+          .is("valid_until", null)
+          .in("source_node_id", nodeIds)
+          .in("target_node_id", nodeIds);
+
+        if (edges && edges.length > 0) {
+          // Union-Find
+          const parent = new Map<number, number>();
+          function find(x: number): number {
+            if (!parent.has(x)) parent.set(x, x);
+            let p = parent.get(x)!;
+            while (p !== parent.get(p)!) p = parent.get(p)!;
+            parent.set(x, p);
+            return p;
+          }
+          function union(a: number, b: number) {
+            const ra = find(a), rb = find(b);
+            if (ra !== rb) parent.set(rb, ra);
+          }
+
+          for (const edge of edges) {
+            const keyA = nodeIdToEntityKey.get(edge.source_node_id);
+            const keyB = nodeIdToEntityKey.get(edge.target_node_id);
+            if (!keyA || !keyB) continue;
+            const idxA = entityKeyToIdx.get(keyA);
+            const idxB = entityKeyToIdx.get(keyB);
+            if (idxA == null || idxB == null) continue;
+            union(idxA, idxB);
+          }
+
+          const groups = new Map<number, number[]>();
+          for (let i = 0; i < out.length; i++) {
+            const root = find(i);
+            const group = groups.get(root);
+            if (group) group.push(i);
+            else groups.set(root, [i]);
+          }
+
+          const mergedRows: ExplorerRow[] = [];
+          const PRIORITY: Record<string, number> = { hubspot: 0, shopify: 1, klaviyo: 2 };
+
+          for (const [, indices] of groups) {
+            if (indices.length === 1) {
+              mergedRows.push(out[indices[0]]);
+              continue;
+            }
+
+            indices.sort((a, b) => {
+              const pa = PRIORITY[out[a]._source as string] ?? 9;
+              const pb = PRIORITY[out[b]._source as string] ?? 9;
+              return pa - pb;
+            });
+
+            const primary = { ...out[indices[0]] };
+            const allSources = new Set<string>();
+            for (const idx of indices) {
+              allSources.add(out[idx]._source as string);
+              const r = out[idx];
+              if (!primary.email && r.email) primary.email = r.email;
+              if (!primary.name || primary.name === "Unknown") {
+                if (r.name && r.name !== "Unknown") primary.name = r.name;
+              }
+              if (!primary.company_name && r.company_name) primary.company_name = r.company_name;
+              if (!primary.title && r.title) primary.title = r.title;
+              if (!primary.phone_number && r.phone_number) primary.phone_number = r.phone_number;
+              if (!primary.city && r.city) primary.city = r.city;
+              if (primary.orders_count == null && r.orders_count != null) primary.orders_count = r.orders_count;
+              if (primary.total_spent == null && r.total_spent != null) primary.total_spent = r.total_spent;
+              if (primary.avg_order_value == null && r.avg_order_value != null) primary.avg_order_value = r.avg_order_value;
+              if (!primary.last_order_at && r.last_order_at) primary.last_order_at = r.last_order_at;
+              if (!primary.status && r.status) primary.status = r.status;
+            }
+
+            const sourcesArr = [...allSources];
+            primary._sources = sourcesArr;
+            primary._source = sourcesArr.length > 1 ? "both" : sourcesArr[0];
+            mergedRows.push(primary);
+          }
+
+          merged = mergedRows;
+        }
+      }
+    } catch (err) {
+      console.error("[Explorer] Graph-based merge failed (showing unmerged):", err);
     }
 
-    return out;
+    // ── Apply source filter AFTER merging ──
+    // "all" shows everything. A specific source shows unified records
+    // that include that source (e.g. "klaviyo" shows records where
+    // _sources contains "klaviyo", including merged multi-source records).
+    if (source !== "all") {
+      merged = merged.filter((r) => {
+        const sources = (r._sources as string[]) || [r._source as string];
+        return sources.includes(source);
+      });
+    }
+
+    return merged;
   }
 
   /* ── Companies ─────────────────────────────────────────── */

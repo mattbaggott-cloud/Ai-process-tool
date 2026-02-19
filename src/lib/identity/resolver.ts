@@ -550,8 +550,57 @@ export async function computeResolution(
   const uniqueEmails = new Set(allRecords.filter((r) => r.email).map((r) => r.email)).size;
   const totalScanned = allRecords.length;
 
-  // ── Run waterfall matchers ──
+  // ── Pre-populate matchedPairs with existing graph edges ──
+  // This ensures we don't re-propose matches that are already linked.
   const matchedPairs = new Set<string>();
+  try {
+    // Build a lookup: entity_id → IdentityRecord (for pair key generation)
+    const recordById = new Map<string, IdentityRecord>();
+    for (const r of allRecords) {
+      recordById.set(r.id, r);
+    }
+
+    // Get all graph nodes for our records
+    const entityIds = allRecords.map((r) => r.id);
+    const { data: existingNodes } = await supabase
+      .from("graph_nodes")
+      .select("id, entity_type, entity_id")
+      .in("entity_type", ["crm_contacts", "ecom_customers", "klaviyo_profiles"])
+      .in("entity_id", entityIds);
+
+    if (existingNodes && existingNodes.length > 0) {
+      const nodeToEntityId = new Map<string, string>();
+      const nodeIds: string[] = [];
+      for (const gn of existingNodes) {
+        nodeToEntityId.set(gn.id, gn.entity_id);
+        nodeIds.push(gn.id);
+      }
+
+      // Get all active same_person edges
+      const { data: existingEdges } = await supabase
+        .from("graph_edges")
+        .select("source_node_id, target_node_id")
+        .eq("relation_type", "same_person")
+        .is("valid_until", null)
+        .in("source_node_id", nodeIds)
+        .in("target_node_id", nodeIds);
+
+      if (existingEdges) {
+        for (const edge of existingEdges) {
+          const entityIdA = nodeToEntityId.get(edge.source_node_id);
+          const entityIdB = nodeToEntityId.get(edge.target_node_id);
+          if (!entityIdA || !entityIdB) continue;
+          const recA = recordById.get(entityIdA);
+          const recB = recordById.get(entityIdB);
+          if (!recA || !recB) continue;
+          matchedPairs.add(pairKey(recA, recB));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Identity resolver: failed to load existing edges (will re-propose all):", err);
+    // Non-fatal — worst case we re-propose already-linked pairs
+  }
   const allCandidates: MatchCandidate[] = [];
 
   const tierResults = [
