@@ -7,46 +7,72 @@ import { createClient } from "@/lib/supabase/client";
 import type { DataImport, CrmCustomField, CustomFieldType } from "@/lib/types/database";
 
 /* ── CSV Parser ──────────────────────────────────────────── */
-
-function parseLine(line: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (ch === "," && !inQuotes) {
-      result.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  result.push(current.trim());
-  return result;
-}
+// Handles quoted fields with embedded newlines, commas, and escaped quotes.
+// Shopify exports commonly have multi-line addresses and line items inside quotes.
 
 function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = text.split("\n").filter((l) => l.trim());
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const headers = parseLine(lines[0]);
-  const rows = lines.slice(1).map((line) => {
-    const vals = parseLine(line);
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentField = "";
+  let inQuotes = false;
+  const len = text.length;
+
+  for (let i = 0; i < len; i++) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        // Escaped quote ("") → literal quote
+        if (i + 1 < len && text[i + 1] === '"') {
+          currentField += '"';
+          i++;
+        } else {
+          // End of quoted field
+          inQuotes = false;
+        }
+      } else {
+        // Inside quotes: newlines, commas, anything goes — it's all part of the field
+        currentField += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === "," || ch === "\t") {
+        currentRow.push(currentField.trim());
+        currentField = "";
+      } else if (ch === "\n" || ch === "\r") {
+        // Skip \r in \r\n
+        if (ch === "\r" && i + 1 < len && text[i + 1] === "\n") i++;
+        // End of row
+        currentRow.push(currentField.trim());
+        currentField = "";
+        if (currentRow.some((f) => f !== "")) {
+          rows.push(currentRow);
+        }
+        currentRow = [];
+      } else {
+        currentField += ch;
+      }
+    }
+  }
+
+  // Last field/row
+  currentRow.push(currentField.trim());
+  if (currentRow.some((f) => f !== "")) {
+    rows.push(currentRow);
+  }
+
+  if (rows.length === 0) return { headers: [], rows: [] };
+
+  const headers = rows[0];
+  const dataRows = rows.slice(1).map((vals) => {
     const obj: Record<string, string> = {};
     headers.forEach((h, i) => {
       obj[h] = vals[i] ?? "";
     });
     return obj;
   });
-  return { headers, rows };
+  return { headers, rows: dataRows };
 }
 
 /* ── Target table field definitions ──────────────────────── */
@@ -56,6 +82,8 @@ const TARGET_TABLES: { key: string; label: string }[] = [
   { key: "crm_companies", label: "CRM Companies" },
   { key: "crm_deals", label: "CRM Deals" },
   { key: "crm_products", label: "CRM Products" },
+  { key: "ecom_customers", label: "E-Commerce Customers" },
+  { key: "ecom_orders", label: "E-Commerce Orders (+ Customers)" },
 ];
 
 const TARGET_FIELDS: Record<string, { field: string; label: string; required: boolean }[]> = {
@@ -94,12 +122,105 @@ const TARGET_FIELDS: Record<string, { field: string; label: string; required: bo
     { field: "unit_price", label: "Unit Price", required: false },
     { field: "description", label: "Description", required: false },
   ],
+  ecom_customers: [
+    { field: "email", label: "Email", required: true },
+    { field: "full_name", label: "Full Name (splits into first + last)", required: false },
+    { field: "first_name", label: "First Name", required: false },
+    { field: "last_name", label: "Last Name", required: false },
+    { field: "phone", label: "Phone", required: false },
+    { field: "orders_count", label: "Orders Count", required: false },
+    { field: "total_spent", label: "Total Spent", required: false },
+    { field: "addr_address1", label: "Address Line 1", required: false },
+    { field: "addr_city", label: "City", required: false },
+    { field: "addr_province", label: "State/Province", required: false },
+    { field: "addr_zip", label: "Zip Code", required: false },
+    { field: "addr_country", label: "Country", required: false },
+  ],
+  ecom_orders: [
+    { field: "email", label: "Customer Email", required: true },
+    { field: "full_name", label: "Full Name (splits into first + last)", required: false },
+    { field: "first_name", label: "Customer First Name", required: false },
+    { field: "last_name", label: "Customer Last Name", required: false },
+    { field: "phone", label: "Customer Phone", required: false },
+    { field: "accepts_marketing", label: "Accepts Marketing", required: false },
+    { field: "order_number", label: "Order Number / Name", required: false },
+    { field: "total_price", label: "Total Price", required: false },
+    { field: "subtotal_price", label: "Subtotal", required: false },
+    { field: "total_tax", label: "Tax", required: false },
+    { field: "total_discounts", label: "Discounts", required: false },
+    { field: "total_shipping", label: "Shipping Cost", required: false },
+    { field: "currency", label: "Currency", required: false },
+    { field: "financial_status", label: "Financial Status", required: false },
+    { field: "fulfillment_status", label: "Fulfillment Status", required: false },
+    { field: "processed_at", label: "Order Date / Created At", required: false },
+    { field: "discount_code", label: "Discount Code", required: false },
+    { field: "shipping_method", label: "Shipping Method", required: false },
+    { field: "note", label: "Notes", required: false },
+    { field: "lineitem_name", label: "Line Item Name", required: false },
+    { field: "lineitem_quantity", label: "Line Item Quantity", required: false },
+    { field: "lineitem_price", label: "Line Item Price", required: false },
+    { field: "lineitem_sku", label: "Line Item SKU", required: false },
+    { field: "addr_address1", label: "Billing Address", required: false },
+    { field: "addr_city", label: "Billing City", required: false },
+    { field: "addr_province", label: "Billing State/Province", required: false },
+    { field: "addr_zip", label: "Billing Zip", required: false },
+    { field: "addr_country", label: "Billing Country", required: false },
+    { field: "addr_phone", label: "Billing Phone", required: false },
+    { field: "ship_address1", label: "Ship Address", required: false },
+    { field: "ship_city", label: "Ship City", required: false },
+    { field: "ship_province", label: "Ship State/Province", required: false },
+    { field: "ship_zip", label: "Ship Zip", required: false },
+    { field: "ship_country", label: "Ship Country", required: false },
+    { field: "ship_phone", label: "Ship Phone", required: false },
+  ],
 };
 
-/* ── Tables that support custom fields (have metadata JSONB) */
-const CUSTOM_FIELD_TABLES = ["crm_contacts", "crm_companies", "crm_deals"];
+/* ── Tables that support custom fields via crm_custom_fields table */
+const CRM_CUSTOM_FIELD_TABLES = ["crm_contacts", "crm_companies", "crm_deals"];
+/* Ecom tables support extra fields via metadata JSONB (no crm_custom_fields needed) */
+const ECOM_TABLES = ["ecom_customers", "ecom_orders"];
 
 /* ── Auto-suggest mapping ────────────────────────────────── */
+
+// Shopify-specific column name → target field mappings
+const SHOPIFY_HEADER_MAP: Record<string, string> = {
+  "name": "order_number",
+  "total": "total_price",
+  "subtotal": "subtotal_price",
+  "taxes": "total_tax",
+  "shipping": "total_shipping",
+  "discount amount": "total_discounts",
+  "discount code": "discount_code",
+  "shipping method": "shipping_method",
+  "created at": "processed_at",
+  "paid at": "processed_at",
+  "financial status": "financial_status",
+  "fulfillment status": "fulfillment_status",
+  "accepts marketing": "accepts_marketing",
+  "currency": "currency",
+  "lineitem name": "lineitem_name",
+  "lineitem quantity": "lineitem_quantity",
+  "lineitem price": "lineitem_price",
+  "lineitem sku": "lineitem_sku",
+  "billing name": "full_name",
+  "shipping name": "full_name",
+  "billing address1": "addr_address1",
+  "billing city": "addr_city",
+  "billing province": "addr_province",
+  "billing province name": "addr_province",
+  "billing zip": "addr_zip",
+  "billing country": "addr_country",
+  "billing phone": "addr_phone",
+  "shipping address1": "ship_address1",
+  "shipping city": "ship_city",
+  "shipping province": "ship_province",
+  "shipping province name": "ship_province",
+  "shipping zip": "ship_zip",
+  "shipping country": "ship_country",
+  "shipping phone": "ship_phone",
+  "notes": "note",
+  "phone": "phone",
+};
 
 function suggestMapping(
   csvHeader: string,
@@ -107,8 +228,16 @@ function suggestMapping(
   customFields: CrmCustomField[]
 ): string {
   const norm = csvHeader.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const lowerHeader = csvHeader.toLowerCase().trim();
 
-  // Check standard fields first
+  // Check Shopify-specific mappings first (exact match on lowercase header)
+  if (SHOPIFY_HEADER_MAP[lowerHeader]) {
+    const targetField = SHOPIFY_HEADER_MAP[lowerHeader];
+    // Only return if this field exists in the current target table's fields
+    if (fields.some((f) => f.field === targetField)) return targetField;
+  }
+
+  // Check standard fields
   for (const f of fields) {
     const fNorm = f.field.replace(/_/g, "");
     const lNorm = f.label.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -151,9 +280,12 @@ export default function ImportsTab() {
   const [targetTable, setTargetTable] = useState("crm_contacts");
   const [mappings, setMappings] = useState<Record<string, string>>({});
   const [dragOver, setDragOver] = useState(false);
+  const [mapSearch, setMapSearch] = useState("");
+  const [skippedCols, setSkippedCols] = useState<Set<string>>(new Set());
   const [importId, setImportId] = useState<string | null>(null);
   const [progress, setProgress] = useState({ done: 0, total: 0, errors: 0 });
   const [importErrors, setImportErrors] = useState<{ row: number; message: string }[]>([]);
+  const [ecomStats, setEcomStats] = useState<{ customers: number; orders: number; skippedNoEmail: number } | null>(null);
 
   /* ── Custom field state ── */
   const [customFields, setCustomFields] = useState<CrmCustomField[]>([]);
@@ -180,7 +312,7 @@ export default function ImportsTab() {
 
   /* ── Load custom fields ── */
   const loadCustomFields = useCallback(async () => {
-    if (!user || !CUSTOM_FIELD_TABLES.includes(targetTable)) {
+    if (!user || !CRM_CUSTOM_FIELD_TABLES.includes(targetTable)) {
       setCustomFields([]);
       return;
     }
@@ -220,9 +352,34 @@ export default function ImportsTab() {
     return () => window.removeEventListener("workspace-updated", handler);
   }, [loadHistory]);
 
+  /* ── Auto-detect target table from CSV headers ── */
+  const detectTargetTable = (headers: string[]): string => {
+    const lower = headers.map((h) => h.toLowerCase());
+    const hasEcomSignals = lower.some((h) =>
+      h.includes("order") || h.includes("lineitem") || h.includes("line item") ||
+      h.includes("total") || h.includes("fulfillment") || h.includes("shipping") ||
+      h.includes("sku") || h.includes("product") || h.includes("variant") ||
+      h.includes("subtotal") || h.includes("discount")
+    );
+    const hasEmailOrName = lower.some((h) => h.includes("email") || h.includes("name"));
+
+    if (hasEcomSignals && hasEmailOrName) return "ecom_orders";
+    if (hasEcomSignals) return "ecom_orders";
+    // Check for CRM-like signals
+    const hasCrmSignals = lower.some((h) =>
+      h.includes("company") || h.includes("deal") || h.includes("stage") ||
+      h.includes("pipeline") || h.includes("lead") || h.includes("status")
+    );
+    if (hasCrmSignals && lower.some((h) => h.includes("value") || h.includes("stage"))) return "crm_deals";
+    if (hasCrmSignals && lower.some((h) => h.includes("domain") || h.includes("industry"))) return "crm_companies";
+    if (hasEmailOrName) return "crm_contacts";
+    return "crm_contacts";
+  };
+
   /* ── File handling ── */
   const handleFile = (file: File) => {
-    if (!file.name.endsWith(".csv")) return;
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["csv", "tsv", "txt"].includes(ext)) return;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -231,6 +388,8 @@ export default function ImportsTab() {
       if (headers.length === 0) return;
       setCsvHeaders(headers);
       setCsvRows(rows);
+      // Auto-detect the target table from headers
+      setTargetTable(detectTargetTable(headers));
       setStep("preview");
     };
     reader.readAsText(file);
@@ -270,6 +429,19 @@ export default function ImportsTab() {
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_|_$/g, "");
 
+    const isEcom = ECOM_TABLES.includes(targetTable);
+
+    if (isEcom) {
+      // Ecom tables: store in metadata JSONB — no DB record needed, just set the mapping
+      setMappings((prev) => ({ ...prev, [csvHeader]: `meta:${fieldKey}` }));
+      setCreatingFieldFor(null);
+      setNewFieldLabel("");
+      setNewFieldType("text");
+      setCreatingField(false);
+      return;
+    }
+
+    // CRM tables: create a crm_custom_fields record
     const supabase = createClient();
     const { data, error } = await supabase
       .from("crm_custom_fields")
@@ -310,6 +482,7 @@ export default function ImportsTab() {
     if (!user) return;
     setStep("importing");
     const supabase = createClient();
+    const isEcom = targetTable.startsWith("ecom_");
 
     // Create import record
     const mappedFields = csvHeaders.map((h) => ({
@@ -337,42 +510,6 @@ export default function ImportsTab() {
     const currentImportId = impRow?.id || null;
     setImportId(currentImportId);
 
-    // Build active mappings (skip unmapped)
-    const activeMappings = csvHeaders
-      .filter((h) => mappings[h])
-      .map((h) => ({ csv: h, field: mappings[h] }));
-
-    // Separate standard vs custom field mappings
-    const standardMappings = activeMappings.filter((m) => !m.field.startsWith("custom:"));
-    const customMappings = activeMappings.filter((m) => m.field.startsWith("custom:"));
-
-    // For contacts: resolve company_name → company_id
-    const companyNameMapping = standardMappings.find((m) => m.field === "company_name");
-    const companyCache: Record<string, string> = {}; // name → id
-
-    if (targetTable === "crm_contacts" && companyNameMapping) {
-      // Collect unique company names
-      const uniqueNames = [...new Set(csvRows.map((r) => (r[companyNameMapping.csv] ?? "").trim()).filter(Boolean))];
-      // Look up existing companies
-      if (uniqueNames.length > 0) {
-        const { data: existing } = await supabase
-          .from("crm_companies")
-          .select("id, name")
-          .in("name", uniqueNames);
-        if (existing) existing.forEach((c) => { companyCache[c.name] = c.id; });
-        // Create missing companies
-        const missing = uniqueNames.filter((n) => !companyCache[n]);
-        for (const name of missing) {
-          const { data: created } = await supabase
-            .from("crm_companies")
-            .insert({ user_id: user.id, org_id: orgId, name })
-            .select("id")
-            .single();
-          if (created) companyCache[name] = created.id;
-        }
-      }
-    }
-
     let imported = 0;
     let errorCount = 0;
     const errors: { row: number; message: string }[] = [];
@@ -380,67 +517,372 @@ export default function ImportsTab() {
 
     setProgress({ done: 0, total: csvRows.length, errors: 0 });
 
-    for (let i = 0; i < csvRows.length; i += BATCH) {
-      const batch = csvRows.slice(i, i + BATCH);
-      const insertRows = batch.map((row) => {
-        const mapped: Record<string, unknown> = { user_id: user.id, org_id: orgId };
+    if (isEcom) {
+      // ── E-Commerce import (customers + orders with dedup) ──
+      const activeMappings = csvHeaders
+        .filter((h) => mappings[h])
+        .map((h) => ({ csv: h, field: mappings[h] }));
 
-        // Build metadata from custom fields
-        const metadata: Record<string, unknown> = {};
+      const numericFields = ["total_price", "subtotal_price", "total_tax", "total_discounts", "total_shipping", "orders_count", "total_spent"];
 
-        for (const m of standardMappings) {
-          const val = row[m.csv] ?? "";
-          // Handle company_name → company_id for contacts
-          if (m.field === "company_name" && targetTable === "crm_contacts") {
-            const companyId = companyCache[val.trim()];
-            if (companyId) mapped.company_id = companyId;
-            continue; // Don't insert company_name directly
-          }
-          // Coerce numeric fields
-          if (["value", "probability", "unit_price", "annual_revenue", "employees"].includes(m.field)) {
-            const num = parseFloat(val);
-            mapped[m.field] = isNaN(num) ? 0 : num;
-          } else {
-            mapped[m.field] = val;
-          }
-        }
+      // Helper to get mapped value from row
+      const getMapped = (row: Record<string, string>, fieldName: string): string => {
+        const m = activeMappings.find((am) => am.field === fieldName);
+        return m ? (row[m.csv] ?? "").trim() : "";
+      };
+      const getNumeric = (row: Record<string, string>, fieldName: string): number => {
+        const val = getMapped(row, fieldName);
+        const num = parseFloat(val.replace(/[^0-9.-]/g, ""));
+        return isNaN(num) ? 0 : num;
+      };
 
-        // Map custom fields into metadata
-        for (const m of customMappings) {
-          const fieldKey = m.field.replace("custom:", "");
-          const val = row[m.csv] ?? "";
-          // Look up field type for coercion
-          const cfDef = customFields.find((cf) => cf.field_key === fieldKey);
-          if (cfDef?.field_type === "number") {
-            const num = parseFloat(val);
-            metadata[fieldKey] = isNaN(num) ? null : num;
-          } else if (cfDef?.field_type === "boolean") {
-            metadata[fieldKey] = ["true", "yes", "1"].includes(val.toLowerCase());
-          } else {
-            metadata[fieldKey] = val;
-          }
-        }
-
-        // Only set metadata if there are custom values
-        if (Object.keys(metadata).length > 0) {
-          mapped.metadata = metadata;
-        }
-
-        // Auto-set source for contacts
-        if (targetTable === "crm_contacts") {
-          mapped.source = "import";
-        }
-        return mapped;
-      });
-
-      const { error } = await supabase.from(targetTable).insert(insertRows);
-      if (error) {
-        errorCount += batch.length;
-        errors.push({ row: i + 1, message: error.message });
-      } else {
-        imported += batch.length;
+      // Group rows by email for customer dedup
+      let skippedNoEmail = 0;
+      const emailToRows = new Map<string, Record<string, string>[]>();
+      for (const row of csvRows) {
+        const email = getMapped(row, "email").toLowerCase();
+        if (!email) { skippedNoEmail++; continue; }
+        const existing = emailToRows.get(email) ?? [];
+        existing.push(row);
+        emailToRows.set(email, existing);
       }
-      setProgress({ done: i + batch.length, total: csvRows.length, errors: errorCount });
+
+      // Look up existing customers
+      const emailToCustomerId = new Map<string, string>();
+      const allEmails = [...emailToRows.keys()];
+      for (let i = 0; i < allEmails.length; i += 200) {
+        const batch = allEmails.slice(i, i + 200);
+        const { data: existing } = await supabase
+          .from("ecom_customers")
+          .select("id, email")
+          .eq("org_id", orgId)
+          .in("email", batch);
+        if (existing) {
+          for (const c of existing) {
+            emailToCustomerId.set((c.email as string).toLowerCase(), c.id as string);
+          }
+        }
+      }
+
+      // Insert new customers
+      const newEmails = allEmails.filter((e) => !emailToCustomerId.has(e));
+      for (let i = 0; i < newEmails.length; i += BATCH) {
+        const batchEmails = newEmails.slice(i, i + BATCH);
+        const insertRows = batchEmails.map((email) => {
+          const firstRow = emailToRows.get(email)![0];
+          const allRows = emailToRows.get(email)!;
+
+          // Build address from addr_ fields
+          const address: Record<string, string> = {};
+          for (const m of activeMappings) {
+            if (m.field.startsWith("addr_")) {
+              const val = (firstRow[m.csv] ?? "").trim();
+              if (val) address[m.field.replace("addr_", "")] = val;
+            }
+          }
+
+          // Collect meta: fields into metadata
+          const custMeta: Record<string, unknown> = { imported_by: user.id, imported_at: new Date().toISOString() };
+          for (const m of activeMappings) {
+            if (m.field.startsWith("meta:")) {
+              const key = m.field.replace("meta:", "");
+              const val = (firstRow[m.csv] ?? "").trim();
+              if (val) custMeta[key] = val;
+            }
+          }
+
+          // Count unique orders for this customer (not raw line item rows)
+          const orderNumField = activeMappings.find((am) => am.field === "order_number");
+          let custOrderCount = allRows.length;
+          let custTotalSpent = allRows.reduce((s, r) => s + getNumeric(r, "total_price"), 0);
+          if (orderNumField && targetTable === "ecom_orders") {
+            const uniqueOrders = new Set<string>();
+            custTotalSpent = 0;
+            for (const r of allRows) {
+              const oNum = (r[orderNumField.csv] ?? "").trim();
+              if (oNum && !uniqueOrders.has(oNum)) {
+                uniqueOrders.add(oNum);
+                custTotalSpent += getNumeric(r, "total_price");
+              }
+            }
+            custOrderCount = uniqueOrders.size;
+          }
+
+          // Handle full_name → split into first + last
+          let firstName = getMapped(firstRow, "first_name") || null;
+          let lastName = getMapped(firstRow, "last_name") || null;
+          const fullName = getMapped(firstRow, "full_name");
+          if (fullName && (!firstName || !lastName)) {
+            const parts = fullName.trim().split(/\s+/);
+            if (!firstName) firstName = parts[0] || null;
+            if (!lastName) lastName = parts.slice(1).join(" ") || null;
+          }
+
+          return {
+            org_id: orgId,
+            external_id: `import-${email}`,
+            external_source: "import",
+            email,
+            first_name: firstName,
+            last_name: lastName,
+            phone: getMapped(firstRow, "phone") || null,
+            default_address: Object.keys(address).length > 0 ? address : null,
+            accepts_marketing: getMapped(firstRow, "accepts_marketing") === "yes" || getMapped(firstRow, "accepts_marketing") === "true" || false,
+            orders_count: targetTable === "ecom_orders" ? custOrderCount : (getNumeric(firstRow, "orders_count") || 0),
+            total_spent: targetTable === "ecom_orders"
+              ? Math.round(custTotalSpent * 100) / 100
+              : (getNumeric(firstRow, "total_spent") || 0),
+            metadata: custMeta,
+          };
+        });
+
+        const { data: inserted, error } = await supabase
+          .from("ecom_customers")
+          .insert(insertRows)
+          .select("id, email");
+
+        if (error) {
+          errorCount += batchEmails.length;
+          errors.push({ row: i + 1, message: `Customers: ${error.message}` });
+        } else if (inserted) {
+          for (const c of inserted) {
+            emailToCustomerId.set((c.email as string).toLowerCase(), c.id as string);
+            imported++;
+          }
+        }
+        setProgress({ done: Math.min(i + BATCH, newEmails.length), total: csvRows.length, errors: errorCount });
+      }
+
+      // Insert orders (for ecom_orders target)
+      if (targetTable === "ecom_orders") {
+        // Group rows by order_number (Shopify: multiple rows per order = line items)
+        const orderNumField = activeMappings.find((am) => am.field === "order_number");
+        const lineitemNameField = activeMappings.find((am) => am.field === "lineitem_name");
+        const lineitemQtyField = activeMappings.find((am) => am.field === "lineitem_quantity");
+        const lineitemPriceField = activeMappings.find((am) => am.field === "lineitem_price");
+        const lineitemSkuField = activeMappings.find((am) => am.field === "lineitem_sku");
+        const hasLineitemFields = !!(lineitemNameField || lineitemSkuField);
+
+        const orderGroups = new Map<string, Record<string, string>[]>();
+        for (const row of csvRows) {
+          const email = getMapped(row, "email").toLowerCase();
+          // Don't skip rows without email — import them as unlinked orders
+          const orderNum = orderNumField ? (row[orderNumField.csv] ?? "").trim() : "";
+          const groupKey = orderNum || `row-${orderGroups.size}`;
+          // Only add to group if we haven't seen this order yet OR it's a line item row
+          const existing = orderGroups.get(groupKey) ?? [];
+          existing.push(row);
+          orderGroups.set(groupKey, existing);
+        }
+
+        const orderRows: Record<string, unknown>[] = [];
+        let orderIdx = 0;
+
+        for (const [, groupRows] of orderGroups) {
+          const primaryRow = groupRows[0];
+          const email = getMapped(primaryRow, "email").toLowerCase();
+          const customerId = email ? emailToCustomerId.get(email) : null;
+
+          // Build shipping address
+          const shipAddr: Record<string, string> = {};
+          for (const m of activeMappings) {
+            if (m.field.startsWith("ship_")) {
+              const val = (primaryRow[m.csv] ?? "").trim();
+              if (val) shipAddr[m.field.replace("ship_", "")] = val;
+            }
+          }
+
+          // Build line items from all rows in this order group
+          const lineItems: unknown[] = [];
+          if (hasLineitemFields) {
+            for (const row of groupRows) {
+              const item: Record<string, unknown> = {};
+              if (lineitemNameField) item.name = (row[lineitemNameField.csv] ?? "").trim();
+              if (lineitemQtyField) {
+                const q = parseFloat((row[lineitemQtyField.csv] ?? "").replace(/[^0-9.-]/g, ""));
+                item.quantity = isNaN(q) ? 1 : q;
+              }
+              if (lineitemPriceField) {
+                const p = parseFloat((row[lineitemPriceField.csv] ?? "").replace(/[^0-9.-]/g, ""));
+                item.price = isNaN(p) ? 0 : p;
+              }
+              if (lineitemSkuField) item.sku = (row[lineitemSkuField.csv] ?? "").trim();
+              if (item.name || item.sku) lineItems.push(item);
+            }
+          } else {
+            const itemText = getMapped(primaryRow, "line_items_text");
+            if (itemText) lineItems.push({ title: itemText, quantity: 1, price: getNumeric(primaryRow, "total_price") });
+          }
+
+          // Collect meta: fields
+          const orderMeta: Record<string, unknown> = { imported_by: user.id, imported_at: new Date().toISOString() };
+          for (const m of activeMappings) {
+            if (m.field.startsWith("meta:")) {
+              const key = m.field.replace("meta:", "");
+              const val = (primaryRow[m.csv] ?? "").trim();
+              if (val) orderMeta[key] = val;
+            }
+          }
+
+          const orderNum = getMapped(primaryRow, "order_number") || `IMP-${Date.now()}-${orderIdx}`;
+          orderIdx++;
+
+          const processedAt = getMapped(primaryRow, "processed_at");
+          let parsedDate: string | null = null;
+          if (processedAt) {
+            const d = new Date(processedAt);
+            parsedDate = isNaN(d.getTime()) ? null : d.toISOString();
+          }
+
+          orderRows.push({
+            org_id: orgId,
+            external_id: `import-${orderNum}`,
+            external_source: "import",
+            customer_id: customerId || null,
+            customer_external_id: email,
+            order_number: orderNum,
+            email,
+            financial_status: getMapped(primaryRow, "financial_status") || "paid",
+            fulfillment_status: getMapped(primaryRow, "fulfillment_status") || "fulfilled",
+            total_price: getNumeric(primaryRow, "total_price"),
+            subtotal_price: getNumeric(primaryRow, "subtotal_price") || getNumeric(primaryRow, "total_price"),
+            total_tax: getNumeric(primaryRow, "total_tax"),
+            total_discounts: getNumeric(primaryRow, "total_discounts"),
+            total_shipping: getNumeric(primaryRow, "total_shipping"),
+            currency: getMapped(primaryRow, "currency") || "USD",
+            line_items: lineItems,
+            shipping_address: Object.keys(shipAddr).length > 0 ? shipAddr : null,
+            note: getMapped(primaryRow, "note") || null,
+            source_name: "import",
+            processed_at: parsedDate || new Date().toISOString(),
+            metadata: orderMeta,
+          });
+        }
+
+        for (let i = 0; i < orderRows.length; i += BATCH) {
+          const batch = orderRows.slice(i, i + BATCH);
+          const { error } = await supabase.from("ecom_orders").insert(batch);
+          if (error) {
+            errorCount += batch.length;
+            errors.push({ row: i + 1, message: `Orders: ${error.message}` });
+          } else {
+            imported += batch.length;
+          }
+          setProgress({ done: newEmails.length + i + batch.length, total: orderRows.length + newEmails.length, errors: errorCount });
+        }
+
+        // Update customer aggregates
+        for (const [, custId] of emailToCustomerId) {
+          const { data: orderAgg } = await supabase
+            .from("ecom_orders")
+            .select("total_price, processed_at")
+            .eq("org_id", orgId)
+            .eq("customer_id", custId)
+            .order("processed_at", { ascending: true });
+          if (orderAgg && orderAgg.length > 0) {
+            const totalSpent = orderAgg.reduce((s, o) => s + ((o.total_price as number) || 0), 0);
+            await supabase
+              .from("ecom_customers")
+              .update({
+                orders_count: orderAgg.length,
+                total_spent: Math.round(totalSpent * 100) / 100,
+                avg_order_value: Math.round((totalSpent / orderAgg.length) * 100) / 100,
+                first_order_at: orderAgg[0].processed_at as string,
+                last_order_at: orderAgg[orderAgg.length - 1].processed_at as string,
+              })
+              .eq("id", custId);
+          }
+        }
+
+        // Set ecom-specific stats for the results page
+        setEcomStats({
+          customers: allEmails.length,
+          orders: orderGroups.size,
+          skippedNoEmail,  // informational: rows with no email (still imported as unlinked orders)
+        });
+      }
+    } else {
+      // ── CRM import (original logic) ──
+      const activeMappings = csvHeaders
+        .filter((h) => mappings[h])
+        .map((h) => ({ csv: h, field: mappings[h] }));
+
+      const standardMappings = activeMappings.filter((m) => !m.field.startsWith("custom:"));
+      const customMappingsArr = activeMappings.filter((m) => m.field.startsWith("custom:"));
+
+      // For contacts: resolve company_name → company_id
+      const companyNameMapping = standardMappings.find((m) => m.field === "company_name");
+      const companyCache: Record<string, string> = {};
+
+      if (targetTable === "crm_contacts" && companyNameMapping) {
+        const uniqueNames = [...new Set(csvRows.map((r) => (r[companyNameMapping.csv] ?? "").trim()).filter(Boolean))];
+        if (uniqueNames.length > 0) {
+          const { data: existing } = await supabase
+            .from("crm_companies")
+            .select("id, name")
+            .in("name", uniqueNames);
+          if (existing) existing.forEach((c) => { companyCache[c.name] = c.id; });
+          const missing = uniqueNames.filter((n) => !companyCache[n]);
+          for (const name of missing) {
+            const { data: created } = await supabase
+              .from("crm_companies")
+              .insert({ user_id: user.id, org_id: orgId, name })
+              .select("id")
+              .single();
+            if (created) companyCache[name] = created.id;
+          }
+        }
+      }
+
+      for (let i = 0; i < csvRows.length; i += BATCH) {
+        const batch = csvRows.slice(i, i + BATCH);
+        const insertRows = batch.map((row) => {
+          const mapped: Record<string, unknown> = { user_id: user.id, org_id: orgId };
+          const metadata: Record<string, unknown> = {};
+
+          for (const m of standardMappings) {
+            const val = row[m.csv] ?? "";
+            if (m.field === "company_name" && targetTable === "crm_contacts") {
+              const companyId = companyCache[val.trim()];
+              if (companyId) mapped.company_id = companyId;
+              continue;
+            }
+            if (["value", "probability", "unit_price", "annual_revenue", "employees"].includes(m.field)) {
+              const num = parseFloat(val);
+              mapped[m.field] = isNaN(num) ? 0 : num;
+            } else {
+              mapped[m.field] = val;
+            }
+          }
+
+          for (const m of customMappingsArr) {
+            const fieldKey = m.field.replace("custom:", "");
+            const val = row[m.csv] ?? "";
+            const cfDef = customFields.find((cf) => cf.field_key === fieldKey);
+            if (cfDef?.field_type === "number") {
+              const num = parseFloat(val);
+              metadata[fieldKey] = isNaN(num) ? null : num;
+            } else if (cfDef?.field_type === "boolean") {
+              metadata[fieldKey] = ["true", "yes", "1"].includes(val.toLowerCase());
+            } else {
+              metadata[fieldKey] = val;
+            }
+          }
+
+          if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
+          if (targetTable === "crm_contacts") mapped.source = "import";
+          return mapped;
+        });
+
+        const { error } = await supabase.from(targetTable).insert(insertRows);
+        if (error) {
+          errorCount += batch.length;
+          errors.push({ row: i + 1, message: error.message });
+        } else {
+          imported += batch.length;
+        }
+        setProgress({ done: i + batch.length, total: csvRows.length, errors: errorCount });
+      }
     }
 
     // Update import record
@@ -489,26 +931,68 @@ export default function ImportsTab() {
     setCreatingFieldFor(null);
     setNewFieldLabel("");
     setNewFieldType("text");
+    setEcomStats(null);
+    setSkippedCols(new Set());
     if (fileRef.current) fileRef.current.value = "";
   };
 
   /* ── Computed values ── */
   const mappedCount = Object.values(mappings).filter(Boolean).length;
-  const customMappedCount = Object.values(mappings).filter((v) => v.startsWith("custom:")).length;
+  const customMappedCount = Object.values(mappings).filter((v) => v.startsWith("custom:") || v.startsWith("meta:")).length;
   const standardMappedCount = mappedCount - customMappedCount;
   const skippedCount = csvHeaders.length - mappedCount;
   const requiredFields = (TARGET_FIELDS[targetTable] || []).filter((f) => f.required);
   const unmappedRequired = requiredFields.filter(
     (rf) => !Object.values(mappings).includes(rf.field)
   );
-  const supportsCustomFields = CUSTOM_FIELD_TABLES.includes(targetTable);
+  const isCrmCustom = CRM_CUSTOM_FIELD_TABLES.includes(targetTable);
+  const isEcomTable = ECOM_TABLES.includes(targetTable);
+  const supportsCustomFields = isCrmCustom || isEcomTable;
+
+  /* ── Ecom data breakdown (computed from CSV before import) ── */
+  const ecomBreakdown = React.useMemo(() => {
+    if (!targetTable.startsWith("ecom_") || csvRows.length === 0) return null;
+
+    // Find email and order number columns
+    const lowerHeaders = csvHeaders.map((h) => h.toLowerCase());
+    const emailCol = csvHeaders.find((_, i) => lowerHeaders[i] === "email");
+    const orderCol = csvHeaders.find((_, i) =>
+      lowerHeaders[i] === "name" || lowerHeaders[i] === "order number" || lowerHeaders[i] === "order_number" || lowerHeaders[i] === "order"
+    );
+
+    const uniqueOrders = new Set<string>();
+    const uniqueEmails = new Set<string>();
+    let rowsWithEmail = 0;
+    let rowsNoEmail = 0;
+
+    for (const row of csvRows) {
+      const email = emailCol ? (row[emailCol] ?? "").trim().toLowerCase() : "";
+      const orderNum = orderCol ? (row[orderCol] ?? "").trim() : "";
+      if (orderNum) uniqueOrders.add(orderNum);
+      if (email) {
+        uniqueEmails.add(email);
+        rowsWithEmail++;
+      } else {
+        rowsNoEmail++;
+      }
+    }
+
+    return {
+      totalRows: csvRows.length,
+      uniqueOrders: uniqueOrders.size,
+      uniqueCustomers: uniqueEmails.size,
+      rowsWithEmail,
+      rowsNoEmail,
+      hasOrderGrouping: uniqueOrders.size > 0 && uniqueOrders.size < csvRows.length,
+    };
+  }, [csvRows, csvHeaders, targetTable]);
 
   /* ── Type chip options ── */
   const TYPE_CHIPS: { type: CustomFieldType; label: string; icon: string }[] = [
-    { type: "text", label: "Text", icon: "Aa" },
-    { type: "number", label: "Number", icon: "#" },
-    { type: "date", label: "Date", icon: "D" },
-    { type: "boolean", label: "Bool", icon: "?" },
+    { type: "text", label: "Text", icon: "Text" },
+    { type: "number", label: "Number", icon: "Number" },
+    { type: "date", label: "Date", icon: "Date" },
+    { type: "boolean", label: "Yes/No", icon: "Yes/No" },
   ];
 
   /* ── Format helper ── */
@@ -535,6 +1019,10 @@ export default function ImportsTab() {
       const key = val.replace("custom:", "");
       const cf = customFields.find((f) => f.field_key === key);
       return { label: cf?.field_label || key, color: "blue" as const, icon: "★" };
+    }
+    if (val.startsWith("meta:")) {
+      const key = val.replace("meta:", "").replace(/_/g, " ");
+      return { label: key, color: "blue" as const, icon: "+" };
     }
     const stdFields = TARGET_FIELDS[targetTable] || [];
     const f = stdFields.find((sf) => sf.field === val);
@@ -583,11 +1071,11 @@ export default function ImportsTab() {
               <p style={{ margin: "12px 0 4px", fontWeight: 600, color: "#374151" }}>
                 Drop a CSV file here or click to browse
               </p>
-              <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Supports .csv files</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>Supports .csv, .tsv, .txt files</p>
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.tsv,.txt"
                 onChange={handleFileInput}
                 style={{ display: "none" }}
               />
@@ -642,6 +1130,38 @@ export default function ImportsTab() {
                   Showing first 10 of {csvRows.length.toLocaleString()} rows
                 </p>
               )}
+
+              {/* Ecom data breakdown panel */}
+              {ecomBreakdown && ecomBreakdown.hasOrderGrouping && (
+                <div className="data-ecom-breakdown">
+                  <div className="data-ecom-breakdown-title">Data Breakdown</div>
+                  <div className="data-ecom-breakdown-flow">
+                    <div className="data-ecom-breakdown-stat">
+                      <div className="data-ecom-breakdown-value">{ecomBreakdown.totalRows.toLocaleString()}</div>
+                      <div className="data-ecom-breakdown-label">CSV rows (line items)</div>
+                    </div>
+                    <div className="data-ecom-breakdown-arrow">→</div>
+                    <div className="data-ecom-breakdown-stat">
+                      <div className="data-ecom-breakdown-value">{ecomBreakdown.uniqueOrders.toLocaleString()}</div>
+                      <div className="data-ecom-breakdown-label">unique orders</div>
+                    </div>
+                    <div className="data-ecom-breakdown-arrow">→</div>
+                    <div className="data-ecom-breakdown-stat">
+                      <div className="data-ecom-breakdown-value">{ecomBreakdown.uniqueCustomers.toLocaleString()}</div>
+                      <div className="data-ecom-breakdown-label">unique customers</div>
+                    </div>
+                  </div>
+                  {ecomBreakdown.rowsNoEmail > 0 && (
+                    <div className="data-ecom-breakdown-note">
+                      {ecomBreakdown.rowsNoEmail.toLocaleString()} rows have no email — these orders will import without a customer link
+                    </div>
+                  )}
+                  <div className="data-ecom-breakdown-note" style={{ opacity: 0.6 }}>
+                    Multiple rows per order (line items) will be grouped into a single order record with a line_items array.
+                  </div>
+                </div>
+              )}
+
               <div className="data-wizard-actions">
                 <button className="btn" onClick={resetWizard}>
                   Cancel
@@ -656,7 +1176,7 @@ export default function ImportsTab() {
           {/* Map Fields */}
           {step === "map" && (
             <div>
-              {/* Header with stats + progress */}
+              {/* Header with stats + progress + actions */}
               <div className="data-map-header">
                 <div className="data-map-stats">
                   {standardMappedCount > 0 && (
@@ -683,19 +1203,50 @@ export default function ImportsTab() {
                     </span>
                   )}
                 </div>
-                <div className="data-map-progress-wrap">
-                  <div className="data-map-progress">
-                    <div
-                      className="data-map-progress-fill"
-                      style={{ width: `${csvHeaders.length > 0 ? (mappedCount / csvHeaders.length) * 100 : 0}%` }}
-                    />
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                  {/* Skip all unmapped columns at once */}
+                  {(() => {
+                    const unmappedCount = csvHeaders.filter((h) => !mappings[h] && !skippedCols.has(h)).length;
+                    return unmappedCount > 0 ? (
+                      <button
+                        className="btn btn-sm"
+                        style={{ fontSize: 11, padding: "3px 10px", background: "var(--bg-danger, #4a2020)", color: "var(--text-primary, #eee)", border: "1px solid var(--border-danger, #6b3030)" }}
+                        onClick={() => {
+                          setSkippedCols((prev) => {
+                            const next = new Set(prev);
+                            csvHeaders.forEach((h) => { if (!mappings[h]) next.add(h); });
+                            return next;
+                          });
+                        }}
+                      >
+                        ✕ Skip {unmappedCount} unmapped
+                      </button>
+                    ) : null;
+                  })()}
+                  {/* Show skipped count + restore */}
+                  {skippedCols.size > 0 && (
+                    <button
+                      className="btn btn-sm"
+                      style={{ fontSize: 11, padding: "3px 10px", opacity: 0.7 }}
+                      onClick={() => setSkippedCols(new Set())}
+                    >
+                      Show {skippedCols.size} hidden columns
+                    </button>
+                  )}
+                  <div className="data-map-progress-wrap" style={{ flex: 1 }}>
+                    <div className="data-map-progress">
+                      <div
+                        className="data-map-progress-fill"
+                        style={{ width: `${csvHeaders.length > 0 ? (mappedCount / csvHeaders.length) * 100 : 0}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* Card list */}
               <div className="data-map-list">
-                {csvHeaders.map((h) => {
+                {csvHeaders.filter((h) => !skippedCols.has(h)).map((h) => {
                   const val = mappings[h] || "";
                   const info = getMappingInfo(val);
                   const isCreating = creatingFieldFor === h;
@@ -730,7 +1281,7 @@ export default function ImportsTab() {
                         <div className="data-map-card-target" ref={openDropdown === h ? dropdownRef : undefined}>
                           <div
                             className={`data-map-tag data-map-tag-${isMapped ? info.color : "placeholder"}`}
-                            onClick={() => setOpenDropdown(openDropdown === h ? null : h)}
+                            onClick={() => { setOpenDropdown(openDropdown === h ? null : h); if (openDropdown === h) setMapSearch(""); }}
                           >
                             {isMapped ? info.label : "Select field..."}
                             <span className={`data-map-tag-chevron ${openDropdown === h ? "data-map-tag-chevron-open" : ""}`}>
@@ -741,27 +1292,51 @@ export default function ImportsTab() {
                           {/* Dropdown panel */}
                           {openDropdown === h && (
                             <div className="data-map-dropdown">
+                              {/* Search within dropdown */}
+                              <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-secondary, #333)" }}>
+                                <input
+                                  className="crm-input"
+                                  type="text"
+                                  placeholder="Search fields..."
+                                  value={mapSearch}
+                                  onChange={(e) => setMapSearch(e.target.value)}
+                                  autoFocus
+                                  style={{ width: "100%", fontSize: 12, padding: "4px 8px" }}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
                               <div className="data-map-dropdown-scroll">
                                 {/* Skip option */}
+                                {(!mapSearch.trim() || "skip".includes(mapSearch.toLowerCase())) && (
                                 <div
                                   className="data-map-dropdown-skip"
                                   onClick={() => {
                                     setMappings((prev) => ({ ...prev, [h]: "" }));
                                     setOpenDropdown(null);
+                                    setMapSearch("");
                                     if (creatingFieldFor === h) setCreatingFieldFor(null);
                                   }}
                                 >
                                   — Skip this column
                                 </div>
+                                )}
 
                                 {/* Standard fields */}
+                                {(() => {
+                                  const q = mapSearch.toLowerCase().trim();
+                                  const filtered = (TARGET_FIELDS[targetTable] || []).filter((f) =>
+                                    !q || f.field.toLowerCase().includes(q) || f.label.toLowerCase().includes(q)
+                                  );
+                                  if (filtered.length === 0 && q) return null;
+                                  return (<>
                                 <div className="data-map-dropdown-section">Standard Fields</div>
-                                {(TARGET_FIELDS[targetTable] || []).map((f) => (
+                                {filtered.map((f) => (
                                   <div
                                     key={f.field}
                                     className={`data-map-dropdown-item ${val === f.field ? "data-map-dropdown-item-active" : ""}`}
                                     onClick={() => {
                                       setMappings((prev) => ({ ...prev, [h]: f.field }));
+                                      setMapSearch("");
                                       setOpenDropdown(null);
                                       if (creatingFieldFor === h) setCreatingFieldFor(null);
                                     }}
@@ -773,6 +1348,8 @@ export default function ImportsTab() {
                                     {val === f.field && <span className="data-map-dropdown-item-check">✓</span>}
                                   </div>
                                 ))}
+                                  </>);
+                                })()}
 
                                 {/* Custom fields */}
                                 {supportsCustomFields && customFields.length > 0 && (
@@ -817,6 +1394,20 @@ export default function ImportsTab() {
                             </div>
                           )}
                         </div>
+
+                        {/* Dismiss / skip column button */}
+                        <button
+                          className="data-map-card-dismiss"
+                          title="Skip this column"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMappings((prev) => ({ ...prev, [h]: "" }));
+                            setSkippedCols((prev) => { const next = new Set(prev); next.add(h); return next; });
+                            if (creatingFieldFor === h) setCreatingFieldFor(null);
+                          }}
+                        >
+                          ✕
+                        </button>
                       </div>
 
                       {/* Create custom field panel */}
@@ -911,20 +1502,51 @@ export default function ImportsTab() {
           {step === "results" && (
             <div className="data-results">
               <div className="data-results-summary">
-                <div className="data-results-stat data-results-stat-success">
-                  <div className="data-results-stat-value">{(progress.total - progress.errors).toLocaleString()}</div>
-                  <div className="data-results-stat-label">Rows Imported</div>
-                </div>
-                {progress.errors > 0 && (
-                  <div className="data-results-stat data-results-stat-error">
-                    <div className="data-results-stat-value">{progress.errors.toLocaleString()}</div>
-                    <div className="data-results-stat-label">Errors</div>
-                  </div>
+                {ecomStats ? (
+                  <>
+                    <div className="data-results-stat data-results-stat-success">
+                      <div className="data-results-stat-value">{ecomStats.customers.toLocaleString()}</div>
+                      <div className="data-results-stat-label">Customers</div>
+                    </div>
+                    <div className="data-results-stat data-results-stat-success">
+                      <div className="data-results-stat-value">{ecomStats.orders.toLocaleString()}</div>
+                      <div className="data-results-stat-label">Orders</div>
+                    </div>
+                    <div className="data-results-stat">
+                      <div className="data-results-stat-value">{csvRows.length.toLocaleString()}</div>
+                      <div className="data-results-stat-label">CSV Rows</div>
+                    </div>
+                    {ecomStats.skippedNoEmail > 0 && (
+                      <div className="data-results-stat" style={{ opacity: 0.7 }}>
+                        <div className="data-results-stat-value">{ecomStats.skippedNoEmail.toLocaleString()}</div>
+                        <div className="data-results-stat-label">Rows without email (imported unlinked)</div>
+                      </div>
+                    )}
+                    {progress.errors > 0 && (
+                      <div className="data-results-stat data-results-stat-error">
+                        <div className="data-results-stat-value">{progress.errors.toLocaleString()}</div>
+                        <div className="data-results-stat-label">Errors</div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="data-results-stat data-results-stat-success">
+                      <div className="data-results-stat-value">{(progress.total - progress.errors).toLocaleString()}</div>
+                      <div className="data-results-stat-label">Rows Imported</div>
+                    </div>
+                    {progress.errors > 0 && (
+                      <div className="data-results-stat data-results-stat-error">
+                        <div className="data-results-stat-value">{progress.errors.toLocaleString()}</div>
+                        <div className="data-results-stat-label">Errors</div>
+                      </div>
+                    )}
+                    <div className="data-results-stat">
+                      <div className="data-results-stat-value">{progress.total.toLocaleString()}</div>
+                      <div className="data-results-stat-label">Total Rows</div>
+                    </div>
+                  </>
                 )}
-                <div className="data-results-stat">
-                  <div className="data-results-stat-value">{progress.total.toLocaleString()}</div>
-                  <div className="data-results-stat-label">Total Rows</div>
-                </div>
               </div>
 
               {importErrors.length > 0 && (
@@ -951,18 +1573,22 @@ export default function ImportsTab() {
                   className="btn btn-primary"
                   onClick={() => {
                     resetWizard();
-                    const tabMap: Record<string, string> = {
-                      crm_contacts: "contacts",
-                      crm_companies: "companies",
-                      crm_deals: "deals",
-                      crm_products: "products",
-                    };
-                    window.location.href = targetTable === "crm_products"
-                      ? "/organization/products"
-                      : `/crm?tab=${tabMap[targetTable] || "contacts"}`;
+                    if (targetTable.startsWith("ecom_")) {
+                      window.location.href = "/explorer?entity=customers";
+                    } else {
+                      const tabMap: Record<string, string> = {
+                        crm_contacts: "contacts",
+                        crm_companies: "companies",
+                        crm_deals: "deals",
+                        crm_products: "products",
+                      };
+                      window.location.href = targetTable === "crm_products"
+                        ? "/organization/products"
+                        : `/crm?tab=${tabMap[targetTable] || "contacts"}`;
+                    }
                   }}
                 >
-                  View in CRM →
+                  {targetTable.startsWith("ecom_") ? "View in Explorer →" : "View in CRM →"}
                 </button>
               </div>
             </div>

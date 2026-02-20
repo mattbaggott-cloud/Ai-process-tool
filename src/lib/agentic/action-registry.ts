@@ -74,7 +74,7 @@ const TOOL_TO_ACTION: Record<string, string> = {
   create_product: "crm.product.create",
   add_deal_line_item: "crm.deal.line_item.add",
   add_company_asset: "crm.company.asset.add",
-  import_csv_data: "crm.data.import",
+  import_data: "data.import",
   create_report: "crm.report.create",
   update_report: "crm.report.update",
 

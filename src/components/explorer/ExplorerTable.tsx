@@ -21,6 +21,7 @@ const SOURCE_LABELS: Record<string, string> = {
   hubspot: "HubSpot",
   shopify: "Shopify",
   klaviyo: "Klaviyo",
+  import: "CSV Import",
   both: "Linked",
   manual: "Manual",
 };

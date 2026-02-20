@@ -155,75 +155,82 @@ export default function ExplorerView() {
     // Always load ALL sources so identity-resolved records merge correctly.
     // We filter by the selected source AFTER merging.
 
-    // ── Load CRM contacts ──
-    const { data: contacts } = await supabase
-      .from("crm_contacts")
-      .select("*, crm_companies(name)")
-      .order("created_at", { ascending: false });
-
-    if (contacts) {
-      for (const c of contacts as (CrmContact & { crm_companies?: { name: string } | null })[]) {
-        out.push({
-          id: c.id,
-          _entityType: "customers",
-          _source: "hubspot",
-          _sources: ["hubspot"],
-          _primarySource: "hubspot",
-          name: [c.first_name, c.last_name].filter(Boolean).join(" "),
-          email: c.email,
-          status: c.status,
-          company_name: c.crm_companies?.name ?? "",
-          title: c.title,
-          orders_count: null,
-          total_spent: null,
-          avg_order_value: null,
-          last_activity: c.updated_at,
-          last_order_at: null,
-          _crm_id: c.id,
-        });
+    // Helper: paginate Supabase queries (default REST limit is 1000 rows)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll(table: string, select: string, orderCol = "created_at"): Promise<any[]> {
+      const PAGE = 1000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const all: any[] = [];
+      let offset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from(table)
+          .select(select)
+          .order(orderCol, { ascending: false })
+          .range(offset, offset + PAGE - 1);
+        if (error) { console.error(`[Explorer] fetchAll ${table} error:`, error); break; }
+        if (data) all.push(...data);
+        hasMore = (data?.length ?? 0) === PAGE;
+        offset += PAGE;
       }
+      return all;
+    }
+
+    // ── Load CRM contacts ──
+    const contacts = await fetchAll("crm_contacts", "*, crm_companies(name)") as (CrmContact & { crm_companies?: { name: string } | null })[];
+
+    for (const c of contacts) {
+      out.push({
+        id: c.id,
+        _entityType: "customers",
+        _source: "hubspot",
+        _sources: ["hubspot"],
+        _primarySource: "hubspot",
+        name: [c.first_name, c.last_name].filter(Boolean).join(" "),
+        email: c.email,
+        status: c.status,
+        company_name: c.crm_companies?.name ?? "",
+        title: c.title,
+        orders_count: null,
+        total_spent: null,
+        avg_order_value: null,
+        last_activity: c.updated_at,
+        last_order_at: null,
+        _crm_id: c.id,
+      });
     }
 
     // ── Load ecom customers ──
-    const { data: ecomCustomers } = await supabase
-      .from("ecom_customers")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const ecomCustomers = await fetchAll("ecom_customers", "*") as EcomCustomer[];
 
-    if (ecomCustomers) {
-      for (const e of ecomCustomers as EcomCustomer[]) {
-        out.push({
-          id: e.id,
-          _entityType: "customers",
-          _source: "shopify",
-          _sources: ["shopify"],
-          _primarySource: "shopify",
-          name: [e.first_name, e.last_name].filter(Boolean).join(" ") || e.email || "Unknown",
-          email: e.email,
-          status: null,
-          orders_count: e.orders_count,
-          total_spent: e.total_spent,
-          avg_order_value: e.avg_order_value,
-          last_activity: e.last_order_at,
-          last_order_at: e.last_order_at,
-          company_name: null,
-          title: null,
-        });
-      }
+    for (const e of ecomCustomers) {
+      const isImport = e.external_source === "import";
+      const src = isImport ? "import" : "shopify";
+      out.push({
+        id: e.id,
+        _entityType: "customers",
+        _source: src,
+        _sources: [src],
+        _primarySource: src,
+        name: [e.first_name, e.last_name].filter(Boolean).join(" ") || e.email || "Unknown",
+        email: e.email,
+        status: null,
+        orders_count: e.orders_count,
+        total_spent: e.total_spent,
+        avg_order_value: e.avg_order_value,
+        last_activity: e.last_order_at,
+        last_order_at: e.last_order_at,
+        company_name: null,
+        title: null,
+      });
     }
 
     // ── Load Klaviyo profiles ──
-    const { data: profiles, error: klaviyoError } = await supabase
-      .from("klaviyo_profiles")
-      .select("id, org_id, email, phone_number, first_name, last_name, organization, title, city, region, country, synced_at, created_at")
-      .order("created_at", { ascending: false });
+    const profiles = await fetchAll("klaviyo_profiles", "id, org_id, email, phone_number, first_name, last_name, organization, title, city, region, country, synced_at, created_at") as Record<string, unknown>[];
 
-    if (klaviyoError) {
-      console.error("[Explorer] Klaviyo profiles query failed:", klaviyoError);
-    }
-
-    if (profiles) {
-      for (const p of profiles as Record<string, unknown>[]) {
+    {
+      for (const p of profiles) {
         const email = (p.email as string) || "";
         out.push({
           id: p.id as string,
@@ -254,6 +261,7 @@ export default function ExplorerView() {
         hubspot: "crm_contacts",
         shopify: "ecom_customers",
         klaviyo: "klaviyo_profiles",
+        import: "ecom_customers",
       };
 
       const entityKeyToIdx = new Map<string, number>();
@@ -404,16 +412,31 @@ export default function ExplorerView() {
 
   /* ── Orders ────────────────────────────────────────────── */
   async function loadOrders(): Promise<ExplorerRow[]> {
-    const { data } = await supabase
-      .from("ecom_orders")
-      .select("*")
-      .order("created_at", { ascending: false });
+    // Paginate to get ALL orders (Supabase default cap is 1000)
+    const PAGE = 1000;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allData: any[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("ecom_orders")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(offset, offset + PAGE - 1);
+      if (error) { console.error("[Explorer] loadOrders error:", error); break; }
+      if (data) allData.push(...data);
+      hasMore = (data?.length ?? 0) === PAGE;
+      offset += PAGE;
+    }
 
-    if (!data) return [];
-    return (data as EcomOrder[]).map((o) => ({
+    return (allData as EcomOrder[]).map((o) => {
+      const isImport = o.external_source === "import";
+      const src = isImport ? "import" : "shopify";
+      return {
       id: o.id,
       _entityType: "orders" as EntityType,
-      _source: "shopify",
+      _source: src,
       order_number: o.order_number ?? o.external_id,
       email: o.email,
       total_price: o.total_price,
@@ -421,7 +444,8 @@ export default function ExplorerView() {
       fulfillment_status: o.fulfillment_status ?? "unfulfilled",
       line_items_count: Array.isArray(o.line_items) ? o.line_items.length : 0,
       created_at: o.created_at,
-    }));
+    };
+    });
   }
 
   /* ── Products ──────────────────────────────────────────── */

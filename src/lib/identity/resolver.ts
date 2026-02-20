@@ -465,20 +465,33 @@ export async function computeResolution(
 
   for (const source of IDENTITY_SOURCES) {
     try {
-      const { data: rows, error } = await supabase
-        .from(source.table)
-        .select(source.selectColumns)
-        .eq("org_id", orgId)
-        .not("email", "is", null)
-        .neq("email", "");
+      // Paginate to get ALL records (Supabase default REST limit is 1000)
+      const PAGE = 1000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const records: any[] = [];
+      let offset = 0;
+      let hasMore = true;
+      let hadError = false;
+      while (hasMore) {
+        const { data: rows, error } = await supabase
+          .from(source.table)
+          .select(source.selectColumns)
+          .eq("org_id", orgId)
+          .not("email", "is", null)
+          .neq("email", "")
+          .range(offset, offset + PAGE - 1);
 
-      if (error) {
-        if (error.code === "42P01" || error.message?.includes("does not exist")) continue;
-        console.error(`Identity resolver: error reading ${source.table}:`, error.message);
-        continue;
+        if (error) {
+          if (error.code === "42P01" || error.message?.includes("does not exist")) { hadError = true; break; }
+          console.error(`Identity resolver: error reading ${source.table}:`, error.message);
+          hadError = true;
+          break;
+        }
+        if (rows) records.push(...rows);
+        hasMore = (rows?.length ?? 0) === PAGE;
+        offset += PAGE;
       }
-
-      const records = rows ?? [];
+      if (hadError) continue;
       sourceCounts[source.table] = records.length;
 
       for (const row of records) {
@@ -552,51 +565,72 @@ export async function computeResolution(
 
   // ── Pre-populate matchedPairs with existing graph edges ──
   // This ensures we don't re-propose matches that are already linked.
+  // Strategy: load ALL same_person edges for the org, build a node→entity lookup,
+  // and mark those entity pairs as already matched.
   const matchedPairs = new Set<string>();
   try {
-    // Build a lookup: entity_id → IdentityRecord (for pair key generation)
     const recordById = new Map<string, IdentityRecord>();
     for (const r of allRecords) {
       recordById.set(r.id, r);
     }
 
-    // Get all graph nodes for our records
-    const entityIds = allRecords.map((r) => r.id);
-    const { data: existingNodes } = await supabase
-      .from("graph_nodes")
-      .select("id, entity_type, entity_id")
-      .in("entity_type", ["crm_contacts", "ecom_customers", "klaviyo_profiles"])
-      .in("entity_id", entityIds);
-
-    if (existingNodes && existingNodes.length > 0) {
-      const nodeToEntityId = new Map<string, string>();
-      const nodeIds: string[] = [];
-      for (const gn of existingNodes) {
-        nodeToEntityId.set(gn.id, gn.entity_id);
-        nodeIds.push(gn.id);
-      }
-
-      // Get all active same_person edges
-      const { data: existingEdges } = await supabase
+    // Step 1: Load ALL same_person edges for this org (paginated)
+    const PAGE = 1000;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allEdges: any[] = [];
+    let edgeOffset = 0;
+    let moreEdges = true;
+    while (moreEdges) {
+      const { data: edgeBatch } = await supabase
         .from("graph_edges")
         .select("source_node_id, target_node_id")
+        .eq("org_id", orgId)
         .eq("relation_type", "same_person")
         .is("valid_until", null)
-        .in("source_node_id", nodeIds)
-        .in("target_node_id", nodeIds);
+        .range(edgeOffset, edgeOffset + PAGE - 1);
+      if (edgeBatch) allEdges.push(...edgeBatch);
+      moreEdges = (edgeBatch?.length ?? 0) === PAGE;
+      edgeOffset += PAGE;
+    }
 
-      if (existingEdges) {
-        for (const edge of existingEdges) {
-          const entityIdA = nodeToEntityId.get(edge.source_node_id);
-          const entityIdB = nodeToEntityId.get(edge.target_node_id);
-          if (!entityIdA || !entityIdB) continue;
-          const recA = recordById.get(entityIdA);
-          const recB = recordById.get(entityIdB);
-          if (!recA || !recB) continue;
-          matchedPairs.add(pairKey(recA, recB));
+    if (allEdges.length > 0) {
+      // Step 2: Collect all node IDs referenced by these edges
+      const nodeIdsNeeded = new Set<string>();
+      for (const edge of allEdges) {
+        nodeIdsNeeded.add(edge.source_node_id);
+        nodeIdsNeeded.add(edge.target_node_id);
+      }
+
+      // Step 3: Look up entity_id for those graph nodes (batched)
+      const nodeIdArr = [...nodeIdsNeeded];
+      const nodeToEntityId = new Map<string, string>();
+      const BATCH = 500;
+      for (let i = 0; i < nodeIdArr.length; i += BATCH) {
+        const batch = nodeIdArr.slice(i, i + BATCH);
+        const { data: nodes } = await supabase
+          .from("graph_nodes")
+          .select("id, entity_id")
+          .in("id", batch);
+        if (nodes) {
+          for (const n of nodes) {
+            nodeToEntityId.set(n.id, n.entity_id);
+          }
         }
       }
+
+      // Step 4: Convert edges to entity pair keys
+      for (const edge of allEdges) {
+        const entityIdA = nodeToEntityId.get(edge.source_node_id);
+        const entityIdB = nodeToEntityId.get(edge.target_node_id);
+        if (!entityIdA || !entityIdB) continue;
+        const recA = recordById.get(entityIdA);
+        const recB = recordById.get(entityIdB);
+        if (!recA || !recB) continue;
+        matchedPairs.add(pairKey(recA, recB));
+      }
     }
+
+    console.log(`[Identity resolver] Pre-populated ${matchedPairs.size} existing matched pairs from ${allEdges.length} same_person edges`);
   } catch (err) {
     console.warn("Identity resolver: failed to load existing edges (will re-propose all):", err);
     // Non-fatal — worst case we re-propose already-linked pairs
@@ -612,7 +646,9 @@ export async function computeResolution(
     matchByNameOnly(allRecords, matchedPairs),
   ];
 
-  for (const tierCandidates of tierResults) {
+  for (let t = 0; t < tierResults.length; t++) {
+    const tierCandidates = tierResults[t];
+    console.log(`[Identity resolver] Tier ${t + 1}: ${tierCandidates.length} new candidates`);
     allCandidates.push(...tierCandidates);
   }
 

@@ -8443,6 +8443,54 @@ a.sidebar-user-avatar:hover {
   white-space: nowrap;
 }
 
+/* ── Ecom Data Breakdown Panel ─────────────────────────── */
+.data-ecom-breakdown {
+  margin-top: 16px;
+  padding: 16px 20px;
+  background: var(--surface-bg, #f0f9ff);
+  border: 1px solid var(--border-color, #bae6fd);
+  border-radius: 10px;
+}
+.data-ecom-breakdown-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 12px;
+}
+.data-ecom-breakdown-flow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.data-ecom-breakdown-stat {
+  text-align: center;
+  min-width: 80px;
+}
+.data-ecom-breakdown-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary, #111827);
+  line-height: 1.2;
+}
+.data-ecom-breakdown-label {
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 2px;
+}
+.data-ecom-breakdown-arrow {
+  font-size: 20px;
+  color: var(--text-secondary, #9ca3af);
+  font-weight: 300;
+}
+.data-ecom-breakdown-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
 /* ── Field mapping ── */
 /* ── Mapping Header ────────────────────────────────────── */
 .data-map-header {
@@ -8566,6 +8614,28 @@ a.sidebar-user-avatar:hover {
   color: #d1d5db;
   font-size: 14px;
   flex-shrink: 0;
+}
+
+/* ── Dismiss / skip column button ──────────────────────── */
+.data-map-card-dismiss {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.data-map-card-dismiss:hover {
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
 }
 
 /* ── Target Tag (mapped field pill) ────────────────────── */

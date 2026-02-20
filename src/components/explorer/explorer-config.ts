@@ -6,7 +6,7 @@
 /* ── Types ──────────────────────────────────────────────── */
 
 export type EntityType = "customers" | "companies" | "orders" | "products" | "deals";
-export type SourceFilter = "all" | "hubspot" | "shopify" | "klaviyo";
+export type SourceFilter = "all" | "hubspot" | "shopify" | "klaviyo" | "import";
 
 export type CellRender = "text" | "currency" | "date" | "status" | "tags" | "source_badge" | "number" | "boolean";
 
@@ -40,13 +40,14 @@ export const SOURCES: { key: SourceFilter; label: string; color: string }[] = [
   { key: "hubspot", label: "HubSpot",     color: "#ff7a59" },
   { key: "shopify", label: "Shopify",     color: "#96bf48" },
   { key: "klaviyo", label: "Klaviyo",     color: "#2dd4bf" },
+  { key: "import",  label: "CSV Import",  color: "#8b5cf6" },
 ];
 
 /* Which sources are available for each entity type */
 export const ENTITY_SOURCE_MAP: Record<EntityType, SourceFilter[]> = {
-  customers: ["all", "hubspot", "shopify", "klaviyo"],
+  customers: ["all", "hubspot", "shopify", "klaviyo", "import"],
   companies: ["all", "hubspot"],
-  orders:    ["all", "shopify"],
+  orders:    ["all", "shopify", "import"],
   products:  ["all", "shopify"],
   deals:     ["all", "hubspot"],
 };
@@ -165,6 +166,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   hubspot: "#ff7a59",
   shopify: "#96bf48",
   klaviyo: "#2dd4bf",
+  import:  "#8b5cf6",
   both:    "#7c3aed",
   manual:  "#6b7280",
 };

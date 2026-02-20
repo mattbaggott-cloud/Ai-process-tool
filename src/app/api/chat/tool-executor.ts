@@ -1,7 +1,8 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
 import { hasMinRole } from "@/lib/org";
-import type { OrgRole, SegmentRule, BrandAssetType, EmailType } from "@/lib/types/database";
+import type { OrgRole, SegmentRule, BrandAssetType, EmailType, KlaviyoConfig } from "@/lib/types/database";
+import { pushSegmentToList } from "@/lib/klaviyo/sync-service";
 import { emitToolEvent } from "@/lib/agentic/event-emitter";
 import { syncRecordToGraphInBackground } from "@/lib/agentic/graph-sync";
 import {
@@ -113,8 +114,8 @@ export async function executeTool(
         return await handleAddDealLineItem(input, supabase, userId, orgId);
       case "add_company_asset":
         return await handleAddCompanyAsset(input, supabase, userId, orgId);
-      case "import_csv_data":
-        return await handleImportCsvData(input, supabase, userId, orgId);
+      case "import_data":
+        return await handleImportData(input, supabase, userId, orgId);
       case "create_report":
         return await handleCreateReport(input, supabase, userId, orgId);
       case "update_report":
@@ -165,6 +166,10 @@ export async function executeTool(
         return await handleListGeneratedEmails(input, supabase, orgId);
       case "get_generated_email":
         return await handleGetGeneratedEmail(input, supabase, orgId);
+
+      // Klaviyo Push
+      case "push_segment_to_klaviyo":
+        return await handlePushSegmentToKlaviyo(input, supabase, userId, orgId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -2388,31 +2393,31 @@ async function handleUpdateReport(
   };
 }
 
-/* ── import_csv_data ─────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+   UNIFIED DATA IMPORT — ONE TOOL FOR ALL IMPORTS
+   Routes to CRM (simple insert) or Ecom (smart dedup/link)
+   ═══════════════════════════════════════════════════════════ */
 
-async function handleImportCsvData(
+async function handleImportData(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
   userId: string,
   orgId: string
 ): Promise<ToolResult> {
   const csvContent = input.csv_content as string;
-  const targetTable = input.target_table as string;
-  const fieldMappings = input.field_mappings as Array<{ csv_column: string; target_field: string }>;
+  const targetType = input.target_type as string;
+  const fieldMappings = (input.field_mappings ?? []) as Array<{ csv_column: string; target_field: string }>;
 
-  if (!csvContent || !targetTable || !fieldMappings?.length) {
-    return { success: false, message: "csv_content, target_table, and field_mappings are required." };
+  if (!csvContent) return { success: false, message: "csv_content is required." };
+  if (!targetType) return { success: false, message: "target_type is required." };
+  if (!fieldMappings.length) return { success: false, message: "field_mappings is required." };
+
+  const validTypes = ["crm_contacts", "crm_companies", "crm_deals", "crm_products", "ecom_customers", "ecom_orders", "ecom_both"];
+  if (!validTypes.includes(targetType)) {
+    return { success: false, message: `Invalid target_type: ${targetType}. Valid: ${validTypes.join(", ")}` };
   }
 
-  const validTables = ["crm_contacts", "crm_companies", "crm_deals", "crm_products"];
-  if (!validTables.includes(targetTable)) {
-    return { success: false, message: `Invalid target table: ${targetTable}` };
-  }
-
-  // Parse CSV
-  const lines = csvContent.split("\n").filter((l) => l.trim());
-  if (lines.length < 2) return { success: false, message: "CSV must have a header row and at least one data row." };
-
+  // ── Parse CSV (handles comma + tab delimiters, quoted fields) ──
   function parseLine(line: string): string[] {
     const result: string[] = [];
     let current = "";
@@ -2423,12 +2428,15 @@ async function handleImportCsvData(
         if (inQuotes && line[i + 1] === '"') { current += '"'; i++; } else { inQuotes = !inQuotes; }
         continue;
       }
-      if (ch === "," && !inQuotes) { result.push(current.trim()); current = ""; continue; }
+      if ((ch === "," || ch === "\t") && !inQuotes) { result.push(current.trim()); current = ""; continue; }
       current += ch;
     }
     result.push(current.trim());
     return result;
   }
+
+  const lines = csvContent.split("\n").filter((l) => l.trim());
+  if (lines.length < 2) return { success: false, message: "Data must have a header row and at least one data row." };
 
   const headers = parseLine(lines[0]);
   const rows = lines.slice(1).map((line) => {
@@ -2438,54 +2446,459 @@ async function handleImportCsvData(
     return obj;
   });
 
-  const numericFields = ["value", "probability", "unit_price", "annual_revenue", "employees"];
+  // ═══════════════════════════════════════════════════════
+  // CRM PATH — simple row-by-row insert
+  // ═══════════════════════════════════════════════════════
+  if (targetType.startsWith("crm_")) {
+    const crmNumericFields = ["value", "probability", "unit_price", "annual_revenue", "employees"];
+    let imported = 0;
+    let errorCount = 0;
+    const errorDetails: string[] = [];
+    const BATCH = 50;
 
-  let imported = 0;
-  let errorCount = 0;
-  const errorDetails: string[] = [];
-  const BATCH = 50;
-
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    const insertRows = batch.map((row) => {
-      const mapped: Record<string, unknown> = { user_id: userId, org_id: orgId };
-      for (const m of fieldMappings) {
-        const val = row[m.csv_column] ?? "";
-        if (numericFields.includes(m.target_field)) {
-          const num = parseFloat(val);
-          mapped[m.target_field] = isNaN(num) ? 0 : num;
-        } else {
-          mapped[m.target_field] = val;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH);
+      const insertRows = batch.map((row) => {
+        const mapped: Record<string, unknown> = { user_id: userId, org_id: orgId };
+        for (const m of fieldMappings) {
+          const val = row[m.csv_column] ?? "";
+          if (crmNumericFields.includes(m.target_field)) {
+            const num = parseFloat(val);
+            mapped[m.target_field] = isNaN(num) ? 0 : num;
+          } else {
+            mapped[m.target_field] = val;
+          }
         }
+        if (targetType === "crm_contacts" && !mapped.source) {
+          mapped.source = "import";
+        }
+        return mapped;
+      });
+
+      const { error } = await supabase.from(targetType).insert(insertRows);
+      if (error) {
+        errorCount += batch.length;
+        errorDetails.push(`Rows ${i + 1}-${i + batch.length}: ${error.message}`);
+      } else {
+        imported += batch.length;
       }
-      if (targetTable === "crm_contacts" && !mapped.source) {
-        mapped.source = "import";
-      }
-      return mapped;
+    }
+
+    await supabase.from("data_sync_log").insert({
+      user_id: userId,
+      org_id: orgId,
+      event_type: errorCount === 0 ? "success" : "warning",
+      message: `AI imported ${imported} rows to ${targetType} (${errorCount} errors)`,
+      details: { imported, errors: errorCount, errorDetails },
     });
 
-    const { error } = await supabase.from(targetTable).insert(insertRows);
-    if (error) {
-      errorCount += batch.length;
-      errorDetails.push(`Rows ${i + 1}-${i + batch.length}: ${error.message}`);
-    } else {
-      imported += batch.length;
+    return {
+      success: imported > 0,
+      message: `**Import Complete**\nImported ${imported} of ${rows.length} rows into ${targetType}.${errorCount > 0 ? ` ${errorCount} rows failed: ${errorDetails.slice(0, 3).join("; ")}` : ""}`,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ECOM PATH — smart dedup, order linking, aggregates
+  // ═══════════════════════════════════════════════════════
+  const isEcomBoth = targetType === "ecom_both";
+  const importCustomers = targetType === "ecom_customers" || isEcomBoth;
+  const importOrders = targetType === "ecom_orders" || isEcomBoth;
+
+  // Separate field mappings by prefix/type
+  const customerMappings: Array<{ csv_column: string; target_field: string }> = [];
+  const orderMappings: Array<{ csv_column: string; target_field: string }> = [];
+  const lineitemMappings: Array<{ csv_column: string; target_field: string }> = []; // lineitem_ prefix → collapsed into line_items JSONB array
+  const addrMappings: Array<{ csv_column: string; target_field: string }> = []; // addr_ prefix → customer default_address / billing
+  const shipMappings: Array<{ csv_column: string; target_field: string }> = []; // ship_ prefix → order shipping_address
+
+  const ecomCustomerFields = ["email", "full_name", "first_name", "last_name", "phone", "tags", "orders_count", "total_spent", "accepts_marketing"];
+  const ecomOrderFields = [
+    "order_number", "total_price", "subtotal_price", "total_tax", "total_discounts",
+    "total_shipping", "currency", "financial_status", "fulfillment_status",
+    "line_items_text", "shipping_address_text", "tags", "note",
+    "source_name", "processed_at", "discount_code", "shipping_method",
+  ];
+  const ecomNumericFields = ["total_price", "subtotal_price", "total_tax", "total_discounts", "total_shipping", "orders_count", "total_spent"];
+
+  for (const m of fieldMappings) {
+    if (m.target_field.startsWith("addr_")) {
+      addrMappings.push({ csv_column: m.csv_column, target_field: m.target_field.replace("addr_", "") });
+    } else if (m.target_field.startsWith("ship_")) {
+      shipMappings.push({ csv_column: m.csv_column, target_field: m.target_field.replace("ship_", "") });
+    } else if (m.target_field.startsWith("lineitem_")) {
+      lineitemMappings.push({ csv_column: m.csv_column, target_field: m.target_field.replace("lineitem_", "") });
+    } else if (ecomCustomerFields.includes(m.target_field)) {
+      customerMappings.push(m);
+    } else if (ecomOrderFields.includes(m.target_field)) {
+      orderMappings.push(m);
+    } else if (m.target_field === "email") {
+      // email goes to both
+      customerMappings.push(m);
     }
   }
 
-  // Log to sync log
+  // Ensure email is mapped
+  const emailMapping = customerMappings.find((m) => m.target_field === "email");
+  if (!emailMapping) {
+    return { success: false, message: "For ecom imports, you must map an 'email' field for customer deduplication." };
+  }
+
+  // ── Helpers ──
+  function extractMapped(row: Record<string, string>, mappings: Array<{ csv_column: string; target_field: string }>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const m of mappings) {
+      const val = row[m.csv_column] ?? "";
+      if (!val) continue;
+      if (ecomNumericFields.includes(m.target_field)) {
+        const num = parseFloat(val.replace(/[^0-9.-]/g, ""));
+        out[m.target_field] = isNaN(num) ? 0 : num;
+      } else if (m.target_field === "tags") {
+        out[m.target_field] = val.split(",").map((t) => t.trim()).filter(Boolean);
+      } else if (m.target_field === "processed_at") {
+        const d = new Date(val);
+        out[m.target_field] = isNaN(d.getTime()) ? null : d.toISOString();
+      } else {
+        out[m.target_field] = val;
+      }
+    }
+    return out;
+  }
+
+  function extractAddress(row: Record<string, string>, mappings: Array<{ csv_column: string; target_field: string }>): Record<string, string> | null {
+    if (!mappings.length) return null;
+    const addr: Record<string, string> = {};
+    let hasValue = false;
+    for (const m of mappings) {
+      const val = row[m.csv_column] ?? "";
+      if (val) { addr[m.target_field] = val; hasValue = true; }
+    }
+    return hasValue ? addr : null;
+  }
+
+  let customersCreated = 0;
+  let customersExisting = 0;
+  let ordersCreated = 0;
+  let errorCount = 0;
+  const errorDetails: string[] = [];
+
+  // ── Group rows by email for dedup ──
+  const emailToRows = new Map<string, Record<string, string>[]>();
+  // Also track unique orders per email (for Shopify-style where multiple rows = one order)
+  const orderNumMapping = orderMappings.find((m) => m.target_field === "order_number");
+  const emailToOrderNumbers = new Map<string, Set<string>>();
+
+  for (const row of rows) {
+    const email = (row[emailMapping.csv_column] ?? "").trim().toLowerCase();
+    if (!email) continue;
+    const existing = emailToRows.get(email) ?? [];
+    existing.push(row);
+    emailToRows.set(email, existing);
+
+    // Track unique order numbers per email
+    if (orderNumMapping) {
+      const orderNum = (row[orderNumMapping.csv_column] ?? "").trim();
+      if (orderNum) {
+        const orders = emailToOrderNumbers.get(email) ?? new Set();
+        orders.add(orderNum);
+        emailToOrderNumbers.set(email, orders);
+      }
+    }
+  }
+
+  const emailToCustomerId = new Map<string, string>();
+
+  // Check which customers already exist
+  const allEmails = [...emailToRows.keys()];
+  if (allEmails.length > 0) {
+    const LOOKUP_BATCH = 200;
+    for (let i = 0; i < allEmails.length; i += LOOKUP_BATCH) {
+      const batch = allEmails.slice(i, i + LOOKUP_BATCH);
+      const { data: existing } = await supabase
+        .from("ecom_customers")
+        .select("id, email")
+        .eq("org_id", orgId)
+        .in("email", batch);
+      if (existing) {
+        for (const c of existing) {
+          emailToCustomerId.set((c.email as string).toLowerCase(), c.id as string);
+          customersExisting++;
+        }
+      }
+    }
+  }
+
+  // Insert new customers
+  const newCustomerEmails = allEmails.filter((e) => !emailToCustomerId.has(e));
+  if (newCustomerEmails.length > 0 && importCustomers) {
+    const BATCH = 50;
+    for (let i = 0; i < newCustomerEmails.length; i += BATCH) {
+      const batchEmails = newCustomerEmails.slice(i, i + BATCH);
+      const insertRows = batchEmails.map((email) => {
+        const firstRow = emailToRows.get(email)![0];
+        const mapped = extractMapped(firstRow, customerMappings);
+        const address = extractAddress(firstRow, addrMappings);
+        const allRowsForEmail = emailToRows.get(email)!;
+
+        // Count unique orders (not line item rows) for this customer
+        const uniqueOrders = emailToOrderNumbers.get(email);
+        const orderCount = uniqueOrders ? uniqueOrders.size : allRowsForEmail.length;
+
+        // Sum total_spent from first row of each unique order only (not from line item rows)
+        let totalSpent = 0;
+        if (isEcomBoth && uniqueOrders && orderNumMapping) {
+          const seenOrders = new Set<string>();
+          for (const r of allRowsForEmail) {
+            const orderNum = (r[orderNumMapping.csv_column] ?? "").trim();
+            if (orderNum && !seenOrders.has(orderNum)) {
+              seenOrders.add(orderNum);
+              const orderFields = extractMapped(r, orderMappings);
+              totalSpent += (orderFields.total_price as number) || 0;
+            }
+          }
+        } else if (isEcomBoth) {
+          totalSpent = allRowsForEmail.reduce((sum, r) => {
+            const orderFields = extractMapped(r, orderMappings);
+            return sum + ((orderFields.total_price as number) || 0);
+          }, 0);
+        } else {
+          totalSpent = (mapped.total_spent as number) || 0;
+        }
+
+        // Split full_name into first/last if they aren't already mapped
+        let firstName = (mapped.first_name as string) || null;
+        let lastName = (mapped.last_name as string) || null;
+        const fullName = (mapped.full_name as string) || null;
+        if (fullName && (!firstName || !lastName)) {
+          const parts = fullName.trim().split(/\s+/);
+          if (!firstName) firstName = parts[0] || null;
+          if (!lastName) lastName = parts.slice(1).join(" ") || null;
+        }
+
+        return {
+          org_id: orgId,
+          external_id: `import-${email}`,
+          external_source: "import",
+          email,
+          first_name: firstName,
+          last_name: lastName,
+          phone: (mapped.phone as string) || null,
+          tags: (mapped.tags as string[]) || [],
+          default_address: address,
+          accepts_marketing: (mapped.accepts_marketing as string) === "yes" || (mapped.accepts_marketing as string) === "true" || false,
+          orders_count: orderCount,
+          total_spent: Math.round(totalSpent * 100) / 100,
+          metadata: { imported_by: userId, imported_at: new Date().toISOString() },
+        };
+      });
+
+      const { data: inserted, error } = await supabase
+        .from("ecom_customers")
+        .insert(insertRows)
+        .select("id, email");
+
+      if (error) {
+        errorCount += batchEmails.length;
+        errorDetails.push(`Customers batch ${Math.floor(i / BATCH) + 1}: ${error.message}`);
+      } else if (inserted) {
+        for (const c of inserted) {
+          emailToCustomerId.set((c.email as string).toLowerCase(), c.id as string);
+          customersCreated++;
+        }
+      }
+    }
+  }
+
+  // ── Insert orders (with line item grouping for Shopify-style exports) ──
+  if (importOrders && (orderMappings.length > 0 || lineitemMappings.length > 0)) {
+    const BATCH = 50;
+
+    // Detect order_number mapping for grouping
+    const orderNumMapping = orderMappings.find((m) => m.target_field === "order_number");
+    const hasLineitemFields = lineitemMappings.length > 0;
+
+    // Group rows by order_number if present (Shopify-style: multiple rows per order = line items)
+    // Otherwise treat each row as a separate order
+    const orderGroups = new Map<string, Record<string, string>[]>();
+
+    for (const row of rows) {
+      const email = (row[emailMapping.csv_column] ?? "").trim().toLowerCase();
+      // Don't skip rows without email — import as unlinked orders
+
+      const orderNum = orderNumMapping ? (row[orderNumMapping.csv_column] ?? "").trim() : "";
+      const groupKey = orderNum || `row-${orderGroups.size}`;
+
+      const existing = orderGroups.get(groupKey) ?? [];
+      existing.push(row);
+      orderGroups.set(groupKey, existing);
+    }
+
+    // Build one order per group
+    const orderRows: Record<string, unknown>[] = [];
+    let orderIdx = 0;
+
+    for (const [groupKey, groupRows] of orderGroups) {
+      // First row has the full order details (Shopify pattern)
+      const primaryRow = groupRows[0];
+      const email = (primaryRow[emailMapping.csv_column] ?? "").trim().toLowerCase();
+      const customerId = email ? emailToCustomerId.get(email) : undefined;
+      const mapped = extractMapped(primaryRow, orderMappings);
+      const shipAddress = extractAddress(primaryRow, shipMappings);
+
+      // Build line_items array from all rows in this group
+      const lineItems: unknown[] = [];
+      if (hasLineitemFields) {
+        for (const row of groupRows) {
+          const item: Record<string, unknown> = {};
+          for (const m of lineitemMappings) {
+            const val = row[m.csv_column] ?? "";
+            if (!val) continue;
+            if (m.target_field === "quantity" || m.target_field === "price") {
+              const num = parseFloat(val.replace(/[^0-9.-]/g, ""));
+              item[m.target_field] = isNaN(num) ? 0 : num;
+            } else {
+              item[m.target_field] = val;
+            }
+          }
+          // Only add if there's at least a name or sku
+          if (item.name || item.sku || item.title) {
+            lineItems.push(item);
+          }
+        }
+      } else if (mapped.line_items_text) {
+        lineItems.push({ title: mapped.line_items_text as string, quantity: 1, price: (mapped.total_price as number) || 0 });
+      }
+
+      let shippingAddress = shipAddress;
+      if (mapped.shipping_address_text && !shippingAddress) {
+        shippingAddress = { address1: mapped.shipping_address_text as string };
+      }
+
+      const orderNumber = (mapped.order_number as string) || `IMP-${Date.now()}-${orderIdx}`;
+      orderIdx++;
+
+      orderRows.push({
+        org_id: orgId,
+        external_id: `import-${orderNumber}`,
+        external_source: "import",
+        customer_id: customerId || null,
+        customer_external_id: email,
+        order_number: orderNumber,
+        email,
+        financial_status: (mapped.financial_status as string) || "paid",
+        fulfillment_status: (mapped.fulfillment_status as string) || "fulfilled",
+        total_price: (mapped.total_price as number) || 0,
+        subtotal_price: (mapped.subtotal_price as number) || (mapped.total_price as number) || 0,
+        total_tax: (mapped.total_tax as number) || 0,
+        total_discounts: (mapped.total_discounts as number) || 0,
+        total_shipping: (mapped.total_shipping as number) || 0,
+        currency: (mapped.currency as string) || "USD",
+        line_items: lineItems,
+        shipping_address: shippingAddress,
+        tags: (mapped.tags as string[]) || [],
+        note: (mapped.note as string) || null,
+        source_name: (mapped.source_name as string) || "import",
+        processed_at: (mapped.processed_at as string) || new Date().toISOString(),
+        metadata: { imported_by: userId, imported_at: new Date().toISOString() },
+      });
+    }
+
+    const insertedOrderIds: string[] = [];
+    for (let i = 0; i < orderRows.length; i += BATCH) {
+      const batch = orderRows.slice(i, i + BATCH);
+      const { data: insertedOrders, error } = await supabase.from("ecom_orders").insert(batch).select("id, order_number, total_price, financial_status, customer_id");
+      if (error) {
+        errorCount += batch.length;
+        errorDetails.push(`Orders batch ${Math.floor(i / BATCH) + 1}: ${error.message}`);
+      } else {
+        ordersCreated += batch.length;
+        if (insertedOrders) {
+          for (const o of insertedOrders) insertedOrderIds.push(o.id as string);
+          // Sync orders to graph (fire-and-forget, cap at 500 to avoid overwhelming)
+          for (const o of insertedOrders.slice(0, 500)) {
+            syncRecordToGraphInBackground(supabase, orgId, "ecom_orders", o.id as string, o as Record<string, unknown>, userId);
+          }
+        }
+      }
+    }
+
+    // Update customer aggregates
+    if (ordersCreated > 0) {
+      for (const [email, custId] of emailToCustomerId) {
+        const custRows = emailToRows.get(email);
+        if (!custRows) continue;
+
+        const { data: orderAgg } = await supabase
+          .from("ecom_orders")
+          .select("total_price, processed_at")
+          .eq("org_id", orgId)
+          .eq("customer_id", custId)
+          .order("processed_at", { ascending: true });
+
+        if (orderAgg && orderAgg.length > 0) {
+          const totalSpent = orderAgg.reduce((s, o) => s + ((o.total_price as number) || 0), 0);
+          const avgOrder = totalSpent / orderAgg.length;
+          const firstOrder = orderAgg[0].processed_at as string;
+          const lastOrder = orderAgg[orderAgg.length - 1].processed_at as string;
+
+          await supabase
+            .from("ecom_customers")
+            .update({
+              orders_count: orderAgg.length,
+              total_spent: Math.round(totalSpent * 100) / 100,
+              avg_order_value: Math.round(avgOrder * 100) / 100,
+              first_order_at: firstOrder,
+              last_order_at: lastOrder,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", custId);
+        }
+      }
+    }
+  }
+
+  // ── Sync new customers to graph ──
+  if (customersCreated > 0) {
+    const newEmails = newCustomerEmails.slice(0, 500);
+    for (const email of newEmails) {
+      const custId = emailToCustomerId.get(email);
+      if (custId) {
+        const firstRow = emailToRows.get(email)?.[0];
+        const custFields = firstRow ? extractMapped(firstRow, customerMappings) : {};
+        const record: Record<string, unknown> = {
+          id: custId,
+          email,
+          first_name: custFields.first_name || null,
+          last_name: custFields.last_name || null,
+          total_spent: custFields.total_spent || 0,
+          orders_count: custFields.orders_count || 0,
+        };
+        syncRecordToGraphInBackground(supabase, orgId, "ecom_customers", custId, record, userId);
+      }
+    }
+  }
+
+  // ── Log result ──
   await supabase.from("data_sync_log").insert({
     user_id: userId,
     org_id: orgId,
     event_type: errorCount === 0 ? "success" : "warning",
-    message: `AI imported ${imported} rows to ${targetTable} (${errorCount} errors)`,
-    details: { imported, errors: errorCount, errorDetails },
+    message: `AI imported ecom data: ${customersCreated} new customers (${customersExisting} existing), ${ordersCreated} orders (${errorCount} errors)`,
+    details: { customersCreated, customersExisting, ordersCreated, errors: errorCount, errorDetails },
   });
 
-  return {
-    success: imported > 0,
-    message: `Imported ${imported} of ${rows.length} rows into ${targetTable}.${errorCount > 0 ? ` ${errorCount} rows failed: ${errorDetails.join("; ")}` : ""}`,
-  };
+  // Build column list from mappings for AI context
+  const importedColumns = fieldMappings.map((m) => m.target_field).join(", ");
+
+  let message = `**Import Complete** (${rows.length} rows processed)\n`;
+  message += `- **Customers:** ${customersCreated} new, ${customersExisting} already existed\n`;
+  if (ordersCreated > 0) message += `- **Orders:** ${ordersCreated} imported (grouped from ${rows.length} line item rows)\n`;
+  if (errorCount > 0) message += `- **Errors:** ${errorCount} — ${errorDetails.slice(0, 3).join("; ")}\n`;
+  message += `- **Columns imported:** ${importedColumns}\n`;
+  message += `- **All data synced to graph** as nodes and edges for AI queries\n`;
+  message += `\nData is available in the Explorer. Now show the user a summary table of what was imported using query_ecommerce. You can also compute behavioral profiles and create segments from this data.`;
+
+  return { success: customersCreated > 0 || ordersCreated > 0, message };
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -3974,5 +4387,89 @@ async function handleGetGeneratedEmail(
     return { success: true, message };
   } catch (err) {
     return { success: false, message: `Failed to get email: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   KLAVIYO PUSH
+   ═══════════════════════════════════════════════════════════ */
+
+async function handlePushSegmentToKlaviyo(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const segmentIdOrName = input.segment_id_or_name as string;
+    const listNameOverride = input.list_name as string | undefined;
+
+    if (!segmentIdOrName) {
+      return { success: false, message: "segment_id_or_name is required." };
+    }
+
+    // 1. Resolve segment by ID or name
+    let segmentId = segmentIdOrName;
+    let segmentName = "";
+
+    // Try UUID first
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(segmentIdOrName)) {
+      const { data: seg } = await supabase
+        .from("segments")
+        .select("id, name")
+        .eq("id", segmentIdOrName)
+        .eq("org_id", orgId)
+        .single();
+      if (!seg) return { success: false, message: `Segment not found with ID: ${segmentIdOrName}` };
+      segmentId = seg.id as string;
+      segmentName = seg.name as string;
+    } else {
+      // Look up by name (case-insensitive)
+      const { data: seg } = await supabase
+        .from("segments")
+        .select("id, name")
+        .eq("org_id", orgId)
+        .ilike("name", segmentIdOrName)
+        .limit(1)
+        .single();
+      if (!seg) return { success: false, message: `Segment not found with name: "${segmentIdOrName}"` };
+      segmentId = seg.id as string;
+      segmentName = seg.name as string;
+    }
+
+    // 2. Look up Klaviyo connector
+    const { data: connector } = await supabase
+      .from("data_connectors")
+      .select("config")
+      .eq("org_id", orgId)
+      .eq("connector_type", "klaviyo")
+      .eq("status", "connected")
+      .limit(1)
+      .single();
+
+    if (!connector) {
+      return { success: false, message: "Klaviyo is not connected. Please connect Klaviyo first in Data → Connectors." };
+    }
+
+    const config = connector.config as unknown as KlaviyoConfig;
+
+    // 3. Push segment to Klaviyo list
+    const listName = listNameOverride || segmentName;
+    const result = await pushSegmentToList(config, supabase, orgId, segmentId, listName);
+
+    return {
+      success: true,
+      message: `**Segment Pushed to Klaviyo** ✅\n\n` +
+        `- **Segment:** ${segmentName}\n` +
+        `- **Klaviyo List:** "${listName}" (ID: ${result.listId})\n` +
+        `- **Profiles Added:** ${result.profilesAdded}\n\n` +
+        `The segment members are now available in Klaviyo for campaigns and flows.`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to push segment to Klaviyo: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
   }
 }

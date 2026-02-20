@@ -1010,22 +1010,22 @@ Always include a start and end node. Map document sections/steps to process node
       },
     },
 
-    /* ── Data Import tools ── */
+    /* ── Data Import tool ── */
     {
-      name: "import_csv_data",
+      name: "import_data",
       description:
-        "Import CSV data into a CRM table. Use when the user provides CSV content and wants to import it into contacts, companies, deals, or products.",
+        "Import CSV/TSV data into the workspace. ONE tool for all imports — CRM contacts, companies, deals, e-commerce customers, orders, or both. Analyze the data first and pick the right target_type. For e-commerce data: deduplicates customers by email, auto-links orders to customers, calculates aggregates. Handles Shopify-style exports where each row is a line item (multiple rows per order) — automatically groups line items by order_number into a single order with a line_items array. For CRM data: simple row-by-row insert.",
       input_schema: {
         type: "object" as const,
         properties: {
           csv_content: {
             type: "string",
-            description: "The full CSV text content (header row + data rows)",
+            description: "The full CSV/TSV text content (header row + data rows). If raw text, parse it into CSV format first.",
           },
-          target_table: {
+          target_type: {
             type: "string",
-            enum: ["crm_contacts", "crm_companies", "crm_deals", "crm_products"],
-            description: "Which CRM table to import into",
+            enum: ["crm_contacts", "crm_companies", "crm_deals", "crm_products", "ecom_customers", "ecom_orders", "ecom_both"],
+            description: "What to import into. Use 'ecom_both' when rows contain both customer AND order info (most common for order exports). Use 'ecom_customers' or 'ecom_orders' for standalone imports. Use crm_* for CRM data.",
           },
           field_mappings: {
             type: "array",
@@ -1033,14 +1033,14 @@ Always include a start and end node. Map document sections/steps to process node
               type: "object",
               properties: {
                 csv_column: { type: "string", description: "CSV column header name" },
-                target_field: { type: "string", description: "Target table field name" },
+                target_field: { type: "string", description: "Target field name. For CRM: use the table column name (e.g. first_name, last_name, email, phone, title, status, source, company_name, tags, domain, industry, value, stage, probability). For ecom customers: email, first_name, last_name, phone, tags, accepts_marketing. For ecom orders: order_number, total_price, subtotal_price, total_tax, total_discounts, total_shipping, currency, financial_status, fulfillment_status, tags, note, source_name, processed_at, discount_code, shipping_method. For line items (Shopify-style where each row is one line item): lineitem_name, lineitem_quantity, lineitem_price, lineitem_sku. Prefix with addr_ for customer/billing address (addr_address1, addr_address2, addr_city, addr_province, addr_zip, addr_country, addr_phone, addr_company). Prefix with ship_ for order shipping address (ship_address1, ship_address2, ship_city, ship_province, ship_zip, ship_country, ship_phone, ship_company)." },
               },
               required: ["csv_column", "target_field"],
             },
-            description: "Mapping from CSV columns to target table fields",
+            description: "Mapping from CSV columns to target fields. For ecom imports, at minimum map an 'email' field for customer deduplication. For Shopify exports, map lineitem_name/lineitem_quantity/lineitem_price — rows sharing the same order_number are automatically grouped.",
           },
         },
-        required: ["csv_content", "target_table", "field_mappings"],
+        required: ["csv_content", "target_type", "field_mappings"],
       },
     },
 
@@ -1670,6 +1670,27 @@ AND rules: { "type": "and", "children": [ ...rules ] }`,
           },
         },
         required: ["email_id"],
+      },
+    },
+
+    /* ── Klaviyo Push ─────────────────────────────────────── */
+    {
+      name: "push_segment_to_klaviyo",
+      description:
+        "Push a segment's members to a Klaviyo list. Creates or finds a list in Klaviyo, looks up segment member emails, and subscribes them in batches. Requires Klaviyo to be connected. Use when the user wants to send a segment to Klaviyo for email campaigns or flows.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          segment_id_or_name: {
+            type: "string",
+            description: "The segment ID (UUID) or name to push. If a name is provided, it will be looked up.",
+          },
+          list_name: {
+            type: "string",
+            description: "Optional: name for the Klaviyo list. Defaults to the segment name if not provided.",
+          },
+        },
+        required: ["segment_id_or_name"],
       },
     },
   ];
