@@ -1044,111 +1044,11 @@ Always include a start and end node. Map document sections/steps to process node
       },
     },
 
-    /* ── CRM Reports ─────────────────────────────────────── */
-    {
-      name: "create_report",
-      description:
-        "Create a saved CRM report with configurable columns and filters. Use when the user asks to build, create, or generate a report, or wants to see a filtered list of CRM data. The report is saved and viewable in CRM → Reports tab. Available column keys per entity type: contacts: first_name, last_name, email, phone, title, status, source, company_name, tags, created_at, updated_at. companies: name, domain, industry, size, website, phone, address, annual_revenue, employees, sector, account_owner, contact_count, deal_count, created_at. deals: title, value, stage, probability, expected_close_date, contact_name, company_name, close_reason, lost_to, closed_at, created_at. activities: type, subject, description, contact_name, company_name, scheduled_at, completed_at, created_at. Custom fields use 'cf:field_key' prefix. Filter operators: text fields support 'contains', 'equals', 'not_equals', 'starts_with'. Number/currency fields support 'equals', 'gt', 'gte', 'lt', 'lte'. Date fields support 'before', 'after', 'equals'. Select fields (status, stage, size, source, type) support 'is', 'is_not'.",
-      input_schema: {
-        type: "object" as const,
-        properties: {
-          name: {
-            type: "string",
-            description: "Name for the report (e.g., 'Active Leads Q1', 'Enterprise Companies by Revenue')",
-          },
-          entity_type: {
-            type: "string",
-            enum: ["contacts", "companies", "deals", "activities"],
-            description: "Which CRM entity to report on",
-          },
-          description: {
-            type: "string",
-            description: "Optional description of what this report shows",
-          },
-          columns: {
-            type: "array",
-            items: { type: "string" },
-            description: "Array of column keys to display. If omitted, defaults to the entity's default visible columns.",
-          },
-          filters: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                field: { type: "string", description: "Field key to filter on" },
-                operator: {
-                  type: "string",
-                  enum: ["equals", "not_equals", "contains", "starts_with", "gt", "gte", "lt", "lte", "before", "after", "is", "is_not", "is_empty", "is_not_empty", "is_true", "is_false"],
-                  description: "Filter operator",
-                },
-                value: { type: "string", description: "Filter value" },
-              },
-              required: ["field", "operator", "value"],
-            },
-            description: "Array of filter conditions. Each has field, operator, and value.",
-          },
-          sort_field: {
-            type: "string",
-            description: "Field to sort by. Defaults to 'created_at'.",
-          },
-          sort_direction: {
-            type: "string",
-            enum: ["asc", "desc"],
-            description: "Sort direction. Defaults to 'desc'.",
-          },
-        },
-        required: ["name", "entity_type"],
-      },
-    },
-    {
-      name: "update_report",
-      description:
-        "Update an existing CRM report's columns, filters, name, or sort config. Use when the user asks to modify, update, add columns to, or change filters on a report they are currently viewing. The report_id is available from the active report context. Only specified fields are updated — omitted fields remain unchanged.",
-      input_schema: {
-        type: "object" as const,
-        properties: {
-          report_id: {
-            type: "string",
-            description: "The UUID of the report to update (from active report context)",
-          },
-          name: {
-            type: "string",
-            description: "New name for the report (optional)",
-          },
-          description: {
-            type: "string",
-            description: "New description (optional)",
-          },
-          columns: {
-            type: "array",
-            items: { type: "string" },
-            description: "Full replacement list of column keys. Include ALL desired columns, not just new ones.",
-          },
-          filters: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                field: { type: "string" },
-                operator: { type: "string" },
-                value: { type: "string" },
-              },
-              required: ["field", "operator", "value"],
-            },
-            description: "Full replacement list of filters.",
-          },
-          sort_field: { type: "string", description: "Field to sort by" },
-          sort_direction: { type: "string", enum: ["asc", "desc"], description: "Sort direction" },
-        },
-        required: ["report_id"],
-      },
-    },
-
     /* ── E-Commerce tools ──────────────────────────────────── */
     {
       name: "query_ecommerce",
       description:
-        "Query e-commerce and unified customer data. Use when the user asks about store data, customer insights, order history, product catalog, revenue, AOV, LTV, top customers, recent orders, who is a customer vs lead, etc. The 'unified' entity type combines CRM contacts and Shopify customers into a single view with classifications: 'customer' (has orders), 'lead' (CRM only), 'prospect' (CRM + ecom but no orders), 'ecom_only' (Shopify only, not in CRM).",
+        "Query e-commerce and unified customer data. Use when the user asks about store data, customer insights, order history, product catalog, revenue, AOV, LTV, top customers, recent orders, who is a customer vs lead, etc. The 'unified' entity type combines CRM contacts and Shopify customers into a single view with classifications: 'customer' (has orders), 'lead' (CRM only), 'prospect' (CRM + ecom but no orders), 'ecom_only' (Shopify only, not in CRM). Customers have a 'default_address' JSONB field (address1, city, province, zip, country). Orders have 'shipping_address' and 'billing_address' JSONB fields with the same structure. You can filter on nested address fields using dot notation (e.g. 'default_address->zip', 'shipping_address->city').",
       input_schema: {
         type: "object" as const,
         properties: {
@@ -1167,7 +1067,7 @@ Always include a start and end node. Map document sections/steps to process node
             items: {
               type: "object",
               properties: {
-                field: { type: "string", description: "Field to filter on (e.g. 'email', 'financial_status', 'total_spent', 'product_type', 'tags')" },
+                field: { type: "string", description: "Field to filter on (e.g. 'email', 'financial_status', 'total_spent', 'product_type', 'tags', 'default_address->zip', 'shipping_address->city', 'shipping_address->province')" },
                 operator: { type: "string", enum: ["eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "contains", "is_null", "is_not_null"], description: "Filter operator" },
                 value: { type: "string", description: "Filter value" },
               },
@@ -1203,6 +1103,58 @@ Always include a start and end node. Map document sections/steps to process node
           },
         },
         required: ["entity_type"],
+      },
+    },
+
+    /* ── Order Line Item Search ───────────────────────────────── */
+    {
+      name: "search_order_line_items",
+      description:
+        "Search inside order line items by product name/title. Use this when the user asks about customers who bought specific products (e.g. 'steak', 'ribeye', 'coffee', 'premium blend'), top customers by spend on certain products, or product-level purchase history. This searches the JSONB line_items inside ecom_orders and can aggregate by customer. The search is fuzzy — you should expand the user's terms to include related product names (e.g. 'steak' → also search 'ribeye', 'filet mignon', 'new york strip', 'sirloin', 't-bone').",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          search_terms: {
+            type: "array",
+            items: { type: "string" },
+            description: "Product name keywords to search for (case-insensitive, OR logic). Expand the user's query — e.g. if they say 'steak', include ['steak', 'ribeye', 'filet', 'new york strip', 'sirloin', 't-bone', 'strip steak', 'tenderloin']. Each term is matched with ILIKE.",
+          },
+          result_type: {
+            type: "string",
+            enum: ["top_customers", "product_summary", "order_list"],
+            description: "What to return. 'top_customers' = customers ranked by spend on matching products (default). 'product_summary' = products matching the search with total revenue/quantity. 'order_list' = individual orders containing matching products.",
+          },
+          sort_by: {
+            type: "string",
+            enum: ["spend", "quantity", "orders"],
+            description: "Sort field for top_customers. 'spend' = total $ spent on matching products (default). 'quantity' = total units purchased. 'orders' = number of orders.",
+          },
+          limit: {
+            type: "number",
+            description: "Maximum results to return. Defaults to 10.",
+          },
+        },
+        required: ["search_terms"],
+      },
+    },
+
+    {
+      name: "search_tool_results",
+      description:
+        "Search through previously retrieved tool results from this conversation using semantic + keyword hybrid search. Use when you received a summarized tool result and need specific details — e.g. a particular customer's data, a specific product's revenue, or exact numbers from a large dataset. The full data was stored in the vector index when the result was summarized.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "What to search for in stored results (e.g., 'customer with highest spend', 'ribeye orders', 'Jane Smith lifetime value')",
+          },
+          limit: {
+            type: "number",
+            description: "Max chunks to return. Default 5.",
+          },
+        },
+        required: ["query"],
       },
     },
 
@@ -1451,22 +1403,46 @@ Always include a start and end node. Map document sections/steps to process node
     {
       name: "create_segment",
       description:
-        `Create a new customer segment with rules. Rules define which customers belong to the segment. Supports tree-structured segments with parent/child branches.
+        `Create a new customer segment. Two modes:
 
-Available rule fields and operators:
-- lifecycle_stage: eq, in (values: new, active, loyal, at_risk, lapsed, win_back, champion)
-- interval_trend: eq (values: accelerating, stable, decelerating, erratic, insufficient_data)
-- avg_interval_days: lt, gt, between (numeric, e.g. "14" or "7,21")
-- engagement_score: gt, lt (0-1 scale)
-- top_product_type: eq, contains
-- days_until_predicted: lt, gt (integer days)
-- orders_count: gt, eq, between (integer, e.g. "3" or "2,5")
-- inferred_comm_style: eq (values: casual, data_driven, aspirational, urgency_responsive, social_proof)
-- consistency_score: gt (0-1 scale)
-- recency_score, frequency_score, monetary_score: gte (1-5)
+**Mode 1 — Direct customer IDs (PREFERRED for product-based segments):**
+When you already have customer IDs (e.g. from search_order_line_items), pass them via customer_ids. This directly populates the segment with those exact customers. Use a simple placeholder rule like { "type": "rule", "field": "id", "operator": "in", "value": "direct" }.
+
+**Mode 2 — Rules-based (for behavioral/RFM/lifecycle segments):**
+Rules define which customers belong. The engine resolves fields from customer_behavioral_profiles and ecom_customers.
+
+Common fields from customer_behavioral_profiles:
+- lifecycle_stage (text): new, active, loyal, at_risk, lapsed, win_back, champion
+- interval_trend (text): accelerating, stable, decelerating, erratic, insufficient_data
+- avg_interval_days (numeric): average days between purchases
+- engagement_score (numeric 0-1): composite engagement score
+- top_product_type (text): most-purchased product type
+- days_until_predicted (integer): days until predicted next purchase
+- inferred_comm_style (text): casual, data_driven, aspirational, urgency_responsive, social_proof
+- consistency_score (numeric 0-1): purchase regularity
+- recency_score, frequency_score, monetary_score (integer 1-5): RFM scores
+- velocity_score (integer 1-5): purchase acceleration
+
+Common fields from ecom_customers:
+- total_spent (numeric): lifetime spend in USD
+- orders_count (integer): total number of orders
+- avg_order_value (numeric): average order value
+- first_order_at (timestamp): date of first order
+- last_order_at (timestamp): date of most recent order
+- tags (text[]): customer tags
+- accepts_marketing (boolean): marketing consent
+
+Supported operators (work with any field):
+- eq, neq: exact match / not equal
+- gt, gte, lt, lte: numeric/date comparisons
+- in: match any value in comma-separated list
+- contains: case-insensitive substring match
+- between: range (comma-separated min,max)
+- top: returns top N customers ranked by field descending (e.g. top 5 spenders)
 
 Rule format: { "type": "rule", "field": "...", "operator": "...", "value": "..." }
-AND rules: { "type": "and", "children": [ ...rules ] }`,
+AND rules: { "type": "and", "children": [ ...rules ] }
+OR rules: { "type": "or", "children": [ ...rules ] }`,
       input_schema: {
         type: "object" as const,
         properties: {
@@ -1498,6 +1474,11 @@ AND rules: { "type": "and", "children": [ ...rules ] }`,
           branch_value: {
             type: "string",
             description: "The value of this branch (e.g. 'Coffee lovers', 'casual_tone')",
+          },
+          customer_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Direct list of customer UUIDs to populate the segment with. When provided, these customers are inserted directly as segment members — no rules evaluation needed. Use this after search_order_line_items or any other tool that returns customer IDs.",
           },
         },
         required: ["name", "rules"],
@@ -1551,6 +1532,22 @@ AND rules: { "type": "and", "children": [ ...rules ] }`,
           },
         },
         required: ["email_or_name"],
+      },
+    },
+
+    {
+      name: "delete_segment",
+      description:
+        "Delete a customer segment and all its members. Use when the user asks to remove, delete, or clean up a segment. Requires the segment ID or name.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          segment_id_or_name: {
+            type: "string",
+            description: "Segment UUID or name to delete",
+          },
+        },
+        required: ["segment_id_or_name"],
       },
     },
 
@@ -1691,6 +1688,167 @@ AND rules: { "type": "and", "children": [ ...rules ] }`,
           },
         },
         required: ["segment_id_or_name"],
+      },
+    },
+
+    /* ── Campaign Engine ───────────────────────────────────── */
+    {
+      name: "generate_campaign",
+      description:
+        "Generate an AI-powered email campaign with unique, personalized content for each customer. For 'per_customer' campaigns, each customer gets a completely unique email based on their purchase history, behavioral profile, lifecycle stage, and communication style. For 'broadcast' campaigns, one email is generated and sent to all customers. If segment_id is provided, targets only that segment's members. If omitted, targets the full customer list. Creates the campaign, generates all email variants, and puts them in review status.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Campaign name (e.g. 'Holiday Win-Back 2025', 'New Customer Welcome')",
+          },
+          campaign_type: {
+            type: "string",
+            enum: ["per_customer", "broadcast"],
+            description: "per_customer = unique AI email per person (recommended), broadcast = same email to all",
+          },
+          segment_id: {
+            type: "string",
+            description: "Optional: Segment ID to target. If omitted, targets all customers. Use list_segments to find existing segments.",
+          },
+          email_type: {
+            type: "string",
+            enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
+            description: "Type of email campaign",
+          },
+          prompt: {
+            type: "string",
+            description: "Natural language description of the campaign goal and tone. E.g. 'Write a win-back email with 15% off, reference their past purchases, create urgency'",
+          },
+          template_id: {
+            type: "string",
+            description: "Optional: brand asset ID of an HTML template to wrap the email content in",
+          },
+          delivery_channel: {
+            type: "string",
+            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
+            description: "Email delivery provider (default: klaviyo)",
+          },
+        },
+        required: ["name", "campaign_type", "email_type", "prompt"],
+      },
+    },
+    {
+      name: "send_campaign",
+      description:
+        "Send an email campaign through the connected delivery provider. First call with confirmed=false to get a summary of what will be sent. Then call with confirmed=true to actually send. Only approved or edited variants will be sent — rejected or draft variants are skipped. Each email is sent individually through the provider (Klaviyo, etc.).",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          campaign_id: {
+            type: "string",
+            description: "The campaign ID to send",
+          },
+          confirmed: {
+            type: "boolean",
+            description: "false = show summary, true = actually send. Always call with false first for safety.",
+          },
+        },
+        required: ["campaign_id", "confirmed"],
+      },
+    },
+    {
+      name: "create_sequence",
+      description:
+        "Create a multi-step email sequence (cadence) for a segment. Each step has its own delay, email type, and prompt. The sequence creates a campaign of type 'sequence' with individual steps that can be generated and sent independently.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Sequence name (e.g. 'New Customer Onboarding', '3-Part Win-Back Series')",
+          },
+          segment_id: {
+            type: "string",
+            description: "Optional: Segment ID to target. If omitted, targets all customers.",
+          },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                delay_days: {
+                  type: "number",
+                  description: "Days after previous step (0 for immediate)",
+                },
+                email_type: {
+                  type: "string",
+                  enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
+                },
+                prompt: {
+                  type: "string",
+                  description: "What this step's email should say/accomplish",
+                },
+                subject_template: {
+                  type: "string",
+                  description: "Optional subject line template for this step",
+                },
+              },
+              required: ["delay_days", "email_type", "prompt"],
+            },
+            description: "Array of sequence steps in order",
+          },
+          delivery_channel: {
+            type: "string",
+            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
+            description: "Email delivery provider (default: klaviyo)",
+          },
+        },
+        required: ["name", "steps"],
+      },
+    },
+    {
+      name: "get_campaign_status",
+      description:
+        "Get the current status of a campaign including variant counts (draft, approved, rejected, sent, failed), delivery metrics (delivered, opened, clicked, bounced), and campaign metadata.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          campaign_id: {
+            type: "string",
+            description: "The campaign ID to check",
+          },
+        },
+        required: ["campaign_id"],
+      },
+    },
+    {
+      name: "plan_campaign_strategy",
+      description:
+        "Analyze customers and create a strategic campaign plan with distinct sub-groups. The AI examines customer data (lifecycle stages, purchase behavior, communication styles, product affinities) and creates 2-6 tailored sub-groups, each with their own multi-step email sequence, timing, and messaging strategy. Can target a specific segment or the full customer list. Use this when the user wants different approaches for different customer types. After planning, the user reviews the strategy in the Campaigns UI before generating emails.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Campaign name (e.g. 'Strategic Win-Back Q1 2025')",
+          },
+          segment_id: {
+            type: "string",
+            description: "Optional: Segment ID to analyze. If omitted, analyzes all customers.",
+          },
+          strategy_prompt: {
+            type: "string",
+            description: "User's strategic direction. E.g. 'Different approaches for high-value vs low-value customers. Focus on premium upsells for high spenders, frequency for low spenders.'",
+          },
+          email_type: {
+            type: "string",
+            enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
+            description: "Default email type for the campaign",
+          },
+          delivery_channel: {
+            type: "string",
+            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
+            description: "Email delivery provider (default: klaviyo)",
+          },
+        },
+        required: ["name", "strategy_prompt"],
       },
     },
   ];

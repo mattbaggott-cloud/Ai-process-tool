@@ -1,5 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { embedInBackground, reembedInBackground, deleteChunksInBackground } from "@/lib/embeddings/index";
+import { hybridSearch } from "@/lib/embeddings/search";
 import { hasMinRole } from "@/lib/org";
 import type { OrgRole, SegmentRule, BrandAssetType, EmailType, KlaviyoConfig } from "@/lib/types/database";
 import { pushSegmentToList } from "@/lib/klaviyo/sync-service";
@@ -20,6 +21,14 @@ import {
   listGeneratedEmails,
   getGeneratedEmail,
 } from "@/lib/email/email-generator";
+import {
+  createCampaign,
+  generateCampaignVariants,
+  sendCampaign,
+  getCampaignStatus,
+  planCampaignStrategy,
+} from "@/lib/email/campaign-engine";
+import type { CampaignType, CampaignEmailType, DeliveryChannel } from "@/lib/types/database";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -116,13 +125,13 @@ export async function executeTool(
         return await handleAddCompanyAsset(input, supabase, userId, orgId);
       case "import_data":
         return await handleImportData(input, supabase, userId, orgId);
-      case "create_report":
-        return await handleCreateReport(input, supabase, userId, orgId);
-      case "update_report":
-        return await handleUpdateReport(input, supabase, userId, orgId);
       /* E-Commerce tools */
       case "query_ecommerce":
         return await handleQueryEcommerce(input, supabase, orgId);
+      case "search_order_line_items":
+        return await handleSearchOrderLineItems(input, supabase, orgId);
+      case "search_tool_results":
+        return await handleSearchToolResults(input, supabase, userId);
       case "query_ecommerce_analytics":
         return await handleQueryEcommerceAnalytics(input, supabase, orgId);
       /* Inline rendering tools */
@@ -154,6 +163,8 @@ export async function executeTool(
         return await handleGetSegmentDetails(input, supabase, orgId);
       case "get_customer_behavioral_profile":
         return await handleGetCustomerBehavioralProfile(input, supabase, orgId);
+      case "delete_segment":
+        return await handleDeleteSegment(input, supabase, orgId);
 
       // Email Content Engine
       case "save_brand_asset":
@@ -170,6 +181,18 @@ export async function executeTool(
       // Klaviyo Push
       case "push_segment_to_klaviyo":
         return await handlePushSegmentToKlaviyo(input, supabase, userId, orgId);
+
+      // Campaign Engine
+      case "generate_campaign":
+        return await handleGenerateCampaign(input, supabase, orgId, userId);
+      case "send_campaign":
+        return await handleSendCampaign(input, supabase, orgId);
+      case "create_sequence":
+        return await handleCreateSequence(input, supabase, orgId, userId);
+      case "get_campaign_status":
+        return await handleGetCampaignStatus(input, supabase, orgId);
+      case "plan_campaign_strategy":
+        return await handlePlanCampaignStrategy(input, supabase, orgId, userId);
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -2284,115 +2307,6 @@ async function handleAddCompanyAsset(
   return { success: true, message: `Added "${product.name}" to ${companyName}'s installed base.` };
 }
 
-/* ── create_report ────────────────────────────────────────── */
-
-const DEFAULT_VISIBLE_COLUMNS: Record<string, string[]> = {
-  contacts: ["first_name", "last_name", "email", "status", "company_name"],
-  companies: ["name", "industry", "size"],
-  deals: ["title", "value", "stage", "expected_close_date"],
-  activities: ["type", "subject", "contact_name", "created_at"],
-};
-
-async function handleCreateReport(
-  input: Record<string, unknown>,
-  supabase: SupabaseClient,
-  userId: string,
-  orgId: string
-): Promise<ToolResult> {
-  const name = (input.name as string)?.trim();
-  const entityType = (input.entity_type as string)?.trim();
-
-  if (!name) return { success: false, message: "Report name is required." };
-  if (!entityType || !["contacts", "companies", "deals", "activities"].includes(entityType)) {
-    return { success: false, message: "entity_type must be one of: contacts, companies, deals, activities." };
-  }
-
-  const description = ((input.description as string) ?? "").trim();
-  const columns = (input.columns as string[]) ?? DEFAULT_VISIBLE_COLUMNS[entityType] ?? [];
-  const filters = (input.filters as Array<{ field: string; operator: string; value: string }>) ?? [];
-  const sortField = ((input.sort_field as string) ?? "created_at").trim();
-  const sortDirection = ((input.sort_direction as string) ?? "desc").trim();
-
-  const { data, error } = await supabase
-    .from("crm_reports")
-    .insert({
-      user_id: userId,
-      org_id: orgId,
-      name,
-      description,
-      entity_type: entityType,
-      columns: JSON.stringify(columns),
-      filters: JSON.stringify(filters),
-      sort_config: JSON.stringify({ field: sortField, direction: sortDirection }),
-    })
-    .select()
-    .single();
-
-  if (error) return { success: false, message: `Failed to create report: ${error.message}` };
-
-  const filterDesc = filters.length > 0 ? `, ${filters.length} filter(s)` : "";
-  return {
-    success: true,
-    message: `Created report "${data.name}" — ${entityType} with ${columns.length} column(s)${filterDesc}. View it in CRM → Reports tab.`,
-  };
-}
-
-/* ── update_report ───────────────────────────────────────── */
-
-async function handleUpdateReport(
-  input: Record<string, unknown>,
-  supabase: SupabaseClient,
-  userId: string,
-  orgId: string
-): Promise<ToolResult> {
-  const reportId = (input.report_id as string)?.trim();
-  if (!reportId) return { success: false, message: "report_id is required." };
-
-  // Build partial update
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (input.name) updates.name = (input.name as string).trim();
-  if (input.description !== undefined) updates.description = (input.description as string).trim();
-  if (input.columns) updates.columns = JSON.stringify(input.columns);
-  if (input.filters) updates.filters = JSON.stringify(input.filters);
-  if (input.sort_field || input.sort_direction) {
-    // Fetch existing sort config to merge
-    const { data: existing } = await supabase
-      .from("crm_reports")
-      .select("sort_config")
-      .eq("id", reportId)
-      .eq("user_id", userId)
-      .single();
-    const existingSort = typeof existing?.sort_config === "string"
-      ? JSON.parse(existing.sort_config)
-      : existing?.sort_config ?? { field: "created_at", direction: "desc" };
-    updates.sort_config = JSON.stringify({
-      field: (input.sort_field as string) ?? existingSort.field,
-      direction: (input.sort_direction as string) ?? existingSort.direction,
-    });
-  }
-
-  const { data, error } = await supabase
-    .from("crm_reports")
-    .update(updates)
-    .eq("id", reportId)
-    .eq("user_id", userId)
-    .select()
-    .single();
-
-  if (error) return { success: false, message: `Failed to update report: ${error.message}` };
-
-  const changes: string[] = [];
-  if (input.name) changes.push(`name → "${data.name}"`);
-  if (input.columns) changes.push(`${(input.columns as string[]).length} columns`);
-  if (input.filters) changes.push(`${(input.filters as unknown[]).length} filter(s)`);
-  if (input.sort_field) changes.push(`sort by ${input.sort_field}`);
-
-  return {
-    success: true,
-    message: `Updated report "${data.name}": ${changes.join(", ") || "no changes"}. Refresh the report to see updates.`,
-  };
-}
-
 /* ═══════════════════════════════════════════════════════════
    UNIFIED DATA IMPORT — ONE TOOL FOR ALL IMPORTS
    Routes to CRM (simple insert) or Ecom (smart dedup/link)
@@ -3420,7 +3334,15 @@ async function handleQueryEcommerce(
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEcomFilter(query: any, filter: { field: string; operator: string; value?: string }) {
-  const { field, operator, value } = filter;
+  let { field } = filter;
+  const { operator, value } = filter;
+
+  // Normalize JSONB arrow notation: "default_address->zip" → "default_address->>zip"
+  // PostgREST uses ->> for text extraction from JSONB (needed for eq, ilike, etc.)
+  if (field.includes("->") && !field.includes("->>")) {
+    field = field.replace("->", "->>");
+  }
+
   switch (operator) {
     case "eq": return query.eq(field, value);
     case "neq": return query.neq(field, value);
@@ -3437,6 +3359,21 @@ function applyEcomFilter(query: any, filter: { field: string; operator: string; 
   }
 }
 
+/** Format a JSONB address object into a readable string */
+function formatAddress(addr: unknown): string {
+  if (!addr || typeof addr !== "object") return "";
+  const a = addr as Record<string, unknown>;
+  const parts = [
+    a.address1,
+    a.address2,
+    a.city,
+    a.province || a.province_code,
+    a.zip,
+    a.country || a.country_code,
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
 function formatEcomResults(entityType: string, data: Record<string, unknown>[]): string {
   if (entityType === "customers") {
     const lines = data.map((c) => {
@@ -3444,7 +3381,8 @@ function formatEcomResults(entityType: string, data: Record<string, unknown>[]):
       const spent = c.total_spent ? `$${Number(c.total_spent).toFixed(2)}` : "$0";
       const orders = c.orders_count ?? 0;
       const aov = c.avg_order_value ? `$${Number(c.avg_order_value).toFixed(2)}` : "$0";
-      return `- **${name}** (${c.email || "no email"}) — ${orders} orders, LTV: ${spent}, AOV: ${aov}${c.tags && (c.tags as string[]).length ? ` [${(c.tags as string[]).join(", ")}]` : ""}`;
+      const addrStr = formatAddress(c.default_address);
+      return `- **${name}** (${c.email || "no email"}) — ${orders} orders, LTV: ${spent}, AOV: ${aov}${addrStr ? `, Address: ${addrStr}` : ""}${c.tags && (c.tags as string[]).length ? ` [${(c.tags as string[]).join(", ")}]` : ""}`;
     });
     return `**${data.length} customers:**\n${lines.join("\n")}`;
   }
@@ -3454,7 +3392,11 @@ function formatEcomResults(entityType: string, data: Record<string, unknown>[]):
       const total = o.total_price ? `$${Number(o.total_price).toFixed(2)}` : "N/A";
       const date = o.processed_at ? new Date(o.processed_at as string).toLocaleDateString() : "N/A";
       const items = Array.isArray(o.line_items) ? (o.line_items as unknown[]).length : 0;
-      return `- **${o.order_number || o.external_id}** — ${total}, ${o.financial_status || "unknown"}, ${items} items, ${date}`;
+      const shipAddr = formatAddress(o.shipping_address);
+      const billAddr = formatAddress(o.billing_address);
+      // Show shipping address if available, else billing
+      const addrStr = shipAddr || billAddr;
+      return `- **${o.order_number || o.external_id}** — ${total}, ${o.financial_status || "unknown"}, ${items} items, ${date}${addrStr ? `, Ship to: ${addrStr}` : ""}`;
     });
     return `**${data.length} orders:**\n${lines.join("\n")}`;
   }
@@ -3569,6 +3511,318 @@ function formatUnifiedResults(data: Record<string, unknown>[]): string {
   }
 
   return result;
+}
+
+/* ── Tool Result Search Handler (uses existing vector search) ── */
+
+async function handleSearchToolResults(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const query = input.query as string;
+  const limit = Math.min((input.limit as number) || 5, 20);
+
+  if (!query) {
+    return { success: false, message: "query is required." };
+  }
+
+  try {
+    // Use existing hybrid search infrastructure, filtered to tool_result source
+    const results = await hybridSearch(supabase, userId, query, {
+      limit,
+      sourceFilter: ["tool_result"],
+    });
+
+    if (results.length === 0) {
+      return {
+        success: true,
+        message: "No matching data found in stored tool results. The data may not have been stored yet or the search terms didn't match.",
+      };
+    }
+
+    let message = `**Found ${results.length} matching chunks from previous tool results:**\n\n`;
+    for (const r of results) {
+      message += `---\n${r.chunkText}\n\n`;
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Search failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+/* ── Order Line Item Search Handler ──────────────────────── */
+
+async function handleSearchOrderLineItems(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const searchTerms = (input.search_terms as string[]) || [];
+  const resultType = (input.result_type as string) || "top_customers";
+  const sortBy = (input.sort_by as string) || "spend";
+  const limit = Math.min((input.limit as number) || 10, 50);
+
+  if (searchTerms.length === 0) {
+    return { success: false, message: "search_terms is required. Provide product name keywords to search for." };
+  }
+
+  // Build ILIKE conditions for each search term against line item title/name
+  const ilikeClauses = searchTerms.map((term) => {
+    const escaped = term.replace(/'/g, "''");
+    return `(item->>'title' ILIKE '%${escaped}%' OR item->>'name' ILIKE '%${escaped}%')`;
+  }).join(" OR ");
+
+  try {
+    if (resultType === "top_customers") {
+      const sortColumn = sortBy === "quantity" ? "total_quantity" : sortBy === "orders" ? "order_count" : "total_spend";
+      const { data, error } = await supabase.rpc("exec_sql", {
+        query: `
+          WITH matching_items AS (
+            SELECT
+              o.customer_id,
+              item->>'title' AS product_title,
+              COALESCE((item->>'quantity')::int, 1) AS quantity,
+              COALESCE((item->>'price')::numeric, 0) * COALESCE((item->>'quantity')::int, 1) AS line_total
+            FROM ecom_orders o,
+            LATERAL jsonb_array_elements(o.line_items) AS item
+            WHERE o.org_id = '${orgId}'
+              AND o.customer_id IS NOT NULL
+              AND o.line_items IS NOT NULL
+              AND jsonb_array_length(o.line_items) > 0
+              AND (${ilikeClauses})
+          ),
+          customer_totals AS (
+            SELECT
+              customer_id,
+              SUM(line_total) AS total_spend,
+              SUM(quantity) AS total_quantity,
+              COUNT(DISTINCT product_title) AS distinct_products,
+              array_agg(DISTINCT product_title) AS products_bought
+            FROM matching_items
+            GROUP BY customer_id
+          ),
+          ranked AS (
+            SELECT
+              ct.*,
+              (SELECT COUNT(DISTINCT o2.id) FROM ecom_orders o2,
+               LATERAL jsonb_array_elements(o2.line_items) AS item2
+               WHERE o2.customer_id = ct.customer_id
+                 AND o2.org_id = '${orgId}'
+                 AND (${ilikeClauses.replace(/item/g, "item2")})) AS order_count,
+              ec.email,
+              ec.first_name,
+              ec.last_name,
+              ec.total_spent AS lifetime_spend,
+              ec.orders_count AS lifetime_orders,
+              ec.default_address
+            FROM customer_totals ct
+            JOIN ecom_customers ec ON ec.id = ct.customer_id AND ec.org_id = '${orgId}'
+            ORDER BY ${sortColumn} DESC
+            LIMIT ${limit}
+          )
+          SELECT * FROM ranked
+        `,
+      });
+
+      if (error) {
+        // Fallback: use simpler query without exec_sql
+        return await handleSearchLineItemsFallback(supabase, orgId, searchTerms, resultType, sortBy, limit);
+      }
+
+      if (!data || (data as unknown[]).length === 0) {
+        return { success: true, message: `No orders found containing products matching: ${searchTerms.join(", ")}. Try broader search terms.` };
+      }
+
+      const rows = data as Record<string, unknown>[];
+      const matchedCustomerIds = rows.map((r) => r.customer_id as string).filter(Boolean);
+      let result = `**Top ${rows.length} customers by ${sortBy} on matching products** (searched: ${searchTerms.join(", ")}):\n\n`;
+      for (const r of rows) {
+        const name = [r.first_name, r.last_name].filter(Boolean).join(" ") || "Unknown";
+        const products = Array.isArray(r.products_bought) ? (r.products_bought as string[]).join(", ") : "—";
+        const addrStr = formatAddress(r.default_address);
+        result += `- **${name}** (${r.email || "no email"}) — $${Number(r.total_spend || 0).toFixed(2)} on ${r.total_quantity || 0} items across ${r.order_count || 0} orders\n`;
+        result += `  Products: ${products}\n`;
+        result += `  Lifetime: $${Number(r.lifetime_spend || 0).toFixed(2)} total, ${r.lifetime_orders || 0} orders\n`;
+        if (addrStr) result += `  Address: ${addrStr}\n`;
+        result += "\n";
+      }
+      result += `\n_customer_ids: ${JSON.stringify(matchedCustomerIds)}_`;
+      return { success: true, message: result };
+
+    } else if (resultType === "product_summary") {
+      return await handleSearchLineItemsFallback(supabase, orgId, searchTerms, "product_summary", sortBy, limit);
+
+    } else {
+      // order_list
+      return await handleSearchLineItemsFallback(supabase, orgId, searchTerms, "order_list", sortBy, limit);
+    }
+  } catch (err) {
+    // Fallback to the simpler query approach
+    return await handleSearchLineItemsFallback(supabase, orgId, searchTerms, resultType, sortBy, limit);
+  }
+}
+
+/**
+ * Fallback line item search using client-side JSONB filtering.
+ * Used when exec_sql RPC is not available.
+ */
+async function handleSearchLineItemsFallback(
+  supabase: SupabaseClient,
+  orgId: string,
+  searchTerms: string[],
+  resultType: string,
+  sortBy: string,
+  limit: number
+): Promise<ToolResult> {
+  // Fetch orders with line items and customer data
+  const { data: orders, error } = await supabase
+    .from("ecom_orders")
+    .select("id, order_number, customer_id, total_price, processed_at, line_items")
+    .eq("org_id", orgId)
+    .not("line_items", "is", null)
+    .not("customer_id", "is", null)
+    .order("processed_at", { ascending: false })
+    .limit(5000);
+
+  if (error) return { success: false, message: `Query error: ${error.message}` };
+  if (!orders || orders.length === 0) return { success: true, message: "No orders found." };
+
+  // Filter orders with matching line items
+  const lowerTerms = searchTerms.map((t) => t.toLowerCase());
+
+  interface MatchedItem {
+    orderId: string;
+    orderNumber: string;
+    customerId: string;
+    productTitle: string;
+    quantity: number;
+    lineTotal: number;
+    processedAt: string;
+  }
+
+  const matchedItems: MatchedItem[] = [];
+
+  for (const order of orders) {
+    const items = Array.isArray(order.line_items) ? order.line_items : [];
+    for (const item of items) {
+      const title = ((item as Record<string, unknown>).title as string || (item as Record<string, unknown>).name as string || "").toLowerCase();
+      if (lowerTerms.some((term) => title.includes(term))) {
+        const qty = Number((item as Record<string, unknown>).quantity) || 1;
+        const price = Number((item as Record<string, unknown>).price) || 0;
+        matchedItems.push({
+          orderId: order.id,
+          orderNumber: order.order_number || order.id,
+          customerId: order.customer_id,
+          productTitle: (item as Record<string, unknown>).title as string || (item as Record<string, unknown>).name as string || "Unknown",
+          quantity: qty,
+          lineTotal: price * qty,
+          processedAt: order.processed_at || "",
+        });
+      }
+    }
+  }
+
+  if (matchedItems.length === 0) {
+    return { success: true, message: `No orders found containing products matching: ${searchTerms.join(", ")}. Try broader search terms or check product names in your catalog.` };
+  }
+
+  if (resultType === "product_summary") {
+    // Aggregate by product title
+    const productMap = new Map<string, { revenue: number; quantity: number; orders: Set<string> }>();
+    for (const item of matchedItems) {
+      const existing = productMap.get(item.productTitle) ?? { revenue: 0, quantity: 0, orders: new Set<string>() };
+      existing.revenue += item.lineTotal;
+      existing.quantity += item.quantity;
+      existing.orders.add(item.orderId);
+      productMap.set(item.productTitle, existing);
+    }
+
+    const products = Array.from(productMap.entries())
+      .map(([title, stats]) => ({ title, ...stats, orderCount: stats.orders.size }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, limit);
+
+    let result = `**${products.length} products matching "${searchTerms.join(", ")}":**\n\n`;
+    for (const p of products) {
+      result += `- **${p.title}** — $${p.revenue.toFixed(2)} revenue, ${p.quantity} units, ${p.orderCount} orders\n`;
+    }
+    return { success: true, message: result };
+
+  } else if (resultType === "order_list") {
+    // Group by order
+    const orderMap = new Map<string, { orderNumber: string; items: string[]; total: number; date: string }>();
+    for (const item of matchedItems) {
+      const existing = orderMap.get(item.orderId) ?? { orderNumber: item.orderNumber, items: [], total: 0, date: item.processedAt };
+      existing.items.push(`${item.productTitle} (×${item.quantity})`);
+      existing.total += item.lineTotal;
+      orderMap.set(item.orderId, existing);
+    }
+
+    const orderList = Array.from(orderMap.values())
+      .sort((a, b) => b.total - a.total)
+      .slice(0, limit);
+
+    let result = `**${orderList.length} orders containing matching products:**\n\n`;
+    for (const o of orderList) {
+      const date = o.date ? new Date(o.date).toLocaleDateString() : "N/A";
+      result += `- **#${o.orderNumber}** (${date}) — $${o.total.toFixed(2)}: ${o.items.join(", ")}\n`;
+    }
+    return { success: true, message: result };
+
+  } else {
+    // top_customers — aggregate by customer
+    const custMap = new Map<string, { spend: number; quantity: number; orders: Set<string>; products: Set<string> }>();
+    for (const item of matchedItems) {
+      const existing = custMap.get(item.customerId) ?? { spend: 0, quantity: 0, orders: new Set<string>(), products: new Set<string>() };
+      existing.spend += item.lineTotal;
+      existing.quantity += item.quantity;
+      existing.orders.add(item.orderId);
+      existing.products.add(item.productTitle);
+      custMap.set(item.customerId, existing);
+    }
+
+    const customerIds = Array.from(custMap.keys());
+    const { data: customers } = await supabase
+      .from("ecom_customers")
+      .select("id, email, first_name, last_name, total_spent, orders_count, default_address")
+      .in("id", customerIds.slice(0, 100))
+      .eq("org_id", orgId);
+
+    const custDetails = new Map((customers ?? []).map((c) => [c.id, c]));
+
+    const sortFn = sortBy === "quantity"
+      ? (a: [string, typeof custMap extends Map<string, infer V> ? V : never], b: [string, typeof custMap extends Map<string, infer V> ? V : never]) => b[1].quantity - a[1].quantity
+      : sortBy === "orders"
+        ? (a: [string, { orders: Set<string> }], b: [string, { orders: Set<string> }]) => b[1].orders.size - a[1].orders.size
+        : (a: [string, { spend: number }], b: [string, { spend: number }]) => b[1].spend - a[1].spend;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ranked = Array.from(custMap.entries()).sort(sortFn as any).slice(0, limit);
+    // IMPORTANT: _customer_ids must match the displayed ranked results, not all matches.
+    // Otherwise segment creation will insert wrong customers.
+    const rankedIds = ranked.map(([id]) => id);
+
+    let result = `**Top ${ranked.length} customers by ${sortBy} on matching products** (searched: ${searchTerms.join(", ")}):\n\n`;
+    for (const [custId, stats] of ranked) {
+      const c = custDetails.get(custId) as Record<string, unknown> | undefined;
+      const name = c ? [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unknown" : "Unknown";
+      const email = (c?.email as string) || "no email";
+      const products = Array.from(stats.products).join(", ");
+      const addrStr = c ? formatAddress(c.default_address) : "";
+      result += `- **${name}** (${email}) — $${stats.spend.toFixed(2)} on ${stats.quantity} items across ${stats.orders.size} orders\n`;
+      result += `  Products: ${products}\n`;
+      if (c) result += `  Lifetime: $${Number(c.total_spent || 0).toFixed(2)} total, ${c.orders_count || 0} orders\n`;
+      if (addrStr) result += `  Address: ${addrStr}\n`;
+      result += "\n";
+    }
+    result += `\n_customer_ids: ${JSON.stringify(rankedIds)}_`;
+    return { success: true, message: result };
+  }
 }
 
 /* ── E-Commerce Analytics Handler ────────────────────────── */
@@ -3961,12 +4215,21 @@ async function handleCreateSegment(
   const parentSegmentId = input.parent_segment_id as string | undefined;
   const branchDimension = input.branch_dimension as string | undefined;
   const branchValue = input.branch_value as string | undefined;
+  const customerIds = input.customer_ids as string[] | undefined;
 
   if (!name || !rules) {
     return { success: false, message: "name and rules are required." };
   }
 
   try {
+    // If customer_ids provided, use direct population mode (AI-first approach)
+    if (customerIds && customerIds.length > 0) {
+      return await handleCreateSegmentDirect(
+        supabase, orgId, userId, name, description, segmentType, rules, customerIds,
+        parentSegmentId, branchDimension, branchValue
+      );
+    }
+
     const segment = await createSegmentFn(supabase, orgId, userId, {
       name,
       description,
@@ -3989,6 +4252,96 @@ async function handleCreateSegment(
   } catch (err) {
     return { success: false, message: `Failed to create segment: ${err instanceof Error ? err.message : "Unknown error"}` };
   }
+}
+
+/**
+ * Direct segment creation — bypasses rule engine and directly inserts customer IDs.
+ * Used when the AI already knows exactly which customers to include (e.g. from search_order_line_items).
+ */
+async function handleCreateSegmentDirect(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+  name: string,
+  description: string | undefined,
+  segmentType: string | undefined,
+  rules: Record<string, unknown>,
+  customerIds: string[],
+  parentSegmentId?: string,
+  branchDimension?: string,
+  branchValue?: string,
+): Promise<ToolResult> {
+  // Resolve parent depth/path if needed
+  let depth = 0;
+  let path: string[] = [];
+
+  if (parentSegmentId) {
+    const { data: parent } = await supabase
+      .from("segments")
+      .select("id, depth, path")
+      .eq("id", parentSegmentId)
+      .single();
+    if (parent) {
+      depth = (parent.depth as number) + 1;
+      path = [...((parent.path as string[]) ?? []), parent.id as string];
+    }
+  }
+
+  // Create segment record
+  const { data: segment, error: insertErr } = await supabase
+    .from("segments")
+    .insert({
+      org_id: orgId,
+      name,
+      description: description ?? null,
+      segment_type: segmentType ?? "product_affinity",
+      rules,
+      parent_id: parentSegmentId ?? null,
+      depth,
+      path,
+      branch_dimension: branchDimension ?? null,
+      branch_value: branchValue ?? null,
+      created_by: userId,
+      customer_count: customerIds.length,
+    })
+    .select()
+    .single();
+
+  if (insertErr || !segment) {
+    throw new Error(`Failed to create segment: ${insertErr?.message}`);
+  }
+
+  // Directly insert customer IDs as segment members (batch in chunks of 500)
+  const BATCH_SIZE = 500;
+  let inserted = 0;
+  for (let i = 0; i < customerIds.length; i += BATCH_SIZE) {
+    const batch = customerIds.slice(i, i + BATCH_SIZE);
+    const rows = batch.map((custId) => ({
+      org_id: orgId,
+      segment_id: segment.id,
+      ecom_customer_id: custId,
+    }));
+
+    const { error: memberErr } = await supabase
+      .from("segment_members")
+      .upsert(rows, { onConflict: "org_id,segment_id,ecom_customer_id" });
+
+    if (!memberErr) {
+      inserted += batch.length;
+    } else {
+      console.error(`[segment-direct] Batch insert error: ${memberErr.message}`);
+    }
+  }
+
+  return {
+    success: true,
+    message: `Segment "${name}" created successfully!\n` +
+      `- **ID:** ${segment.id}\n` +
+      `- **Type:** ${segmentType ?? "product_affinity"}\n` +
+      `- **Members assigned:** ${inserted} customers (direct)\n` +
+      (parentSegmentId ? `- **Parent:** ${parentSegmentId}\n` : "") +
+      (branchDimension ? `- **Branch:** ${branchDimension} = ${branchValue}\n` : ""),
+  };
 }
 
 async function handleListSegments(
@@ -4206,6 +4559,80 @@ async function handleGetCustomerBehavioralProfile(
     return { success: true, message };
   } catch (err) {
     return { success: false, message: `Failed to get profile: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleDeleteSegment(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  const query = input.segment_id_or_name as string;
+
+  if (!query) {
+    return { success: false, message: "segment_id_or_name is required." };
+  }
+
+  try {
+    // Try to find segment by ID first, then by name
+    let segmentId = query;
+    let segmentName = query;
+
+    // Check if it's a UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query);
+
+    if (!isUuid) {
+      // Look up by name
+      const { data: segments } = await supabase
+        .from("segments")
+        .select("id, name")
+        .eq("org_id", orgId)
+        .ilike("name", `%${query}%`)
+        .limit(5);
+
+      if (!segments || segments.length === 0) {
+        return { success: false, message: `No segment found matching "${query}".` };
+      }
+
+      if (segments.length > 1) {
+        const list = segments.map((s) => `- ${s.name} (${s.id})`).join("\n");
+        return {
+          success: false,
+          message: `Multiple segments match "${query}". Please specify which one:\n${list}`,
+        };
+      }
+
+      segmentId = segments[0].id;
+      segmentName = segments[0].name;
+    }
+
+    // Delete members first, then the segment
+    const { error: memberErr } = await supabase
+      .from("segment_members")
+      .delete()
+      .eq("segment_id", segmentId)
+      .eq("org_id", orgId);
+
+    if (memberErr) {
+      console.error(`[delete_segment] Failed to delete members: ${memberErr.message}`);
+    }
+
+    const { error: segErr } = await supabase
+      .from("segments")
+      .delete()
+      .eq("id", segmentId)
+      .eq("org_id", orgId);
+
+    if (segErr) {
+      return { success: false, message: `Failed to delete segment: ${segErr.message}` };
+    }
+
+    return {
+      success: true,
+      message: `Segment "${segmentName}" and all its members have been deleted.`,
+    };
+  } catch (err) {
+    return { success: false, message: `Failed to delete segment: ${err instanceof Error ? err.message : "Unknown error"}` };
   }
 }
 
@@ -4470,6 +4897,367 @@ async function handlePushSegmentToKlaviyo(
     return {
       success: false,
       message: `Failed to push segment to Klaviyo: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+/* ── Campaign Engine Handlers ──────────────────────────── */
+
+async function handleGenerateCampaign(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const campaignType = (input.campaign_type as CampaignType) || "per_customer";
+    const emailType = (input.email_type as CampaignEmailType) || "custom";
+    const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+
+    // 1. Create the campaign record
+    const campaign = await createCampaign(supabase, orgId, userId, {
+      name: input.name as string,
+      campaignType,
+      segmentId: (input.segment_id as string) || undefined,
+      emailType,
+      prompt: input.prompt as string,
+      templateId: input.template_id as string | undefined,
+      deliveryChannel,
+    });
+
+    const audienceLabel = campaign.segmentName
+      ? `${campaign.segmentName} (${campaign.customerCount} customers)`
+      : `All Customers (${campaign.customerCount})`;
+
+    // 2. Generate variants — run inline for small audiences, async for large
+    const MAX_INLINE_CUSTOMERS = 50;
+
+    if (campaign.customerCount <= MAX_INLINE_CUSTOMERS) {
+      const result = await generateCampaignVariants(supabase, orgId, campaign.campaignId);
+
+      let message = `**Campaign Created & Emails Generated: ${campaign.name}** ✅\n\n`;
+      message += `- **ID:** ${campaign.campaignId}\n`;
+      message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
+      message += `- **Audience:** ${audienceLabel}\n`;
+      message += `- **Email Type:** ${emailType}\n`;
+      message += `- **Delivery Channel:** ${deliveryChannel}\n`;
+      message += `- **Variants Generated:** ${result.totalGenerated}\n`;
+      message += `- **Status:** ${result.status}\n\n`;
+
+      if (campaignType === "per_customer") {
+        message += `Each customer received a unique, AI-generated email tailored to their purchase history, behavioral profile, and communication style.\n\n`;
+      }
+
+      // Show a few example subjects
+      const { data: sampleVariants } = await supabase
+        .from("email_customer_variants")
+        .select("customer_name, customer_email, subject_line, preview_text")
+        .eq("campaign_id", campaign.campaignId)
+        .eq("org_id", orgId)
+        .limit(5);
+
+      if (sampleVariants && sampleVariants.length > 0) {
+        message += `**Sample emails generated:**\n`;
+        for (const v of sampleVariants) {
+          message += `- **${v.customer_name || v.customer_email}**: "${v.subject_line}"\n`;
+        }
+        message += `\n`;
+      }
+
+      message += `**Next steps:** Review the generated emails, then use \`send_campaign\` with campaign_id "${campaign.campaignId}" to send them through ${deliveryChannel}.`;
+
+      return { success: true, message };
+    } else {
+      // Large audience — just create, tell user to trigger generation
+      let message = `**Campaign Created: ${campaign.name}** ✅\n\n`;
+      message += `- **ID:** ${campaign.campaignId}\n`;
+      message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
+      message += `- **Audience:** ${audienceLabel}\n`;
+      message += `- **Email Type:** ${emailType}\n`;
+      message += `- **Delivery Channel:** ${deliveryChannel}\n`;
+      message += `- **Status:** draft (generation pending)\n\n`;
+      message += `This campaign targets ${campaign.customerCount} customers. Email generation will take a few minutes. `;
+      message += `Use \`get_campaign_status\` with campaign_id "${campaign.campaignId}" to check progress.`;
+
+      // Kick off generation in background (fire and forget)
+      generateCampaignVariants(supabase, orgId, campaign.campaignId).catch((err) => {
+        console.error(`[Campaign] Background generation failed for ${campaign.campaignId}:`, err);
+      });
+
+      return { success: true, message };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to generate campaign: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+async function handleSendCampaign(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const campaignId = input.campaign_id as string;
+    const confirmed = input.confirmed as boolean;
+
+    if (!campaignId) {
+      return { success: false, message: "campaign_id is required." };
+    }
+
+    // Get current status first
+    const status = await getCampaignStatus(supabase, orgId, campaignId);
+
+    if (!confirmed) {
+      // Show summary without sending
+      const readyCount = status.approved + status.edited;
+      let message = `**Campaign Send Summary: ${status.name}**\n\n`;
+      message += `- **Channel:** ${status.deliveryChannel}\n`;
+      message += `- **Segment:** ${status.segmentName || "Unknown"}\n`;
+      message += `- **Total Variants:** ${status.total}\n`;
+      message += `- **Ready to Send:** ${readyCount} (${status.approved} approved, ${status.edited} edited)\n`;
+      message += `- **Skipped:** ${status.rejected} rejected, ${status.draft} still in draft\n\n`;
+
+      if (readyCount === 0) {
+        message += `⚠️ **No emails are approved for sending.** Please review and approve emails first.`;
+      } else {
+        message += `To send, call \`send_campaign\` with confirmed=true. Each email will be sent individually through ${status.deliveryChannel}.`;
+      }
+
+      return { success: true, message };
+    }
+
+    // Actually send
+    const result = await sendCampaign(supabase, orgId, campaignId);
+
+    let message = `**Campaign Sent: ${status.name}** ✅\n\n`;
+    message += `- **Sent:** ${result.sent} emails through ${status.deliveryChannel}\n`;
+    if (result.failed > 0) {
+      message += `- **Failed:** ${result.failed} emails\n`;
+    }
+    message += `- **Status:** ${result.status}\n\n`;
+    message += `Use \`get_campaign_status\` to track delivery metrics (opens, clicks, bounces).`;
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to send campaign: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+async function handleCreateSequence(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const name = input.name as string;
+    const segmentId = input.segment_id as string | undefined;
+    const steps = input.steps as Array<{
+      delay_days: number;
+      email_type: CampaignEmailType;
+      prompt: string;
+      subject_template?: string;
+    }>;
+    const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+
+    if (!name || !steps || steps.length === 0) {
+      return { success: false, message: "name and steps are required." };
+    }
+
+    // Validate segment if provided
+    let segmentName = "All Customers";
+    let customerCount = 0;
+    if (segmentId) {
+      const { data: segment } = await supabase
+        .from("segments")
+        .select("id, name, customer_count")
+        .eq("id", segmentId)
+        .eq("org_id", orgId)
+        .single();
+
+      if (!segment) {
+        return { success: false, message: `Segment not found: ${segmentId}` };
+      }
+      segmentName = segment.name as string;
+      customerCount = segment.customer_count as number;
+    } else {
+      const { count } = await supabase
+        .from("ecom_customers")
+        .select("id", { count: "exact", head: true })
+        .eq("org_id", orgId);
+      customerCount = count ?? 0;
+    }
+
+    // Resolve delivery config
+    const deliveryConfig: Record<string, unknown> = {};
+    if (deliveryChannel === "klaviyo") {
+      const { data: connector } = await supabase
+        .from("data_connectors")
+        .select("config")
+        .eq("org_id", orgId)
+        .eq("connector_type", "klaviyo")
+        .eq("status", "connected")
+        .maybeSingle();
+      if (connector?.config) {
+        Object.assign(deliveryConfig, connector.config as Record<string, unknown>);
+      }
+    }
+
+    // Create the sequence campaign
+    const { data: campaign, error: campErr } = await supabase
+      .from("email_campaigns")
+      .insert({
+        org_id: orgId,
+        name,
+        campaign_type: "sequence" as const,
+        segment_id: segmentId ?? null,
+        status: "draft",
+        email_type: steps[0].email_type || "follow_up",
+        prompt_used: steps.map((s, i) => `Step ${i + 1}: ${s.prompt}`).join("\n"),
+        delivery_channel: deliveryChannel,
+        delivery_config: deliveryConfig,
+        created_by: userId,
+      })
+      .select()
+      .single();
+
+    if (campErr || !campaign) {
+      throw new Error(`Failed to create sequence: ${campErr?.message}`);
+    }
+
+    // Create sequence steps
+    const stepRecords = steps.map((s, i) => ({
+      org_id: orgId,
+      campaign_id: campaign.id as string,
+      step_number: i + 1,
+      delay_days: s.delay_days,
+      email_type: s.email_type || "follow_up",
+      prompt: s.prompt,
+      subject_template: s.subject_template || null,
+      status: "draft" as const,
+    }));
+
+    const { error: stepErr } = await supabase
+      .from("email_sequence_steps")
+      .insert(stepRecords);
+
+    if (stepErr) {
+      throw new Error(`Failed to create sequence steps: ${stepErr.message}`);
+    }
+
+    let message = `**Email Sequence Created: ${name}** ✅\n\n`;
+    message += `- **ID:** ${campaign.id}\n`;
+    message += `- **Audience:** ${segmentName} (${customerCount} customers)\n`;
+    message += `- **Channel:** ${deliveryChannel}\n`;
+    message += `- **Steps:** ${steps.length}\n\n`;
+
+    steps.forEach((s, i) => {
+      message += `**Step ${i + 1}** (${s.delay_days === 0 ? "Immediately" : `Day ${s.delay_days}`}): ${s.email_type} — ${s.prompt}\n`;
+    });
+
+    message += `\n**Next:** Use \`generate_campaign\` on this campaign to generate the emails for each step.`;
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to create sequence: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+async function handleGetCampaignStatus(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const campaignId = input.campaign_id as string;
+    if (!campaignId) {
+      return { success: false, message: "campaign_id is required." };
+    }
+
+    const status = await getCampaignStatus(supabase, orgId, campaignId);
+
+    let message = `**Campaign: ${status.name}**\n\n`;
+    message += `- **Type:** ${status.campaignType}\n`;
+    message += `- **Status:** ${status.status}\n`;
+    message += `- **Email Type:** ${status.emailType}\n`;
+    message += `- **Channel:** ${status.deliveryChannel}\n`;
+    if (status.segmentName) message += `- **Segment:** ${status.segmentName}\n`;
+    message += `\n**Variant Status:**\n`;
+    message += `- Total: ${status.total}\n`;
+    message += `- Draft: ${status.draft}\n`;
+    message += `- Approved: ${status.approved}\n`;
+    message += `- Edited: ${status.edited}\n`;
+    message += `- Rejected: ${status.rejected}\n`;
+    message += `- Sent: ${status.sent}\n`;
+    if (status.failed > 0) message += `- Failed: ${status.failed}\n`;
+
+    if (status.deliveryMetrics.delivered > 0 || status.deliveryMetrics.opened > 0) {
+      message += `\n**Delivery Metrics:**\n`;
+      message += `- Delivered: ${status.deliveryMetrics.delivered}\n`;
+      message += `- Opened: ${status.deliveryMetrics.opened} (${status.sent > 0 ? Math.round(status.deliveryMetrics.opened / status.sent * 100) : 0}%)\n`;
+      message += `- Clicked: ${status.deliveryMetrics.clicked} (${status.sent > 0 ? Math.round(status.deliveryMetrics.clicked / status.sent * 100) : 0}%)\n`;
+      message += `- Bounced: ${status.deliveryMetrics.bounced}\n`;
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to get campaign status: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+/* ── Plan Campaign Strategy ───────────────────────────── */
+
+async function handlePlanCampaignStrategy(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const name = input.name as string;
+    const segmentId = input.segment_id as string | undefined;
+    const strategyPrompt = input.strategy_prompt as string;
+
+    if (!name || !strategyPrompt) {
+      return { success: false, message: "name and strategy_prompt are required." };
+    }
+
+    const result = await planCampaignStrategy(supabase, orgId, {
+      name,
+      segmentId: segmentId || undefined,
+      strategyPrompt,
+      emailType: (input.email_type as CampaignEmailType) || undefined,
+      deliveryChannel: (input.delivery_channel as DeliveryChannel) || undefined,
+    }, userId);
+
+    let message = `**Campaign Strategy Created: ${name}** ✅\n\n`;
+    message += `- **Campaign ID:** ${result.campaignId}\n`;
+    message += `- **Strategy Groups:** ${result.groups.length}\n\n`;
+
+    for (const g of result.groups) {
+      message += `### ${g.name} (${g.customerCount} customers, ${g.steps} email${g.steps > 1 ? "s" : ""})\n`;
+      message += `${g.reasoning}\n\n`;
+    }
+
+    message += `---\n\n**Next steps:** Review the strategy in the **Campaigns** page. You can see each group's journey, member list, and email sequence. When you're happy with the strategy, click "Generate All Emails" to create personalized content for every customer in every group.`;
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to plan campaign strategy: ${err instanceof Error ? err.message : "Unknown error"}`,
     };
   }
 }

@@ -211,8 +211,8 @@ export default function AIChat() {
         .filter((f) => f.textContent !== null)
         .map((f) => ({ name: f.name, content: f.textContent! }));
 
-      // Read active report context if on reports page
-      const activeReport = (window as unknown as Record<string, unknown>).__activeReport ?? null;
+      // Read active segment context if on segments page
+      const activeSegment = (window as unknown as Record<string, unknown>).__activeSegment ?? null;
 
       /* Abort controller — 5 min max per request (complex multi-tool queries need time) */
       const abortCtrl = new AbortController();
@@ -227,7 +227,7 @@ export default function AIChat() {
             messages: updatedMessages,
             currentPage: pathname,
             chatFileContents,
-            activeReport,
+            activeSegment,
           }),
         });
 
@@ -261,14 +261,31 @@ export default function AIChat() {
             return updated;
           });
         }
+
+        /* If streaming completed but produced no content, replace with error */
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && !last.content.trim()) {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: "No response was generated. Please try rephrasing your question.",
+            };
+            return updated;
+          }
+          return prev;
+        });
+
         /* Notify other components to refresh their data */
         window.dispatchEvent(new Event("workspace-updated"));
         /* Dispatch again after a short delay to catch any DB propagation lag */
         setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
       } catch (err) {
         const isAbort = err instanceof DOMException && err.name === "AbortError";
-        setMessages((prev) => [
-          ...prev,
+        // Use updatedMessages (pre-stream snapshot) to avoid keeping the empty
+        // assistant placeholder that was added when streaming began.
+        setMessages([
+          ...updatedMessages,
           {
             role: "assistant",
             content: isAbort

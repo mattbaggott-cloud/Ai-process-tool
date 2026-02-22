@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getToolDefinitions } from "./tools";
 import { executeAction } from "@/lib/agentic/action-executor";
 import { hybridSearch, type SearchResult } from "@/lib/embeddings/search";
+import { embedDocument, deleteDocumentChunks } from "@/lib/embeddings/index";
 import { logInBackground, type LLMLogEntry } from "@/lib/logging/llm-logger";
 import { getOrgContext } from "@/lib/org";
 import { retrieveMemories, formatMemoriesForPrompt } from "@/lib/agentic/memory-retriever";
@@ -11,6 +12,7 @@ import { getGraphContext } from "@/lib/agentic/graph-query";
 import { getIdentityResolutionSummary } from "@/lib/identity/resolver";
 import { getSegmentSummary } from "@/lib/segmentation/behavioral-engine";
 import { getEmailSummary } from "@/lib/email/email-generator";
+import { getCampaignSummary } from "@/lib/email/campaign-engine";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -18,7 +20,7 @@ interface ChatRequest {
   messages: { role: "user" | "assistant"; content: string }[];
   currentPage: string;
   chatFileContents: { name: string; content: string }[];
-  activeReport?: Record<string, unknown> | null;
+  activeSegment?: { id: string; name: string; segment_type: string; member_count: number; description: string | null } | null;
 }
 
 /* ── Truncation helpers ────────────────────────────────── */
@@ -58,9 +60,7 @@ function buildSystemPrompt(data: {
     dealByStage: Record<string, number>;
     pipelineValue: number;
     recentActivities: number;
-    reportCount: number;
   };
-  activeReport: Record<string, unknown> | null;
   orgRole: string;
   orgMemberCount: number;
   orgMembersByRole: Record<string, number>;
@@ -83,6 +83,8 @@ function buildSystemPrompt(data: {
   } | null;
   segmentSummary: { total: number; byType: Record<string, number>; totalMembers: number };
   emailSummary: { totalEmails: number; byStatus: Record<string, number>; brandAssetCount: number };
+  campaignSummary: { totalCampaigns: number; byStatus: Record<string, number>; recentCampaigns: Array<{ name: string; status: string; type: string; variants: number }> };
+  activeSegment: { id: string; name: string; segment_type: string; member_count: number; description: string | null } | null;
   memorySummary: string;
   graphContext: string;
 }): string {
@@ -91,9 +93,9 @@ function buildSystemPrompt(data: {
     teams, teamRoles, teamKpis, teamTools,
     goalSummary, painPointSummary, librarySummary,
     stackTools, projects, dashboards, catalogSummary, catalogSubcategories,
-    chatFileContents, currentPage, retrievedContext, crmSummary, activeReport,
+    chatFileContents, currentPage, retrievedContext, crmSummary,
     orgRole, orgMemberCount, orgMembersByRole, orgDepartmentNames, pendingInviteCount,
-    ecomSummary, identityStats, segmentSummary, emailSummary, memorySummary, graphContext,
+    ecomSummary, identityStats, segmentSummary, emailSummary, campaignSummary, activeSegment, memorySummary, graphContext,
   } = data;
 
   /* Group team child data by team_id */
@@ -162,9 +164,11 @@ You can take actions in the user's workspace using tools:
 Most requests are clear — just execute them. Only ask for clarification when the request has genuine ambiguity that could lead to wrong results.
 
 **Clear requests — act immediately, no questions:**
-- "Show me leads with phone numbers" → Create report: status=Lead + phone is_not_empty. Done.
 - "Create a contact named John Smith, john@test.com" → Just create it.
 - "Delete the Acme deal" → Just do it (if there's only one Acme deal).
+- "Create a segment for customers who bought coffee" → Use create_segment. Done.
+- "Top 5 customers who buy steak" → Show expanded terms (ribeye, filet, sirloin, etc.) as a quick clarifying question, then search once confirmed.
+- "Who spends the most on wine?" → Show expanded wine types as a clarifying question, then search once confirmed.
 
 **Ambiguous requests — clarify first:**
 - "Show me active leads with phone email" → Ambiguous: does "active leads" mean two statuses (Active + Lead) or just leads that are active? Does "phone email" mean has both, or show those columns? Ask.
@@ -172,9 +176,7 @@ Most requests are clear — just execute them. Only ask for clarification when t
 - "Delete old activities" → How old?
 - "Show me big deals" → What threshold is "big"?
 
-**The rule:** If the request reads like a clear sentence with obvious meaning, act. If it's a run-on, has missing punctuation, mixes terms that could mean different things, or uses vague words like "big", "old", "recent" without specifics — clarify.
-
-**Report filter rules:** When a user says "with [field]" (e.g. "with phone numbers"), ALWAYS add an is_not_empty filter for that field — "with" means the data must exist. When multiple statuses or values apply to the same field, use separate equality filters (the system ORs them). Always match your filters to exactly what the user asked for.
+**The rule:** If the request reads like a clear sentence with obvious meaning, act. If it's a run-on, has missing punctuation, mixes terms that could mean different things, or uses vague words like "big", "old", "recent" without specifics — clarify. NEVER ask clarifying questions about product names — use your world knowledge to expand search terms and let the data tell you what products exist.
 
 When the user asks you to set something up, create something, delete something, or make changes, use the appropriate tool rather than just describing what they should do manually.
 When the user asks to create a workflow, process, flow, or pipeline, use generate_workflow to build it visually with proper nodes and connections. Assign tools from their tech stack to process steps when mentioned.
@@ -197,12 +199,42 @@ When the user asks about e-commerce metrics, analytics, or business performance,
 - "Show me customer cohorts" / "When did customers first buy?" → metric: cohort
 - "Segment my customers" / "RFM analysis" → metric: rfm
 
+**PRODUCT-LEVEL QUERIES — USE search_order_line_items:**
+When the user asks about specific products within orders, use search_order_line_items. This searches inside order line items (JSONB). You MUST expand the user's search terms using your world knowledge. Before searching, ASK the user to confirm the expanded terms as a quick clarifying question. This prevents searching too broadly when they meant something specific.
+
+**Example flow:**
+User: "Who are my top 5 steak customers?"
+You: "I'd like to search across steak-related products. Should I include all of these: **ribeye, filet, new york strip, sirloin, t-bone, tenderloin, wagyu, prime rib**? Or did you have something more specific in mind?"
+User: "Yes, all of those"
+You: [now call search_order_line_items with those terms]
+
+**Another example:**
+User: "Who buys the most wine?"
+You: "I'll expand that to search wine-related products. Should I include: **wine, cabernet, merlot, chardonnay, pinot, sauvignon, rosé, prosecco, champagne**? Or just a specific type?"
+User: "Just red wines"
+You: [search with narrower terms: cabernet, merlot, pinot noir, malbec, shiraz, zinfandel, red blend]
+
+More expansion examples:
+- "coffee buyers" → suggest: ["coffee", "espresso", "latte", "cappuccino", "cold brew", "mocha", "americano"]
+- "supplement customers" → suggest: ["supplement", "vitamin", "protein", "creatine", "omega", "probiotic", "collagen"]
+
+**Key rules:** Always ASK first with expanded terms, WAIT for the user to confirm or narrow down, THEN search. Keep the clarifying question short and friendly — one message, not a wall of text. If the user says "yes" or "all of those", search with the full expanded list. If they narrow it down, respect that.
+
+Result types:
+- "top 5 customers who buy steak" → result_type: "top_customers", sort_by: "spend", limit: 5
+- "what steak products do we sell?" → result_type: "product_summary"
+- "show me recent steak orders" → result_type: "order_list"
+
 **CRITICAL EFFICIENCY RULES — READ CAREFULLY:**
 1. **query_ecommerce_analytics is your ONLY analytics tool.** NEVER query ecom_orders, ecom_products, or ecom_customers tables directly to compute metrics. The analytics tool handles all aggregation via optimized database functions.
 2. **For multi-metric questions, call query_ecommerce_analytics MULTIPLE TIMES in the SAME tool round** (parallel tool calls). For example, if asked "give me a full business overview", call revenue + repeat_rate + top_products + rfm ALL AT ONCE — not one per round.
 3. **NEVER use query_ecommerce (raw table queries) for analytics.** query_ecommerce is ONLY for looking up specific customer records, searching by name/email, or listing recent orders. If you need aggregated numbers (revenue, AOV, top products, cohort, RFM, repeat rate), ALWAYS use query_ecommerce_analytics.
-4. **You have a maximum of 5 tool rounds.** Plan efficiently. A "full business health" question should take 1-2 rounds, not 5+. Gather all metrics in parallel on the first round, then present results.
-5. **NEVER say "let me try a different approach" and re-query.** If a tool returns data, use it. Don't second-guess and re-query the same data differently.
+4. **For product-specific customer queries, use search_order_line_items.** This is the ONLY tool that can search inside order line items. query_ecommerce and query_ecommerce_analytics cannot search by product name within orders.
+5. **Be thorough.** Use as many tool rounds as needed to fully complete the user's request. Complex multi-step workflows (discover segment → create segment → generate campaign → check status) are expected and encouraged. Plan efficiently but never cut corners or stop early — finish the job.
+6. **NEVER say "let me try a different approach" and re-query.** If a tool returns data, use it. Don't second-guess and re-query the same data differently.
+7. **For product-level queries (search_order_line_items), always ask a quick clarifying question showing your expanded search terms BEFORE searching.** This lets the user confirm or narrow down the scope. For all OTHER tool calls (analytics, ecommerce queries, segments, etc.), NEVER ask clarifying questions — just search. Only clarify non-product queries when the request is genuinely ambiguous (e.g., "update the deal" — which deal?).
+
+8. **Large tool results are automatically compressed but self-contained.** When a tool returns a large result, it is compressed to keep all data points, names, IDs, and numbers. The summary you receive IS your data — use it directly to answer the user. Do NOT call search_tool_results unless the user asks for something specific that is clearly missing from the summary. Never call search_tool_results more than once per conversation turn.
 
 **Cross-Source Data Rules:**
 When comparing people/contacts across HubSpot and Shopify, ALWAYS use the identity resolution stats provided in the "Customer Identity Resolution" section below. NEVER estimate or guess at overlap between systems — the exact numbers are provided. For detailed cross-source queries, use query_ecommerce with entity_type "unified".
@@ -222,10 +254,43 @@ You can discover behavioral patterns in customer data and create branching segme
 
 **Segmentation workflow:** discover_segments first computes behavioral profiles for all customers, then finds natural clusters. Once you see interesting patterns, use create_segment with appropriate rules to save them. Segments support tree structures — create sub-branches by product preference or communication style.
 
-## AI Email Content Engine
-You can generate personalized email content that matches the brand's voice and is tailored to each segment's behavioral profile. The system supports two workflows:
+**CRITICAL — Product-based segments (steak buyers, coffee lovers, wine customers, etc.):**
+When creating a segment based on WHAT products customers buy, you MUST use this two-step flow:
+1. **First:** Call search_order_line_items to find the matching customers. The results include a _customer_ids field with all matching customer UUIDs.
+2. **Then:** Call create_segment with those customer_ids passed directly. This bypasses the rules engine and directly populates the segment with the exact customers found.
+
+Example flow:
+- User: "Create a segment for steak buyers"
+- You: Ask clarifying question about expanded terms (ribeye, filet, etc.)
+- User: "Yes, all of those"
+- You: Call search_order_line_items → get results with customer_ids
+- You: Call create_segment with name="Steak Buyers", customer_ids=[...the IDs from search results...], rules={ "type": "rule", "field": "id", "operator": "in", "value": "direct" }
+
+DO NOT try to create product-based segments using rules alone — the segment engine cannot search inside order line items. Always search first, then create the segment with the found customer IDs.
+
+**IMPORTANT — Tool routing for customer queries:**
+- "Who buys X product?" / "Top customers for steak" / "Customers who bought coffee" → Use **search_order_line_items** to search inside order line items. This is the ONLY tool that can find customers by what they purchased.
+- "Create a segment for [product] buyers" → **search_order_line_items FIRST**, then **create_segment with customer_ids** from the results. NEVER use create_segment with product rules alone.
+- "Show me customers who haven't purchased in X days" / "Find lapsed customers" / "Customers with N+ orders" → Use **create_segment** directly with rules. Do NOT use query_ecommerce for this — segments are the proper tool for filtering customers by behavioral criteria.
+- "How many customers do we have?" / "Revenue by month" / "Top products" → Use **query_ecommerce** or **query_ecommerce_analytics** for data exploration.
+- "Find patterns" / "What clusters exist?" → Use **discover_segments** for AI-driven pattern discovery.
+- When asked to find customers matching criteria AND then create a campaign, you can either: (a) create a segment first, then use generate_campaign with that segment_id, OR (b) use generate_campaign without a segment_id to target all customers.
+
+## AI Campaign Builder
+You can generate personalized email campaigns for customers. The Campaign Builder can work off the **full customer list** (no segment required) or target a specific **segment** as an optional filter. The system supports three workflows:
 1. **One-off emails** — user crafts a single email with AI help, reviews it, and sends it manually
-2. **Automated cadences** — emails generated per-segment (or per-customer) that fire when behavioral triggers are met
+2. **Quick campaigns** — use generate_campaign (optionally with a segment_id) for straightforward campaigns
+3. **Strategic campaigns** — use plan_campaign_strategy for AI-powered sub-grouping with tailored multi-email sequences per group
+
+**Campaign Builder — Key Principle:**
+Campaigns do NOT require a pre-built segment. The AI can work directly off the full customer list and create its own sub-groups internally. Segments are an OPTIONAL filter — use them when the user has already identified a specific audience, or when they say "create a campaign from this segment."
+
+**Strategic Campaign Flow (use plan_campaign_strategy):**
+When a user asks for a campaign with differentiated strategies (e.g., "different approaches for high-value vs low-value", "unique sequences for each group"), use plan_campaign_strategy. It can target a segment or the full customer list. It creates strategy groups with:
+- Sub-groupings based on customer attributes
+- Per-group email sequences (multi-step journeys with timing)
+- AI reasoning for why each group gets different treatment
+The user reviews the strategy in the Strategy View UI, then triggers email generation from there.
 
 **Key tools:**
 - "Save my email template" / "Here's how we write emails" → save_brand_asset (saves templates, examples, style guides, HTML from Klaviyo/Mailchimp as brand references)
@@ -258,18 +323,17 @@ ${currentPage}
     prompt += "\n" + graphContext + "\n";
   }
 
-  /* ── Active Report Context ── */
-  if (activeReport) {
-    prompt += `\n## Currently Viewing Report\n`;
-    prompt += `The user is currently viewing a report. When they ask to modify columns, filters, or settings, use the update_report tool with this report's ID instead of creating a new report.\n`;
-    prompt += `**Report ID:** ${activeReport.id}\n`;
-    prompt += `**Name:** ${activeReport.name}\n`;
-    prompt += `**Entity Type:** ${activeReport.entity_type}\n`;
-    prompt += `**Current Columns:** ${(activeReport.columns as string[])?.join(", ") || "default"}\n`;
-    if ((activeReport.filters as unknown[])?.length > 0) {
-      prompt += `**Filters:** ${JSON.stringify(activeReport.filters)}\n`;
+  /* ── Active Segment Context ── */
+  if (activeSegment) {
+    prompt += `\n## Currently Viewing Segment\n`;
+    prompt += `The user is currently viewing a specific segment. When they ask to create a campaign, generate emails, or take any action on "this segment" or "these customers", use this segment's ID. Confirm with the user by referencing the segment name before proceeding.\n`;
+    prompt += `**Segment ID:** ${activeSegment.id}\n`;
+    prompt += `**Name:** ${activeSegment.name}\n`;
+    prompt += `**Type:** ${activeSegment.segment_type}\n`;
+    prompt += `**Members:** ${activeSegment.member_count}\n`;
+    if (activeSegment.description) {
+      prompt += `**Description:** ${activeSegment.description}\n`;
     }
-    prompt += `**Results:** ${activeReport.resultCount ?? "unknown"} records\n`;
   }
 
   /* ── User Profile ── */
@@ -425,7 +489,6 @@ ${currentPage}
       prompt += `**Pipeline Value:** $${crmSummary.pipelineValue.toLocaleString()}\n`;
     }
     if (crmSummary.recentActivities > 0) prompt += `**Activities (last 7 days):** ${crmSummary.recentActivities}\n`;
-    if (crmSummary.reportCount > 0) prompt += `**Reports:** ${crmSummary.reportCount} saved report(s)\n`;
   }
 
   /* ── E-Commerce Summary ── */
@@ -479,6 +542,24 @@ ${currentPage}
       if (statuses) prompt += `**By status:** ${statuses}\n`;
     }
     prompt += `Use generate_email to create new content, or list_generated_emails to see existing drafts.\n`;
+  }
+
+  /* ── AI Campaigns ── */
+  if (campaignSummary.totalCampaigns > 0) {
+    prompt += `\n## AI Campaigns\n`;
+    prompt += `**Total campaigns:** ${campaignSummary.totalCampaigns}\n`;
+    const campStatuses = Object.entries(campaignSummary.byStatus)
+      .map(([s, c]) => `${s}: ${c}`)
+      .join(", ");
+    if (campStatuses) prompt += `**By status:** ${campStatuses}\n`;
+    if (campaignSummary.recentCampaigns.length > 0) {
+      prompt += `**Recent campaigns:**\n`;
+      for (const c of campaignSummary.recentCampaigns.slice(0, 5)) {
+        prompt += `- ${c.name} (${c.type}, ${c.status}, ${c.variants} variants)\n`;
+      }
+    }
+    prompt += `Use generate_campaign for quick campaigns (works with or without a segment). Use plan_campaign_strategy for differentiated sub-group strategies.\n`;
+    prompt += `Use send_campaign to send approved campaigns. Use get_campaign_status to check progress.\n`;
   }
 
   /* ── Tech Stack ── */
@@ -653,7 +734,7 @@ export async function POST(req: Request) {
     return new Response("Invalid JSON", { status: 400 });
   }
 
-  const { messages, currentPage, chatFileContents, activeReport } = body;
+  const { messages, currentPage, chatFileContents, activeSegment } = body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return new Response("Messages array is required", { status: 400 });
@@ -723,7 +804,6 @@ export async function POST(req: Request) {
     { data: crmCompanies },
     { data: crmDeals },
     { data: crmRecentActivities },
-    { count: crmReportCount },
     // E-commerce lean queries
     { count: ecomCustomerCount },
     { count: ecomOrderCount },
@@ -754,7 +834,6 @@ export async function POST(req: Request) {
     supabase.from("crm_companies").select("id", { count: "exact", head: true }),
     supabase.from("crm_deals").select("stage, value"),
     supabase.from("crm_activities").select("type").gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
-    supabase.from("crm_reports").select("id", { count: "exact", head: true }),
     // E-commerce
     supabase.from("ecom_customers").select("id", { count: "exact", head: true }),
     supabase.from("ecom_orders").select("id", { count: "exact", head: true }),
@@ -786,6 +865,14 @@ export async function POST(req: Request) {
   let emailSummary = { totalEmails: 0, byStatus: {} as Record<string, number>, brandAssetCount: 0 };
   try {
     emailSummary = await getEmailSummary(supabase, orgId);
+  } catch {
+    // Non-fatal
+  }
+
+  /* Fetch campaign summary (non-blocking) */
+  let campaignSummary: Awaited<ReturnType<typeof getCampaignSummary>> = { totalCampaigns: 0, byStatus: {}, recentCampaigns: [] };
+  try {
+    campaignSummary = await getCampaignSummary(supabase, orgId);
   } catch {
     // Non-fatal
   }
@@ -864,7 +951,6 @@ export async function POST(req: Request) {
     dealByStage: crmDealStageCounts,
     pipelineValue: crmPipelineValue,
     recentActivities: crmRecentActivities?.length ?? 0,
-    reportCount: crmReportCount ?? 0,
   };
 
   /* Org member/dept summary */
@@ -895,7 +981,6 @@ export async function POST(req: Request) {
     currentPage: currentPage ?? "/",
     retrievedContext,
     crmSummary,
-    activeReport: activeReport ?? null,
     orgRole: orgCtx.role,
     orgMemberCount: orgMembersData?.length ?? 0,
     orgMembersByRole,
@@ -911,14 +996,18 @@ export async function POST(req: Request) {
     identityStats,
     segmentSummary,
     emailSummary,
+    campaignSummary,
+    activeSegment: activeSegment ?? null,
     memorySummary,
     graphContext: graphContextStr,
   });
 
   /* 7. Call Claude with streaming + tool use */
+  console.log(`[chat] System prompt built: ${systemPrompt.length} chars`);
   const anthropic = new Anthropic();
   const tools = getToolDefinitions();
   const encoder = new TextEncoder();
+  console.log(`[chat] Starting stream for: "${lastUserMessage.slice(0, 80)}"`);
 
   // Tracking for LLM logging
   let totalInputTokens = 0;
@@ -944,8 +1033,10 @@ export async function POST(req: Request) {
       ]);
     }
 
-    const TOOL_TIMEOUT = 30_000;   // 30s per tool execution
-    const STREAM_TIMEOUT = 90_000; // 90s per Anthropic API round
+    const TOOL_TIMEOUT = 60_000;    // 60s per tool execution
+    const STREAM_TIMEOUT = 120_000; // 120s per Anthropic API round
+    const MAX_TOOL_ROUNDS = 15;     // prevent infinite tool loops
+    const MAX_TOKENS = 16384;       // generous output limit for complex multi-tool responses
 
     const readable = new ReadableStream({
       async start(controller) {
@@ -959,15 +1050,17 @@ export async function POST(req: Request) {
 
         try {
           /* ── First API call (may trigger tool use) ── */
+          console.log("[chat] Creating Anthropic stream...");
           const stream = anthropic.messages.stream({
             model: "claude-sonnet-4-20250514",
-            max_tokens: 4096,
+            max_tokens: MAX_TOKENS,
             system: systemPrompt,
             messages: apiMessages,
             tools,
           });
 
           /* Stream any text from the first call */
+          console.log("[chat] Streaming first response...");
           for await (const event of stream) {
             if (
               event.type === "content_block_delta" &&
@@ -984,11 +1077,11 @@ export async function POST(req: Request) {
           totalInputTokens += currentMessage.usage?.input_tokens ?? 0;
           totalOutputTokens += currentMessage.usage?.output_tokens ?? 0;
           stopReason = currentMessage.stop_reason;
-
-          const MAX_TOOL_ROUNDS = 5;
+          console.log(`[chat] First response done. stop_reason=${stopReason}, input_tokens=${currentMessage.usage?.input_tokens}, output_tokens=${currentMessage.usage?.output_tokens}`);
 
           while (currentMessage.stop_reason === "tool_use" && toolRounds < MAX_TOOL_ROUNDS) {
             toolRounds++;
+            console.log(`[chat] Tool round ${toolRounds}/${MAX_TOOL_ROUNDS}`);
 
             /* Extract tool_use blocks */
             const toolUseBlocks = currentMessage.content.filter(
@@ -997,8 +1090,10 @@ export async function POST(req: Request) {
             );
 
             /* Execute all tools via Action Framework (with per-tool timeout) */
+            console.log(`[chat] Executing ${toolUseBlocks.length} tools: ${toolUseBlocks.map(t => t.name).join(", ")}`);
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
             for (const toolBlock of toolUseBlocks) {
+              console.log(`[chat] Running tool: ${toolBlock.name}`);
               let result: { success: boolean; message: string };
               try {
                 result = await withTimeout(
@@ -1019,10 +1114,90 @@ export async function POST(req: Request) {
                 console.error(`[chat] Tool ${toolBlock.name} failed: ${errMsg}`);
                 result = { success: false, message: errMsg };
               }
+
+              // Smart context management: store large results in vector index,
+              // summarize with Haiku for compact context, full data searchable via search_tool_results.
+              console.log(`[chat] Tool ${toolBlock.name} result: ${result.success ? "OK" : "FAIL"}, ${result.message.length} chars`);
+              let resultMessage = result.message;
+              const STORE_THRESHOLD = 8000;  // only compress results that are genuinely large
+
+              if (resultMessage.length > STORE_THRESHOLD && result.success) {
+                // Extract _customer_ids before summarization — these are critical for segment creation
+                // and MUST survive Haiku compression intact
+                const customerIdsMatch = resultMessage.match(/_customer_ids:\s*(\[.*?\])_/);
+                const preservedCustomerIds = customerIdsMatch ? customerIdsMatch[0] : null;
+
+                // Also extract inline chart/table markers before summarization
+                const inlineMarkers: string[] = [];
+                const markerRegex = /<!--INLINE_(?:TABLE|CHART):[\s\S]*?-->/g;
+                let markerMatch;
+                while ((markerMatch = markerRegex.exec(resultMessage)) !== null) {
+                  inlineMarkers.push(markerMatch[0]);
+                }
+
+                // 1. Store full result as session-scoped chunks in vector index (fire-and-forget)
+                //    Uses sessionId as sourceId so we can clean up later
+                embedDocument(
+                  supabase,
+                  user.id,
+                  "tool_result",
+                  sessionId,
+                  { content: resultMessage, tool_name: toolBlock.name }
+                ).catch((err) => console.error("[chat] Tool result embed failed:", err));
+
+                // 2. Summarize with Haiku — fast, cheap, intelligent compression
+                //    Preserves all data points, names, IDs, and metrics
+                //    Budget: 8K chars covers 20+ results, full email content, analytics with charts
+                try {
+                  const summaryResponse = await withTimeout(
+                    anthropic.messages.create({
+                      model: "claude-haiku-4-5-20251001",
+                      max_tokens: 8000,
+                      messages: [{
+                        role: "user",
+                        content: `Compress this tool result into a self-contained summary. You MUST keep ALL of these:\n- Every customer name, ID, and email\n- All numbers, amounts, dates, and metrics\n- All product names and categories\n- All key findings and patterns\n- All inline chart/table markers (<!--INLINE_TABLE:...-->, <!--INLINE_CHART:...-->) exactly as-is\n- Any _customer_ids field with its full JSON array — reproduce it EXACTLY\n\nRemove only: formatting whitespace, decorative separators, column alignment padding, and repeated headers. Do NOT remove any data rows or values. Max 8000 chars.\n\n${resultMessage}`
+                      }],
+                    }),
+                    30000,
+                    "tool-result-summary"
+                  );
+
+                  const summaryText = summaryResponse.content[0]?.type === "text"
+                    ? summaryResponse.content[0].text
+                    : resultMessage.slice(0, 8000);
+
+                  resultMessage = summaryText;
+
+                  // Re-append preserved _customer_ids if Haiku dropped them
+                  if (preservedCustomerIds && !resultMessage.includes("_customer_ids:")) {
+                    resultMessage += `\n\n${preservedCustomerIds}`;
+                  }
+
+                  // Re-append any inline markers that Haiku dropped
+                  for (const marker of inlineMarkers) {
+                    if (!resultMessage.includes(marker)) {
+                      resultMessage += `\n${marker}`;
+                    }
+                  }
+                } catch (summaryErr) {
+                  // Fallback: smart truncation if Haiku fails
+                  console.error("[chat] Haiku summarization failed, falling back to truncation:", summaryErr);
+                  if (resultMessage.length > 8000) {
+                    // Keep the end of the result (where _customer_ids lives) by trimming the middle
+                    if (preservedCustomerIds) {
+                      const trimmed = resultMessage.slice(0, 7500) + "\n\n...[Result truncated.]\n\n" + preservedCustomerIds;
+                      resultMessage = trimmed;
+                    } else {
+                      resultMessage = resultMessage.slice(0, 8000) + "\n\n...[Result truncated.]";
+                    }
+                  }
+                }
+              }
+
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
-                content: result.message,
+                content: resultMessage,
                 is_error: !result.success,
               });
               allToolCalls.push({
@@ -1041,7 +1216,7 @@ export async function POST(req: Request) {
             /* Next API call with tool results */
             const nextStream = anthropic.messages.stream({
               model: "claude-sonnet-4-20250514",
-              max_tokens: 4096,
+              max_tokens: MAX_TOKENS,
               system: systemPrompt,
               messages: currentMessages,
               tools,
@@ -1065,8 +1240,11 @@ export async function POST(req: Request) {
             stopReason = currentMessage.stop_reason;
           }
 
-          if (toolRounds >= MAX_TOOL_ROUNDS && currentMessage.stop_reason === "tool_use") {
-            safeEnqueue(encoder.encode("\n\n*I reached the maximum number of tool rounds. Please try a simpler question or break it into parts.*"));
+          // Handle edge cases
+          if (toolRounds >= MAX_TOOL_ROUNDS) {
+            safeEnqueue(encoder.encode("\n\n*I reached the maximum number of tool rounds. Please try breaking your question into smaller parts.*"));
+          } else if (currentMessage.stop_reason === "max_tokens") {
+            safeEnqueue(encoder.encode("\n\n*My response was cut short due to length. Try asking a more specific question or breaking it into parts.*"));
           }
 
           safeClose();
@@ -1094,6 +1272,10 @@ export async function POST(req: Request) {
             sessionId,
           };
           logInBackground(supabase, logEntry);
+
+          /* ── Clean up session-scoped tool result chunks (fire-and-forget) ── */
+          deleteDocumentChunks(supabase, "tool_result", sessionId)
+            .catch((err) => console.error("[chat] Tool result cleanup failed:", err));
 
           /* ── Extract memories from conversation (fire-and-forget) ── */
           if (messages.length >= 1 && !logError) {

@@ -21,8 +21,9 @@ export function chunkText(
 
   const chunks: string[] = [];
   let start = 0;
+  const MAX_CHUNKS = 200; // safety guard against infinite loops
 
-  while (start < text.length) {
+  while (start < text.length && chunks.length < MAX_CHUNKS) {
     let end = Math.min(start + maxSize, text.length);
 
     // Try to break at a sentence boundary (. ! ? \n)
@@ -40,8 +41,13 @@ export function chunkText(
       }
     }
 
+    // Safety: ensure forward progress
+    if (end <= start) end = start + maxSize;
+
     chunks.push(text.slice(start, end).trim());
     start = end - overlap;
+    // Safety: ensure start always advances
+    if (start <= chunks.length - 1) start = end;
     if (start >= text.length) break;
   }
 

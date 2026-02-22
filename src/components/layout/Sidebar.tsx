@@ -16,7 +16,7 @@ const mainNav = [
   { label: "CRM",        href: "/crm",         icon: "briefcase" },
   { label: "Explorer",   href: "/explorer",    icon: "target" },
   { label: "Segments",   href: "/segments",    icon: "segments" },
-  { label: "Reports",    href: "/reports",     icon: "report" },
+  { label: "Campaigns",  href: "/campaigns",   icon: "zap" },
   { label: "Data",       href: "/data",        icon: "database" },
   { label: "Library",    href: "/library",     icon: "book" },
   { label: "Tools",      href: "/tools",       icon: "wrench" },

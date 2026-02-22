@@ -129,7 +129,10 @@ export async function createSegment(
     console.error(`[segmentation] Assignment failed: ${assignErr.message}`);
   }
 
-  const membersAssigned = (assignResult as { assigned: number })?.assigned ?? 0;
+  // The RPC returns either a plain integer (migration 029) or { assigned: N } (migration 021)
+  const membersAssigned = typeof assignResult === "number"
+    ? assignResult
+    : (assignResult as { assigned: number })?.assigned ?? 0;
 
   return {
     ...(segment as unknown as Segment),

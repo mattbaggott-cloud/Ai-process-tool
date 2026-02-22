@@ -1033,6 +1033,108 @@ export interface EmailGeneratedContent {
   updated_at: string;
 }
 
+/* ── Campaign Engine types ─────────────────────────────── */
+
+export type CampaignType = "per_customer" | "broadcast" | "sequence";
+export type CampaignStatus = "draft" | "generating" | "review" | "approved" | "sending" | "sent" | "paused" | "cancelled" | "failed";
+export type VariantStatus = "draft" | "approved" | "edited" | "rejected" | "sending" | "sent" | "failed";
+export type DeliveryStatus = "pending" | "sent" | "delivered" | "opened" | "clicked" | "bounced" | "failed";
+export type DeliveryChannel = "klaviyo" | "mailchimp" | "sendgrid" | "salesloft";
+export type CampaignEmailType = "promotional" | "win_back" | "nurture" | "announcement" | "welcome" | "follow_up" | "custom";
+
+export interface EmailCampaign {
+  id: string;
+  org_id: string;
+  name: string;
+  campaign_type: CampaignType;
+  segment_id: string | null;
+  status: CampaignStatus;
+  email_type: CampaignEmailType;
+  prompt_used: string | null;
+  delivery_channel: DeliveryChannel;
+  delivery_config: Record<string, unknown>;
+  template_id: string | null;
+  total_variants: number;
+  approved_count: number;
+  sent_count: number;
+  failed_count: number;
+  stats: Record<string, unknown>;
+  has_strategy: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmailCustomerVariant {
+  id: string;
+  org_id: string;
+  campaign_id: string;
+  ecom_customer_id: string | null;
+  customer_email: string;
+  customer_name: string | null;
+  subject_line: string | null;
+  preview_text: string | null;
+  body_html: string | null;
+  body_text: string | null;
+  personalization_context: Record<string, unknown>;
+  status: VariantStatus;
+  edited_content: Record<string, unknown> | null;
+  strategy_group_id: string | null;
+  step_number: number;
+  delivery_id: string | null;
+  delivery_status: DeliveryStatus;
+  delivery_metrics: Record<string, unknown>;
+  reviewed_at: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmailSequenceStep {
+  id: string;
+  org_id: string;
+  campaign_id: string;
+  step_number: number;
+  delay_days: number;
+  email_type: CampaignEmailType;
+  prompt: string | null;
+  subject_template: string | null;
+  status: "draft" | "generating" | "review" | "sending" | "sent";
+  created_at: string;
+  updated_at: string;
+}
+
+/* ── Campaign Strategy types ──────────────────────────── */
+
+export interface StrategySequenceStep {
+  step_number: number;
+  delay_days: number;
+  email_type: string;
+  prompt: string;
+  subject_hint?: string;
+}
+
+export interface CampaignStrategyGroup {
+  id: string;
+  org_id: string;
+  campaign_id: string;
+  group_name: string;
+  group_description: string | null;
+  ai_reasoning: string | null;
+  filter_criteria: Record<string, unknown>;
+  customer_ids: string[];
+  customer_count: number;
+  sequence_steps: StrategySequenceStep[];
+  total_emails: number;
+  sort_order: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /* ── Workflow Builder types ────────────────────────────── */
 
 export type WorkflowNodeType = "start" | "end" | "process" | "decision" | "ai_agent" | "note";

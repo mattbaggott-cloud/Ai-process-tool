@@ -116,10 +116,13 @@ export default function FullChat({ projectId, initialMessages }: Props) {
         .filter((f) => f.textContent !== null)
         .map((f) => ({ name: f.name, content: f.textContent! }));
 
-      // Read active report context if on reports page
-      const activeReport = (window as unknown as Record<string, unknown>).__activeReport ?? null;
+      // Read active segment context if on segments page
+      const activeSegment = (window as unknown as Record<string, unknown>).__activeSegment ?? null;
 
       try {
+        const abortController = new AbortController();
+        const abortTimeout = setTimeout(() => abortController.abort(), 5 * 60 * 1000); // 5 min timeout
+
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -127,9 +130,12 @@ export default function FullChat({ projectId, initialMessages }: Props) {
             messages: updatedMessages,
             currentPage: pathname,
             chatFileContents,
-            activeReport,
+            activeSegment,
           }),
+          signal: abortController.signal,
         });
+
+        clearTimeout(abortTimeout);
 
         if (!res.ok) {
           const errText = await res.text();
@@ -165,6 +171,21 @@ export default function FullChat({ projectId, initialMessages }: Props) {
           });
         }
 
+        /* If streaming completed but produced no content, replace with error */
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && !last.content.trim()) {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: "No response was generated. Please try rephrasing your question.",
+            };
+            finalMessages = updated;
+            return updated;
+          }
+          return prev;
+        });
+
         /* Save after streaming completes */
         if (finalMessages.length > 0) {
           saveMessages(finalMessages);
@@ -172,12 +193,15 @@ export default function FullChat({ projectId, initialMessages }: Props) {
 
         window.dispatchEvent(new Event("workspace-updated"));
         setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
-      } catch {
+      } catch (err) {
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
         const errorMsgs = [
           ...updatedMessages,
           {
             role: "assistant" as const,
-            content: "Sorry, something went wrong. Please try again.",
+            content: isAbort
+              ? "Request timed out — this question may require too many steps. Try breaking it into simpler parts."
+              : "Sorry, something went wrong. Please try again.",
           },
         ];
         setMessages(errorMsgs);

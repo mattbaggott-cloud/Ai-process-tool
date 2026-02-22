@@ -75,8 +75,6 @@ const TOOL_TO_ACTION: Record<string, string> = {
   add_deal_line_item: "crm.deal.line_item.add",
   add_company_asset: "crm.company.asset.add",
   import_data: "data.import",
-  create_report: "crm.report.create",
-  update_report: "crm.report.update",
 
   // Tool catalog
   search_tool_catalog: "tools.catalog.search",
@@ -91,6 +89,13 @@ const TOOL_TO_ACTION: Record<string, string> = {
   // Workflows
   generate_workflow: "workflows.generate",
   generate_workflow_from_document: "workflows.generate_from_document",
+
+  // Campaign Engine
+  generate_campaign: "email.campaign.generate",
+  send_campaign: "email.campaign.send",
+  create_sequence: "email.sequence.create",
+  get_campaign_status: "email.campaign.status",
+  plan_campaign_strategy: "email.campaign.strategy.plan",
 };
 
 /* ── In-Memory Cache ── */

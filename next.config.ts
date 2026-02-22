@@ -25,7 +25,7 @@ if (existsSync(envPath)) {
 }
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  devIndicators: false, // hide "Rendering" indicator in dev mode
 };
 
 export default nextConfig;

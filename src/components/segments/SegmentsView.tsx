@@ -91,6 +91,8 @@ export default function SegmentsView() {
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [childSegments, setChildSegments] = useState<SegmentWithMembers[]>([]);
+  const [memberPage, setMemberPage] = useState(1);
+  const MEMBERS_PER_PAGE = 50;
 
   // Compute state
   const [computing, setComputing] = useState(false);
@@ -188,22 +190,19 @@ export default function SegmentsView() {
 
   /* ── Open segment detail ─────────────────────────────── */
 
-  const openSegment = async (segment: SegmentWithMembers) => {
-    setActiveSegment(segment);
-    setView("detail");
+  const loadMembers = async (segmentId: string, page: number) => {
     setMembersLoading(true);
+    const offset = (page - 1) * MEMBERS_PER_PAGE;
 
-    // Load members with customer info
     const { data: memberData } = await supabase
       .from("segment_members")
       .select("id, ecom_customer_id, score, assigned_at")
       .eq("org_id", orgId)
-      .eq("segment_id", segment.id)
+      .eq("segment_id", segmentId)
       .order("score", { ascending: false })
-      .limit(50);
+      .range(offset, offset + MEMBERS_PER_PAGE - 1);
 
     if (memberData && memberData.length > 0) {
-      // Fetch customer details
       const customerIds = memberData.map((m) => m.ecom_customer_id as string);
       const { data: customers } = await supabase
         .from("ecom_customers")
@@ -231,6 +230,25 @@ export default function SegmentsView() {
     } else {
       setMembers([]);
     }
+    setMembersLoading(false);
+  };
+
+  const openSegment = async (segment: SegmentWithMembers) => {
+    setActiveSegment(segment);
+    setView("detail");
+    setMemberPage(1);
+
+    // Expose to chat so AI knows which segment the user is viewing
+    (window as unknown as Record<string, unknown>).__activeSegment = {
+      id: segment.id,
+      name: segment.name,
+      segment_type: segment.segment_type,
+      member_count: segment.member_count ?? segment.customer_count ?? 0,
+      description: segment.description,
+    };
+
+    // Load first page of members
+    await loadMembers(segment.id, 1);
 
     // Load child segments
     const { data: children } = await supabase
@@ -241,7 +259,12 @@ export default function SegmentsView() {
       .order("created_at", { ascending: false });
 
     setChildSegments((children ?? []) as unknown as SegmentWithMembers[]);
-    setMembersLoading(false);
+  };
+
+  const handleMemberPageChange = (newPage: number) => {
+    if (!activeSegment) return;
+    setMemberPage(newPage);
+    loadMembers(activeSegment.id, newPage);
   };
 
   /* ── Delete segment ──────────────────────────────────── */
@@ -250,7 +273,7 @@ export default function SegmentsView() {
     // Delete members first, then segment
     await supabase.from("segment_members").delete().eq("segment_id", id);
     await supabase.from("segments").delete().eq("id", id);
-    if (view === "detail") setView("list");
+    if (view === "detail") { setView("list"); (window as unknown as Record<string, unknown>).__activeSegment = null; }
     loadSegments();
   };
 
@@ -302,7 +325,7 @@ export default function SegmentsView() {
         <div className="crm-content">
           <div className="crm-tab-content">
             <div className="crm-toolbar">
-              <button className="btn btn-sm" onClick={() => setView("list")}>
+              <button className="btn btn-sm" onClick={() => { setView("list"); (window as unknown as Record<string, unknown>).__activeSegment = null; }}>
                 &larr; All Segments
               </button>
               <h2 className="crm-report-viewer-title">{activeSegment.name}</h2>
@@ -389,39 +412,70 @@ export default function SegmentsView() {
 
             {/* Members table */}
             <div style={{ marginTop: 16 }}>
-              <div className="seg-section-title">Members{members.length > 0 ? ` (${members.length}${(activeSegment.member_count ?? 0) > 50 ? " of " + activeSegment.member_count : ""})` : ""}</div>
-              {membersLoading ? (
-                <div className="crm-loading">Loading members...</div>
-              ) : members.length === 0 ? (
-                <div className="crm-empty">
-                  No members in this segment. Use the AI Copilot to compute behavioral profiles and assign members.
-                </div>
-              ) : (
-                <div className="crm-table-wrap">
-                  <table className="crm-table">
-                    <thead>
-                      <tr>
-                        <th>Customer</th>
-                        <th>Email</th>
-                        <th>Score</th>
-                        <th>Assigned</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {members.map((m) => (
-                        <tr key={m.id} className="crm-table-row">
-                          <td className="crm-cell-name">{m.customer_name}</td>
-                          <td>{m.customer_email}</td>
-                          <td>
-                            <span className="seg-score-badge">{m.score?.toFixed(1) ?? "—"}</span>
-                          </td>
-                          <td className="crm-cell-date">{fmtRelative(m.assigned_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              {(() => {
+                const totalMembers = activeSegment.member_count ?? 0;
+                const totalPages = Math.ceil(totalMembers / MEMBERS_PER_PAGE);
+                const startIdx = (memberPage - 1) * MEMBERS_PER_PAGE + 1;
+                const endIdx = Math.min(memberPage * MEMBERS_PER_PAGE, totalMembers);
+                return (
+                  <>
+                    <div className="seg-section-title">
+                      Members{totalMembers > 0 ? ` (${startIdx}–${endIdx} of ${totalMembers.toLocaleString()})` : ""}
+                    </div>
+                    {membersLoading ? (
+                      <div className="crm-loading">Loading members...</div>
+                    ) : members.length === 0 ? (
+                      <div className="crm-empty">
+                        No members in this segment. Use the AI Copilot to compute behavioral profiles and assign members.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="crm-table-wrap">
+                          <table className="crm-table">
+                            <thead>
+                              <tr>
+                                <th>Customer</th>
+                                <th>Email</th>
+                                <th>Score</th>
+                                <th>Assigned</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {members.map((m) => (
+                                <tr key={m.id} className="crm-table-row">
+                                  <td className="crm-cell-name">{m.customer_name}</td>
+                                  <td>{m.customer_email}</td>
+                                  <td>
+                                    <span className="seg-score-badge">{m.score?.toFixed(1) ?? "—"}</span>
+                                  </td>
+                                  <td className="crm-cell-date">{fmtRelative(m.assigned_at)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {totalPages > 1 && (
+                          <div className="campaign-pagination" style={{ marginTop: 12 }}>
+                            <button
+                              disabled={memberPage <= 1}
+                              onClick={() => handleMemberPageChange(memberPage - 1)}
+                            >
+                              Prev
+                            </button>
+                            <span>Page {memberPage} of {totalPages}</span>
+                            <button
+                              disabled={memberPage >= totalPages}
+                              onClick={() => handleMemberPageChange(memberPage + 1)}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
