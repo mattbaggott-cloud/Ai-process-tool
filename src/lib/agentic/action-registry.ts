@@ -91,11 +91,12 @@ const TOOL_TO_ACTION: Record<string, string> = {
   generate_workflow_from_document: "workflows.generate_from_document",
 
   // Campaign Engine
-  generate_campaign: "email.campaign.generate",
+  create_campaign: "email.campaign.create",
+  generate_campaign: "email.campaign.create",          // legacy alias
+  plan_campaign_strategy: "email.campaign.create",     // legacy alias
+  create_sequence: "email.campaign.create",            // legacy alias
   send_campaign: "email.campaign.send",
-  create_sequence: "email.sequence.create",
   get_campaign_status: "email.campaign.status",
-  plan_campaign_strategy: "email.campaign.strategy.plan",
 };
 
 /* ── In-Memory Cache ── */

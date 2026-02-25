@@ -150,6 +150,11 @@ async function handleGetMembers(
     return NextResponse.json({ error: "groupId is required" }, { status: 400 });
   }
 
+  // Handle synthetic group for non-strategy campaigns
+  if (groupId === "synthetic") {
+    return handleSyntheticMembers(supabase, orgId, campaignId, page, limit);
+  }
+
   // Load the strategy group to get customer_ids
   const { data: group, error: groupErr } = await supabase
     .from("campaign_strategy_groups")
@@ -192,6 +197,113 @@ async function handleGetMembers(
   );
 
   // Build enriched member list (preserve order from customer_ids)
+  const customerMap = new Map(
+    (customers ?? []).map((c) => [c.id, c])
+  );
+
+  const members = pageIds
+    .map((id) => {
+      const c = customerMap.get(id);
+      if (!c) return null;
+      const p = profileMap.get(id);
+      return {
+        id: c.id,
+        email: c.email,
+        name: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email?.split("@")[0] || "—",
+        orders_count: c.orders_count ?? 0,
+        total_spent: c.total_spent ?? 0,
+        lifecycle_stage: p?.lifecycle_stage ?? null,
+        rfm_score: p
+          ? `${p.recency_score ?? "—"}-${p.frequency_score ?? "—"}-${p.monetary_score ?? "—"}`
+          : null,
+        top_product: p?.top_product_title ?? null,
+      };
+    })
+    .filter(Boolean);
+
+  return NextResponse.json({ members, total, page, totalPages });
+}
+
+/**
+ * Handle member listing for non-strategy campaigns (synthetic group).
+ * Falls back to: segment members → campaign variant customers → all customers.
+ */
+async function handleSyntheticMembers(
+  supabase: SupabaseClient,
+  orgId: string,
+  campaignId: string,
+  page: number,
+  limit: number
+) {
+  // Load campaign to check for segment
+  const { data: campaign } = await supabase
+    .from("email_campaigns")
+    .select("segment_id")
+    .eq("id", campaignId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (!campaign) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+
+  let allIds: string[] = [];
+
+  if (campaign.segment_id) {
+    // Load member IDs from segment
+    const { data: members } = await supabase
+      .from("segment_members")
+      .select("ecom_customer_id")
+      .eq("segment_id", campaign.segment_id)
+      .eq("org_id", orgId);
+    allIds = (members ?? []).map((m) => m.ecom_customer_id as string);
+  } else {
+    // No segment — use variant customer IDs if available
+    const { data: variants } = await supabase
+      .from("email_customer_variants")
+      .select("ecom_customer_id")
+      .eq("campaign_id", campaignId)
+      .eq("org_id", orgId);
+
+    if (variants && variants.length > 0) {
+      allIds = [...new Set(variants.map((v) => v.ecom_customer_id as string))];
+    } else {
+      // Last resort: all customers
+      const { data: customers } = await supabase
+        .from("ecom_customers")
+        .select("id")
+        .eq("org_id", orgId)
+        .limit(1000);
+      allIds = (customers ?? []).map((c) => c.id as string);
+    }
+  }
+
+  const total = allIds.length;
+  const totalPages = Math.ceil(total / limit);
+  const offset = (page - 1) * limit;
+  const pageIds = allIds.slice(offset, offset + limit);
+
+  if (pageIds.length === 0) {
+    return NextResponse.json({ members: [], total, page, totalPages });
+  }
+
+  // Fetch customer details (same pattern as handleGetMembers)
+  const { data: customers } = await supabase
+    .from("ecom_customers")
+    .select("id, email, first_name, last_name, orders_count, total_spent")
+    .in("id", pageIds)
+    .eq("org_id", orgId);
+
+  const { data: profiles } = await supabase
+    .from("customer_behavioral_profiles")
+    .select("ecom_customer_id, lifecycle_stage, recency_score, frequency_score, monetary_score, top_product_title")
+    .in("ecom_customer_id", pageIds)
+    .eq("org_id", orgId);
+
+  const profileMap = new Map(
+    (profiles ?? []).map((p) => [p.ecom_customer_id, p])
+  );
+
   const customerMap = new Map(
     (customers ?? []).map((c) => [c.id, c])
   );

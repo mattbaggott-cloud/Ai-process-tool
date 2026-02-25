@@ -171,6 +171,41 @@ const TABLE_MAPPINGS: Record<string, TableGraphMapping> = {
     },
     edges: [],
   },
+
+  /* ── Klaviyo entities ── */
+  klaviyo_profiles: {
+    entity: {
+      entityType: "klaviyo_profiles",
+      labelField: "email",
+      labelBuilder: (r) => {
+        const first = (r.first_name as string) || "";
+        const last = (r.last_name as string) || "";
+        const name = `${first} ${last}`.trim();
+        return name || (r.email as string) || "Unknown Subscriber";
+      },
+      sublabelBuilder: () => "Klaviyo subscriber",
+    },
+    edges: [],
+  },
+  klaviyo_campaigns: {
+    entity: {
+      entityType: "klaviyo_campaigns",
+      labelField: "name",
+      sublabelBuilder: (r) => (r.status as string) || null,
+    },
+    edges: [],
+  },
+  klaviyo_lists: {
+    entity: {
+      entityType: "klaviyo_lists",
+      labelField: "name",
+      sublabelBuilder: (r) => {
+        const count = r.profile_count as number | undefined;
+        return count != null ? `${count} subscribers` : null;
+      },
+    },
+    edges: [],
+  },
 };
 
 /* ── Core sync functions ─────────────────────────────── */

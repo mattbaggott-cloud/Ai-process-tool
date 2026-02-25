@@ -9,7 +9,9 @@ import {
   importCampaignMetrics,
   importCampaignTemplates,
   logSync,
+  syncGraphNodes,
 } from "@/lib/klaviyo/sync-service";
+import { triggerPostSyncResolution } from "@/lib/identity/post-sync-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -138,6 +140,26 @@ export async function POST() {
               error: stepError instanceof Error ? stepError.message : "Step failed",
             });
           }
+        }
+
+        // ── Post-sync: Graph nodes + Identity resolution ──
+
+        try {
+          const graphCounts = await syncGraphNodes(supabase, orgId);
+          await logSync(supabase, user.id, orgId, connector.id as string, "info",
+            `Graph nodes synced: ${graphCounts.profiles} profiles, ${graphCounts.campaigns} campaigns, ${graphCounts.lists} lists`);
+        } catch (postSyncError) {
+          console.error("Post-sync graph error (non-fatal):", postSyncError);
+        }
+
+        try {
+          const idResult = await triggerPostSyncResolution(supabase, orgId, user.id);
+          if (idResult.totalCandidates > 0) {
+            await logSync(supabase, user.id, orgId, connector.id as string, "info",
+              `Identity resolution: ${idResult.autoApplied} auto-applied, ${idResult.pendingReview} pending review`);
+          }
+        } catch (resError) {
+          console.error("Post-sync identity resolution error (non-fatal):", resError);
         }
 
         // Update last_sync_at

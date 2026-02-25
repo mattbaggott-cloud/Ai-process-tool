@@ -9,6 +9,7 @@ import {
   syncGraphNodes,
   logSync,
 } from "@/lib/shopify/sync-service";
+import { triggerPostSyncResolution } from "@/lib/identity/post-sync-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -126,16 +127,25 @@ export async function POST() {
           }
         }
 
-        // ── Post-sync: Graph nodes + Identity linking ──
+        // ── Post-sync: Graph nodes + Identity resolution ──
         // These run silently (no SSE step) as fast finalization
 
         try {
-          // Create/update graph nodes for all synced entities
           const graphCounts = await syncGraphNodes(supabase, orgId);
           await logSync(supabase, user.id, orgId, connector.id, "info",
             `Graph nodes synced: ${graphCounts.customers} customers, ${graphCounts.orders} orders, ${graphCounts.products} products`);
         } catch (postSyncError) {
-          console.error("Post-sync error (non-fatal):", postSyncError);
+          console.error("Post-sync graph error (non-fatal):", postSyncError);
+        }
+
+        try {
+          const idResult = await triggerPostSyncResolution(supabase, orgId, user.id);
+          if (idResult.totalCandidates > 0) {
+            await logSync(supabase, user.id, orgId, connector.id, "info",
+              `Identity resolution: ${idResult.autoApplied} auto-applied, ${idResult.pendingReview} pending review`);
+          }
+        } catch (resError) {
+          console.error("Post-sync identity resolution error (non-fatal):", resError);
         }
 
         // Update last_sync_at

@@ -448,6 +448,52 @@ body {
   50% { opacity: 0.4; }
 }
 
+/* ── Progress Indicator (Claude-style) ──────────────────── */
+
+.ai-progress-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.ai-progress-sparkle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--color-primary-400) 0%, var(--color-primary-200) 50%, transparent 70%);
+  animation: sparkle-pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes sparkle-pulse {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.ai-progress-text {
+  font-size: 13px;
+  color: var(--color-gray-500);
+  animation: progress-fade-in 0.3s ease-out;
+}
+
+@keyframes progress-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .ai-msg-sender {
   display: flex;
   align-items: center;

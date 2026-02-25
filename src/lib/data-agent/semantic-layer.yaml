@@ -1,0 +1,273 @@
+# ============================================================
+# Semantic Layer — Business Terms → SQL Mappings
+#
+# Maps natural language to SQL conditions so the AI generates
+# accurate queries without guessing column names or business logic.
+#
+# To add new platforms: add domain config + relevant terms.
+# The schema introspector handles column discovery automatically.
+# ============================================================
+
+domains:
+  ecommerce:
+    tables:
+      - ecom_customers
+      - ecom_orders
+      - ecom_products
+    description: "B2C customer data from Shopify — orders, products, customer profiles"
+    primary_table: ecom_customers
+
+  crm:
+    tables:
+      - crm_contacts
+      - crm_companies
+      - crm_deals
+      - crm_activities
+      - crm_deal_line_items
+      - crm_company_assets
+    description: "B2B CRM data from HubSpot — contacts, companies, deals, activities"
+    primary_table: crm_contacts
+
+  campaigns:
+    tables:
+      - email_campaigns
+      - email_customer_variants
+      - campaign_strategy_groups
+    description: "Email marketing campaigns and per-customer variant tracking"
+    primary_table: email_campaigns
+
+  behavioral:
+    tables:
+      - customer_behavioral_profiles
+      - segments
+      - segment_members
+    description: "AI-computed customer behavior — lifecycle stages, RFM scores, engagement, segments"
+    primary_table: customer_behavioral_profiles
+
+  identity:
+    tables:
+      - customer_identity_links
+    description: "Identity resolution — links B2C ecommerce customers to B2B CRM contacts"
+    primary_table: customer_identity_links
+
+# ─── Business Terms ───────────────────────────────────
+
+terms:
+  # Customer value tiers
+  - terms: ["VIP", "high value", "top customer", "best customer", "whale"]
+    sql_condition: "total_spent > 500"
+    table: ecom_customers
+    description: "Customers with total spend above $500"
+
+  - terms: ["new customer", "first-time buyer", "new"]
+    sql_condition: "orders_count = 1"
+    table: ecom_customers
+    description: "Customers with exactly 1 order"
+
+  - terms: ["repeat customer", "returning customer", "loyal"]
+    sql_condition: "orders_count > 1"
+    table: ecom_customers
+    description: "Customers with more than 1 order"
+
+  - terms: ["inactive", "churned", "lost"]
+    sql_condition: "lifecycle_stage IN ('lapsed', 'churned')"
+    table: customer_behavioral_profiles
+    description: "Customers who stopped purchasing"
+
+  - terms: ["at risk", "at-risk", "about to churn"]
+    sql_condition: "lifecycle_stage = 'at_risk'"
+    table: customer_behavioral_profiles
+    description: "Customers showing signs of leaving"
+
+  - terms: ["champion", "best", "most engaged"]
+    sql_condition: "lifecycle_stage = 'champion'"
+    table: customer_behavioral_profiles
+    description: "Highest-value, most-engaged customers"
+
+  - terms: ["active", "engaged"]
+    sql_condition: "lifecycle_stage IN ('active', 'loyal', 'champion')"
+    table: customer_behavioral_profiles
+    description: "Currently active customers"
+
+  # Product searches in order line items
+  - terms: ["steak", "ribeye", "filet", "sirloin", "strip"]
+    sql_condition: "item->>'title' ILIKE '%{term}%'"
+    table: ecom_orders
+    description: "Orders containing specific meat products — requires jsonb_array_elements(line_items)"
+
+  - terms: ["seafood", "salmon", "shrimp", "lobster", "crab"]
+    sql_condition: "item->>'title' ILIKE '%{term}%'"
+    table: ecom_orders
+    description: "Orders containing seafood products — requires jsonb_array_elements(line_items)"
+
+  # Deal stages (CRM)
+  - terms: ["open deal", "active deal", "in pipeline"]
+    sql_condition: "stage NOT IN ('closed_won', 'closed_lost')"
+    table: crm_deals
+    description: "Deals still in the pipeline"
+
+  - terms: ["won deal", "closed won", "won"]
+    sql_condition: "stage = 'closed_won'"
+    table: crm_deals
+    description: "Deals that were won"
+
+  - terms: ["lost deal", "closed lost", "lost"]
+    sql_condition: "stage = 'closed_lost'"
+    table: crm_deals
+    description: "Deals that were lost"
+
+  - terms: ["negotiation", "in negotiation"]
+    sql_condition: "stage = 'negotiation'"
+    table: crm_deals
+    description: "Deals in negotiation stage"
+
+  # Campaign status
+  - terms: ["sent campaign", "delivered campaign"]
+    sql_condition: "delivery_status IN ('sent', 'delivered')"
+    table: email_customer_variants
+    description: "Campaign variants that were sent or delivered"
+
+  - terms: ["opened", "email opened"]
+    sql_condition: "delivery_status = 'opened'"
+    table: email_customer_variants
+    description: "Campaign variants that were opened"
+
+  - terms: ["bounced", "email bounced"]
+    sql_condition: "delivery_status = 'bounced'"
+    table: email_customer_variants
+    description: "Campaign variants that bounced"
+
+# ─── Metric Definitions ──────────────────────────────
+
+metrics:
+  - name: "average_order_value"
+    aliases: ["AOV", "average order value", "average order", "avg order value"]
+    sql_expression: "AVG(total_price::numeric)"
+    table: ecom_orders
+    description: "Average dollar value per order"
+
+  - name: "total_revenue"
+    aliases: ["total revenue", "total sales", "revenue"]
+    sql_expression: "SUM(total_price::numeric)"
+    table: ecom_orders
+    description: "Sum of all order values"
+
+  - name: "order_count"
+    aliases: ["number of orders", "order count", "how many orders"]
+    sql_expression: "COUNT(*)"
+    table: ecom_orders
+    description: "Count of orders"
+
+  - name: "customer_count"
+    aliases: ["number of customers", "customer count", "how many customers"]
+    sql_expression: "COUNT(DISTINCT id)"
+    table: ecom_customers
+    description: "Count of unique customers"
+
+  - name: "deal_pipeline_value"
+    aliases: ["pipeline value", "total pipeline", "deal value"]
+    sql_expression: "SUM(value::numeric)"
+    table: crm_deals
+    description: "Sum of all deal values"
+
+  - name: "open_rate"
+    aliases: ["open rate", "email open rate"]
+    sql_expression: "ROUND(COUNT(*) FILTER (WHERE delivery_status = 'opened')::numeric / NULLIF(COUNT(*) FILTER (WHERE delivery_status IN ('sent','delivered','opened','clicked')), 0) * 100, 1)"
+    table: email_customer_variants
+    description: "Percentage of sent emails that were opened"
+
+# ─── Relationship Paths (JOIN instructions) ──────────
+
+relationships:
+  - from_table: ecom_customers
+    to_table: ecom_orders
+    join_sql: "JOIN ecom_orders o ON o.customer_id = c.id AND o.org_id = c.org_id"
+    description: "Customer to their orders"
+
+  - from_table: ecom_customers
+    to_table: customer_behavioral_profiles
+    join_sql: "JOIN customer_behavioral_profiles bp ON bp.ecom_customer_id = c.id AND bp.org_id = c.org_id"
+    description: "Customer to their behavioral profile (lifecycle, RFM, engagement)"
+
+  - from_table: ecom_customers
+    to_table: segment_members
+    join_sql: "JOIN segment_members sm ON sm.ecom_customer_id = c.id AND sm.org_id = c.org_id"
+    description: "Customer to their segment memberships"
+
+  - from_table: segment_members
+    to_table: segments
+    join_sql: "JOIN segments s ON s.id = sm.segment_id AND s.org_id = sm.org_id"
+    description: "Segment membership to segment definition"
+
+  - from_table: ecom_customers
+    to_table: email_customer_variants
+    join_sql: "JOIN email_customer_variants ecv ON ecv.ecom_customer_id = c.id AND ecv.org_id = c.org_id"
+    description: "Customer to their campaign variants"
+
+  - from_table: email_customer_variants
+    to_table: email_campaigns
+    join_sql: "JOIN email_campaigns ec ON ec.id = ecv.campaign_id AND ec.org_id = ecv.org_id"
+    description: "Campaign variant to campaign definition"
+
+  - from_table: ecom_customers
+    to_table: customer_identity_links
+    join_sql: "JOIN customer_identity_links cil ON cil.ecom_customer_id = c.id AND cil.org_id = c.org_id"
+    description: "Ecommerce customer to identity link"
+
+  - from_table: customer_identity_links
+    to_table: crm_contacts
+    join_sql: "JOIN crm_contacts cc ON cc.id = cil.crm_contact_id AND cc.org_id = cil.org_id"
+    description: "Identity link to CRM contact (B2B ↔ B2C bridge)"
+
+  - from_table: crm_contacts
+    to_table: crm_companies
+    join_sql: "JOIN crm_companies comp ON comp.id = cc.company_id AND comp.org_id = cc.org_id"
+    description: "CRM contact to their company"
+
+  - from_table: crm_contacts
+    to_table: crm_deals
+    join_sql: "JOIN crm_deals d ON d.contact_id = cc.id AND d.org_id = cc.org_id"
+    description: "CRM contact to their deals"
+
+  - from_table: crm_deals
+    to_table: crm_deal_line_items
+    join_sql: "JOIN crm_deal_line_items dli ON dli.deal_id = d.id AND dli.org_id = d.org_id"
+    description: "Deal to its line items/products"
+
+  - from_table: crm_contacts
+    to_table: crm_activities
+    join_sql: "JOIN crm_activities ca ON ca.contact_id = cc.id AND ca.org_id = cc.org_id"
+    description: "CRM contact to their logged activities"
+
+# ─── JSONB Access Patterns ────────────────────────────
+
+jsonb_patterns:
+  - table: ecom_customers
+    column: default_address
+    keys: [address1, address2, city, province, zip, country, phone, company]
+    access_pattern: "default_address->>'KEY'"
+    description: "Customer shipping address. Replace KEY with field name: default_address->>'zip', default_address->>'city', etc."
+
+  - table: ecom_orders
+    column: shipping_address
+    keys: [address1, address2, city, province, zip, country]
+    access_pattern: "shipping_address->>'KEY'"
+    description: "Order shipping address. Replace KEY with field name."
+
+  - table: ecom_orders
+    column: line_items
+    keys: [title, quantity, price, sku, variant_id, variant_title]
+    access_pattern: "jsonb_array_elements(line_items)"
+    description: "Order line items. Unnest with: jsonb_array_elements(line_items) AS item, then access item->>'title', (item->>'price')::numeric, etc."
+
+  - table: ecom_customers
+    column: tags
+    keys: []
+    access_pattern: "tags"
+    description: "Customer tags array. Filter with: 'tag_value' = ANY(tags)"
+
+  - table: customer_behavioral_profiles
+    column: product_affinities
+    keys: [product_title, product_type, purchase_count, pct_of_orders]
+    access_pattern: "jsonb_array_elements(product_affinities)"
+    description: "Customer product affinities. Unnest with jsonb_array_elements(product_affinities) AS pa."

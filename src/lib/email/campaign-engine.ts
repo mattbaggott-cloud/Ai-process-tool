@@ -32,6 +32,7 @@ export interface CreateCampaignInput {
   name: string;
   campaignType: CampaignType;
   segmentId?: string;
+  customerIds?: string[];
   emailType: CampaignEmailType;
   prompt: string;
   templateId?: string;
@@ -43,6 +44,7 @@ export interface CreateCampaignResult {
   name: string;
   status: string;
   segmentName: string | null;
+  segmentId: string | null;
   customerCount: number;
 }
 
@@ -50,6 +52,7 @@ export interface GenerateVariantsResult {
   campaignId: string;
   totalGenerated: number;
   status: string;
+  skippedNoEmail?: number;
 }
 
 export interface SendCampaignResult {
@@ -194,8 +197,43 @@ export async function createCampaign(
 ): Promise<CreateCampaignResult> {
   let segmentName: string | null = null;
   let customerCount = 0;
+  let autoSegmentId: string | undefined;
 
-  if (input.segmentId) {
+  if (input.customerIds && input.customerIds.length > 0) {
+    // Explicit customer IDs from a data query — create an auto-segment
+    const { data: autoSegment, error: segCreateErr } = await supabase
+      .from("segments")
+      .insert({
+        org_id: orgId,
+        name: `Auto: ${input.name}`,
+        description: `Auto-created for campaign targeting ${input.customerIds.length} specific customers`,
+        segment_type: "manual",
+        rules: { type: "rule", field: "id", operator: "in", value: "direct" },
+        customer_count: input.customerIds.length,
+        status: "active",
+      })
+      .select("id")
+      .single();
+
+    if (segCreateErr || !autoSegment) {
+      throw new Error(`Failed to create auto-segment: ${segCreateErr?.message}`);
+    }
+
+    autoSegmentId = autoSegment.id as string;
+
+    // Populate segment members in batches
+    const memberRows = input.customerIds.map((custId) => ({
+      org_id: orgId,
+      segment_id: autoSegmentId!,
+      ecom_customer_id: custId,
+    }));
+    for (let i = 0; i < memberRows.length; i += 500) {
+      await supabase.from("segment_members").insert(memberRows.slice(i, i + 500));
+    }
+
+    segmentName = `${input.customerIds.length} targeted customers`;
+    customerCount = input.customerIds.length;
+  } else if (input.segmentId) {
     // Validate segment exists
     const { data: segment, error: segErr } = await supabase
       .from("segments")
@@ -229,7 +267,7 @@ export async function createCampaign(
       org_id: orgId,
       name: input.name,
       campaign_type: input.campaignType,
-      segment_id: input.segmentId ?? null,
+      segment_id: autoSegmentId ?? input.segmentId ?? null,
       status: "draft",
       email_type: input.emailType,
       prompt_used: input.prompt,
@@ -250,6 +288,7 @@ export async function createCampaign(
     name: input.name,
     status: "draft",
     segmentName,
+    segmentId: (autoSegmentId ?? input.segmentId ?? null) as string | null,
     customerCount,
   };
 }
@@ -297,16 +336,34 @@ export async function generateCampaignVariants(
       .single();
 
     // Load customer contexts — from segment if available, otherwise all customers
+    // Also count the total before email filtering so we can report skipped customers
+    let totalCustomersBefore = 0;
+    if (camp.segment_id) {
+      const { count } = await supabase
+        .from("segment_members")
+        .select("*", { count: "exact", head: true })
+        .eq("segment_id", camp.segment_id);
+      totalCustomersBefore = count ?? 0;
+    } else {
+      const { count } = await supabase
+        .from("ecom_customers")
+        .select("*", { count: "exact", head: true })
+        .eq("org_id", orgId);
+      totalCustomersBefore = count ?? 0;
+    }
+
     const customers = camp.segment_id
       ? await loadSegmentCustomerContexts(supabase, orgId, camp.segment_id)
       : await loadAllCustomerContexts(supabase, orgId);
+
+    const skippedNoEmail = totalCustomersBefore - customers.length;
 
     if (customers.length === 0) {
       await supabase
         .from("email_campaigns")
         .update({ status: "review", total_variants: 0, updated_at: new Date().toISOString() })
         .eq("id", campaignId);
-      return { campaignId, totalGenerated: 0, status: "review" };
+      return { campaignId, totalGenerated: 0, status: "review", skippedNoEmail: skippedNoEmail > 0 ? skippedNoEmail : undefined };
     }
 
     onProgress?.({ type: "progress", current: 0, total: customers.length });
@@ -594,7 +651,7 @@ export async function generateCampaignVariants(
       })
       .eq("id", campaignId);
 
-    return { campaignId, totalGenerated, status: "review" };
+    return { campaignId, totalGenerated, status: "review", skippedNoEmail: skippedNoEmail > 0 ? skippedNoEmail : undefined };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Unknown error";
     await supabase
@@ -820,6 +877,7 @@ export async function planCampaignStrategy(
   input: {
     name: string;
     segmentId?: string;
+    customerIds?: string[];
     strategyPrompt: string;
     emailType?: CampaignEmailType;
     deliveryChannel?: DeliveryChannel;
@@ -834,7 +892,36 @@ export async function planCampaignStrategy(
   let segmentName = "All Customers";
   let customers: CustomerContext[];
 
-  if (input.segmentId) {
+  if (input.customerIds && input.customerIds.length > 0) {
+    // Explicit customer IDs — create an auto-segment so existing segment path handles it
+    const { data: autoSegment } = await supabase
+      .from("segments")
+      .insert({
+        org_id: orgId,
+        name: `Auto: ${input.name}`,
+        description: `Auto-created for strategic campaign targeting ${input.customerIds.length} customers`,
+        segment_type: "manual",
+        rules: { type: "rule", field: "id", operator: "in", value: "direct" },
+        customer_count: input.customerIds.length,
+        status: "active",
+      })
+      .select("id")
+      .single();
+
+    if (autoSegment) {
+      const memberRows = input.customerIds.map((custId) => ({
+        org_id: orgId,
+        segment_id: autoSegment.id as string,
+        ecom_customer_id: custId,
+      }));
+      for (let i = 0; i < memberRows.length; i += 500) {
+        await supabase.from("segment_members").insert(memberRows.slice(i, i + 500));
+      }
+      input.segmentId = autoSegment.id as string;
+    }
+    segmentName = `${input.customerIds.length} targeted customers`;
+    customers = await loadSegmentCustomerContexts(supabase, orgId, input.segmentId!);
+  } else if (input.segmentId) {
     // 1a. Load segment
     const { data: segment, error: segErr } = await supabase
       .from("segments")
@@ -878,7 +965,7 @@ export async function planCampaignStrategy(
       org_id: orgId,
       name: input.name,
       campaign_type: "per_customer" as CampaignType,
-      segment_id: input.segmentId ?? null,
+      segment_id: input.segmentId ?? null,  // may be auto-created from customerIds
       status: "draft",
       email_type: input.emailType || "custom",
       prompt_used: input.strategyPrompt,
@@ -930,6 +1017,24 @@ export async function planCampaignStrategy(
       rfm: c.rfm,
     }));
 
+  // Parse requested email count from strategy prompt (e.g., "3 emails", "a 5-email sequence")
+  const emailCountMatch = input.strategyPrompt.match(/(\d+)\s*(?:-?\s*)?email/i);
+  const requestedEmailCount = emailCountMatch ? parseInt(emailCountMatch[1], 10) : null;
+  const effectiveEmailCount = requestedEmailCount && requestedEmailCount >= 2 && requestedEmailCount <= 10
+    ? requestedEmailCount
+    : 3; // default to 3-step sequences
+
+  // Build dynamic example steps matching the requested count
+  const exampleStepTypes = ["nurture", "promotional", "follow_up", "win_back", "announcement"];
+  const exampleDelays = [0, 3, 7, 14, 21, 28, 35];
+  const exampleSteps = Array.from({ length: effectiveEmailCount }, (_, i) => ({
+    step_number: i + 1,
+    delay_days: exampleDelays[i] ?? (i * 5),
+    email_type: exampleStepTypes[i % exampleStepTypes.length],
+    prompt: `Write email ${i + 1} of ${effectiveEmailCount}...`,
+    subject_hint: `Step ${i + 1} subject line`,
+  }));
+
   const strategyPrompt = `You are an expert email marketing strategist. Analyze this customer base and create a strategic campaign plan with distinct sub-groups.
 
 ## Audience: "${segmentName}" (${customers.length} customers)
@@ -947,11 +1052,14 @@ ${JSON.stringify(sampleCustomers, null, 2)}
 ### User's Strategy Direction:
 ${input.strategyPrompt}
 
+## CRITICAL REQUIREMENT — Email Count:
+Each group MUST have exactly **${effectiveEmailCount} sequence_steps**. ${requestedEmailCount ? `The user specifically requested ${requestedEmailCount} emails.` : `Default to ${effectiveEmailCount} emails per group.`} Do NOT create fewer steps. Every group must have ${effectiveEmailCount} steps with different delay_days, email_type, and prompt.
+
 ## Instructions:
 Create 2-6 distinct sub-groups within this segment. For each group:
 1. Define WHO is in the group (criteria based on available customer data: lifecycle stage, comm style, order count, spend level, product preferences, rfm scores)
 2. Explain WHY this group needs different treatment
-3. Design a sequence of 2-5 emails with specific timing and purpose for each step
+3. Design exactly ${effectiveEmailCount} emails with specific timing and purpose for each step
 
 Respond in this exact JSON format:
 \`\`\`json
@@ -966,22 +1074,7 @@ Respond in this exact JSON format:
         "min_orders": 5,
         "lifecycle_stages": ["champion", "loyal"]
       },
-      "sequence_steps": [
-        {
-          "step_number": 1,
-          "delay_days": 0,
-          "email_type": "nurture",
-          "prompt": "Write a VIP appreciation email...",
-          "subject_hint": "Something exclusive just for you"
-        },
-        {
-          "step_number": 2,
-          "delay_days": 3,
-          "email_type": "promotional",
-          "prompt": "Premium product recommendations...",
-          "subject_hint": "Curated picks based on your taste"
-        }
-      ]
+      "sequence_steps": ${JSON.stringify(exampleSteps, null, 8)}
     }
   ]
 }
@@ -989,7 +1082,9 @@ Respond in this exact JSON format:
 
 IMPORTANT: The filter_criteria should use fields available in the customer data: lifecycle_stages (array), comm_styles (array), min_orders, max_orders, min_total_spent, max_total_spent, min_rfm_recency, max_rfm_recency, product_affinities (array of product name keywords).
 
-Make the groups mutually exclusive when possible. Every customer should fit into exactly one group — include an "Other / General" group if needed to catch remaining customers.`;
+Make the groups mutually exclusive when possible. Every customer should fit into exactly one group — include an "Other / General" group if needed to catch remaining customers.
+
+REMINDER: Each group MUST have exactly ${effectiveEmailCount} sequence_steps. Do not return fewer.`;
 
   // 6. Call Claude to generate the strategy
   const response = await withRateLimitRetry(
@@ -1021,6 +1116,26 @@ Make the groups mutually exclusive when possible. Every customer should fit into
       sequence_steps: StrategySequenceStep[];
     }>;
   };
+
+  // 7b. Enforce minimum step count — pad groups that have fewer steps than requested
+  for (const g of parsed.groups) {
+    const steps = g.sequence_steps || [];
+    if (steps.length < effectiveEmailCount) {
+      console.warn(`[campaign-engine] Group "${g.group_name}" has ${steps.length} steps, padding to ${effectiveEmailCount}`);
+      const lastDelay = steps.length > 0 ? (steps[steps.length - 1].delay_days ?? 0) : 0;
+      while (steps.length < effectiveEmailCount) {
+        const stepNum = steps.length + 1;
+        steps.push({
+          step_number: stepNum,
+          delay_days: lastDelay + (stepNum * 3),
+          email_type: (["follow_up", "nurture", "promotional"] as const)[stepNum % 3],
+          prompt: `Write follow-up email ${stepNum} for ${g.group_name}. Build on the previous emails in the sequence.`,
+          subject_hint: `Follow-up ${stepNum}`,
+        });
+      }
+      g.sequence_steps = steps;
+    }
+  }
 
   // 8. Assign customers to groups based on filter criteria
   const groupResults: Array<{ name: string; customerCount: number; steps: number; reasoning: string }> = [];
@@ -1097,13 +1212,16 @@ Make the groups mutually exclusive when possible. Every customer should fit into
   const unmatched = customers.filter((c) => !assignedCustomerIds.has(c.customerId));
   if (unmatched.length > 0) {
     const unmatchedIds = unmatched.map((c) => c.customerId);
-    const defaultSteps: StrategySequenceStep[] = [{
-      step_number: 1,
-      delay_days: 0,
+    // Catchall group gets same number of steps as other groups
+    const defaultSteps: StrategySequenceStep[] = Array.from({ length: effectiveEmailCount }, (_, idx) => ({
+      step_number: idx + 1,
+      delay_days: idx * 3,
       email_type: input.emailType || "custom",
-      prompt: input.strategyPrompt,
+      prompt: idx === 0
+        ? input.strategyPrompt
+        : `Write follow-up email ${idx + 1} of ${effectiveEmailCount}. Build on the previous emails.`,
       subject_hint: undefined,
-    }];
+    }));
 
     await supabase.from("campaign_strategy_groups").insert({
       org_id: orgId,
@@ -1115,7 +1233,7 @@ Make the groups mutually exclusive when possible. Every customer should fit into
       customer_ids: unmatchedIds,
       customer_count: unmatchedIds.length,
       sequence_steps: defaultSteps,
-      total_emails: unmatchedIds.length,
+      total_emails: unmatchedIds.length * effectiveEmailCount,
       sort_order: parsed.groups.length,
       status: "draft",
     });
@@ -1626,39 +1744,76 @@ ${customerCount > 1 ? `Generate ${customerCount} separate emails, one for each c
 /* ── Internal: Response Parsing ────────────────────────── */
 
 function parseMultiCustomerResponse(text: string, expectedCount: number): ParsedEmail[] {
-  // Split by === EMAIL N === markers
-  const emailBlocks = text.split(/===\s*EMAIL\s*\d+\s*===/i).filter((b) => b.trim());
+  // Discard any preamble text before the first === EMAIL N === marker.
+  // Claude often starts with intro text before the markers, which causes
+  // .split() to produce a non-email first element (off-by-one bug).
+  const firstMarker = text.search(/===\s*EMAIL\s*\d+\s*===/i);
+  const cleanedText = firstMarker >= 0 ? text.slice(firstMarker) : text;
 
-  // If no markers found, try splitting by === END === and re-splitting
+  // Split by === EMAIL N === markers
+  let emailBlocks = cleanedText.split(/===\s*EMAIL\s*\d+\s*===/i).filter((b) => b.trim());
+
+  // If no markers found, try alternative patterns
   if (emailBlocks.length <= 1) {
     // Try alternative: split by === CUSTOMER N ===
-    const altBlocks = text.split(/===\s*CUSTOMER\s*\d+\s*===/i).filter((b) => b.trim());
+    const firstCustMarker = text.search(/===\s*CUSTOMER\s*\d+\s*===/i);
+    const cleanedCustText = firstCustMarker >= 0 ? text.slice(firstCustMarker) : text;
+    const altBlocks = cleanedCustText.split(/===\s*CUSTOMER\s*\d+\s*===/i).filter((b) => b.trim());
     if (altBlocks.length > 1) {
-      return altBlocks.map((block) => parseSingleEmail(block));
-    }
-
-    // Fallback: try to find multiple SUBJECT: lines
-    const subjectMatches = [...text.matchAll(/^SUBJECT:\s*.+$/gm)];
-    if (subjectMatches.length > 1) {
-      const emails: ParsedEmail[] = [];
-      for (let i = 0; i < subjectMatches.length; i++) {
-        const start = subjectMatches[i].index!;
-        const end = i < subjectMatches.length - 1 ? subjectMatches[i + 1].index! : text.length;
-        emails.push(parseSingleEmail(text.slice(start, end)));
+      emailBlocks = altBlocks;
+    } else {
+      // Fallback: try to find multiple SUBJECT: lines
+      const subjectMatches = [...text.matchAll(/^SUBJECT:\s*.+$/gm)];
+      if (subjectMatches.length > 1) {
+        const emails: ParsedEmail[] = [];
+        for (let i = 0; i < subjectMatches.length; i++) {
+          const start = subjectMatches[i].index!;
+          const end = i < subjectMatches.length - 1 ? subjectMatches[i + 1].index! : text.length;
+          emails.push(parseSingleEmail(text.slice(start, end)));
+        }
+        emailBlocks = []; // signal to use emails array below
+        // Pad if needed
+        return padEmails(emails, expectedCount);
       }
-      return emails;
-    }
 
-    // Last resort: just parse as one email
-    return [parseSingleEmail(text)];
+      // Last resort: just parse as one email — pad remaining
+      return padEmails([parseSingleEmail(text)], expectedCount);
+    }
   }
 
-  return emailBlocks.map((block) => parseSingleEmail(block));
+  const emails = emailBlocks.map((block) => parseSingleEmail(block));
+  return padEmails(emails, expectedCount);
+}
+
+/**
+ * Ensure the parsed email array has at least `expectedCount` entries.
+ * Missing entries are filled with placeholder variants so every customer
+ * gets a row that the user can regenerate from the UI.
+ */
+function padEmails(emails: ParsedEmail[], expectedCount: number): ParsedEmail[] {
+  if (emails.length >= expectedCount) return emails;
+
+  console.warn(`[campaign-engine] Parsed ${emails.length} emails but expected ${expectedCount}. Padding with placeholders.`);
+  while (emails.length < expectedCount) {
+    emails.push({
+      subject_line: "(Email generation incomplete — please regenerate)",
+      preview_text: "",
+      body_html: "<p>This email could not be generated automatically. Please click <strong>Regenerate</strong> to retry, or edit manually.</p>",
+      body_text: "This email could not be generated automatically. Please regenerate or edit manually.",
+    });
+  }
+  return emails;
 }
 
 function parseSingleEmail(text: string): ParsedEmail {
-  // Remove === END === marker
+  // Remove === END === marker and any trailing markers
   text = text.replace(/===\s*END\s*===/gi, "").trim();
+
+  // Strip any text before the SUBJECT: line (Claude sometimes adds intro text within a block)
+  const subjectIdx = text.search(/^SUBJECT:\s/m);
+  if (subjectIdx > 0) {
+    text = text.slice(subjectIdx);
+  }
 
   const subjectMatch = text.match(/^SUBJECT:\s*(.+)$/m);
   const subject_line = subjectMatch?.[1]?.trim() ?? "No subject";

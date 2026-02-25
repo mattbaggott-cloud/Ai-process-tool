@@ -1,6 +1,7 @@
 import { Client } from "@hubspot/api-client";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { type HubSpotConfig, type DealStage } from "@/lib/types/database";
+import { syncRecordToGraph } from "@/lib/agentic/graph-sync";
 
 /* ── Constants ──────────────────────────────────────────── */
 
@@ -748,4 +749,65 @@ export async function exportDeals(
     `Deals export done: ${result.created} created, ${result.updated} updated, ${result.errors} errors`);
 
   return result;
+}
+
+/* ── Graph Node Sync ────────────────────────────────────── */
+
+/**
+ * After a HubSpot sync, create graph nodes for all imported CRM records.
+ * Iterates through crm_contacts, crm_companies, and crm_deals
+ * and calls syncRecordToGraph for each.
+ *
+ * Follows the same pattern as Shopify's syncGraphNodes() in
+ * src/lib/shopify/sync-service.ts.
+ */
+export async function syncGraphNodes(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<{ contacts: number; companies: number; deals: number }> {
+  const counts = { contacts: 0, companies: 0, deals: 0 };
+
+  // Sync contact nodes
+  const { data: contacts } = await supabase
+    .from("crm_contacts")
+    .select("*")
+    .eq("org_id", orgId)
+    .not("metadata->hubspot_id", "is", null);
+
+  if (contacts) {
+    for (const contact of contacts) {
+      await syncRecordToGraph(supabase, orgId, "crm_contacts", contact.id, contact);
+      counts.contacts++;
+    }
+  }
+
+  // Sync company nodes
+  const { data: companies } = await supabase
+    .from("crm_companies")
+    .select("*")
+    .eq("org_id", orgId)
+    .not("metadata->hubspot_id", "is", null);
+
+  if (companies) {
+    for (const company of companies) {
+      await syncRecordToGraph(supabase, orgId, "crm_companies", company.id, company);
+      counts.companies++;
+    }
+  }
+
+  // Sync deal nodes
+  const { data: deals } = await supabase
+    .from("crm_deals")
+    .select("*")
+    .eq("org_id", orgId)
+    .not("metadata->hubspot_id", "is", null);
+
+  if (deals) {
+    for (const deal of deals) {
+      await syncRecordToGraph(supabase, orgId, "crm_deals", deal.id, deal);
+      counts.deals++;
+    }
+  }
+
+  return counts;
 }

@@ -25,6 +25,7 @@ interface Props {
 
 export default function FullChat({ projectId, initialMessages }: Props) {
   const { setHideRightPanel } = useLayout();
+  const [conversationId] = useState(() => crypto.randomUUID());
 
   /* Hydrate from saved messages or show welcome */
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -36,6 +37,7 @@ export default function FullChat({ projectId, initialMessages }: Props) {
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [progressStatus, setProgressStatus] = useState<string | null>(null);
   const [saved, setSaved] = useState(true);
   const pathname = usePathname();
 
@@ -43,6 +45,7 @@ export default function FullChat({ projectId, initialMessages }: Props) {
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasHiddenWhileStreaming = useRef(false);
 
   /* Hide the right AI panel on mount, restore on unmount */
   useEffect(() => {
@@ -61,6 +64,19 @@ export default function FullChat({ projectId, initialMessages }: Props) {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, []);
+
+  /* Track tab visibility — if tab goes hidden during streaming,
+     the browser may suspend JS. Backend heartbeat keeps TCP alive,
+     but full device sleep can still kill the connection. */
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && sending) {
+        wasHiddenWhileStreaming.current = true;
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [sending]);
 
   /* ── Save messages to Supabase (debounced 1s) ── */
   const saveMessages = useCallback(
@@ -131,6 +147,7 @@ export default function FullChat({ projectId, initialMessages }: Props) {
             currentPage: pathname,
             chatFileContents,
             activeSegment,
+            conversationId,
           }),
           signal: abortController.signal,
         });
@@ -158,17 +175,32 @@ export default function FullChat({ projectId, initialMessages }: Props) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            updated[updated.length - 1] = {
-              ...last,
-              content: last.content + chunk,
-            };
-            finalMessages = updated;
-            return updated;
-          });
+          let chunk = decoder.decode(value, { stream: true });
+
+          // Strip heartbeat keep-alive markers (backend sends these to prevent TCP timeout)
+          chunk = chunk.replace(/<!--HEARTBEAT-->/g, "");
+
+          // Extract progress markers — show as animated status, strip from content
+          const progressRegex = /<!--PROGRESS:(.*?)-->/g;
+          let progressMatch;
+          while ((progressMatch = progressRegex.exec(chunk)) !== null) {
+            setProgressStatus(progressMatch[1]);
+          }
+          chunk = chunk.replace(progressRegex, "");
+
+          if (chunk) {
+            if (chunk.trim()) setProgressStatus(null);
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + chunk,
+              };
+              finalMessages = updated;
+              return updated;
+            });
+          }
         }
 
         /* If streaming completed but produced no content, replace with error */
@@ -195,19 +227,24 @@ export default function FullChat({ projectId, initialMessages }: Props) {
         setTimeout(() => window.dispatchEvent(new Event("workspace-updated")), 500);
       } catch (err) {
         const isAbort = err instanceof DOMException && err.name === "AbortError";
+        const wasHidden = wasHiddenWhileStreaming.current;
         const errorMsgs = [
           ...updatedMessages,
           {
             role: "assistant" as const,
             content: isAbort
               ? "Request timed out — this question may require too many steps. Try breaking it into simpler parts."
-              : "Sorry, something went wrong. Please try again.",
+              : wasHidden
+                ? "The connection was interrupted while your screen was off. Your request may still have been processed — try asking the same question again."
+                : "Sorry, something went wrong. Please try again.",
           },
         ];
         setMessages(errorMsgs);
         saveMessages(errorMsgs);
       } finally {
         setSending(false);
+        setProgressStatus(null);
+        wasHiddenWhileStreaming.current = false;
       }
     },
     [input, messages, sending, chatFiles, pathname, saveMessages]
@@ -244,7 +281,12 @@ export default function FullChat({ projectId, initialMessages }: Props) {
               </div>
             )}
             {msg.role === "assistant" && msg.content === "" && sending ? (
-              <p className="ai-typing">Thinking...</p>
+              <div className="ai-progress-indicator">
+                <div className="ai-progress-sparkle" />
+                <span className="ai-progress-text" key={progressStatus}>
+                  {progressStatus || "Thinking..."}
+                </span>
+              </div>
             ) : (
               <p style={{ whiteSpace: "pre-wrap" }}>{msg.content}</p>
             )}

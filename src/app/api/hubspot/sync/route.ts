@@ -11,7 +11,9 @@ import {
   exportCompanies,
   exportDeals,
   logSync,
+  syncGraphNodes,
 } from "@/lib/hubspot/sync-service";
+import { triggerPostSyncResolution } from "@/lib/identity/post-sync-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -172,6 +174,27 @@ export async function POST(req: NextRequest) {
               error: stepError instanceof Error ? stepError.message : "Step failed",
             });
           }
+        }
+
+        // ── Post-sync: Graph nodes + Identity resolution ──
+        // These run silently (no SSE step) as fast finalization
+
+        try {
+          const graphCounts = await syncGraphNodes(supabase, orgId);
+          await logSync(supabase, user.id, orgId, connector.id, "info",
+            `Graph nodes synced: ${graphCounts.contacts} contacts, ${graphCounts.companies} companies, ${graphCounts.deals} deals`);
+        } catch (postSyncError) {
+          console.error("Post-sync graph error (non-fatal):", postSyncError);
+        }
+
+        try {
+          const idResult = await triggerPostSyncResolution(supabase, orgId, user.id);
+          if (idResult.totalCandidates > 0) {
+            await logSync(supabase, user.id, orgId, connector.id, "info",
+              `Identity resolution: ${idResult.autoApplied} auto-applied, ${idResult.pendingReview} pending review`);
+          }
+        } catch (resError) {
+          console.error("Post-sync identity resolution error (non-fatal):", resError);
         }
 
         // Update last_sync_at

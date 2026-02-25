@@ -911,6 +911,18 @@ export default function ImportsTab() {
 
     setImportErrors(errors);
     setProgress({ done: csvRows.length, total: csvRows.length, errors: errorCount });
+
+    // Sync imported records to knowledge graph (fire-and-forget)
+    // This connects CSV data to graph_nodes so the Data Agent can
+    // discover relationships and answer cross-table questions
+    if (imported > 0) {
+      fetch("/api/data/sync-graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ table: targetTable }),
+      }).catch((err) => console.error("[import] Graph sync failed:", err));
+    }
+
     setStep("results");
     window.dispatchEvent(new Event("workspace-updated"));
     loadHistory();

@@ -10,6 +10,7 @@ import { retrieveMemories, formatMemoriesForPrompt } from "@/lib/agentic/memory-
 import { extractAndStoreMemoriesInBackground } from "@/lib/agentic/memory-extractor";
 import { getGraphContext } from "@/lib/agentic/graph-query";
 import { getIdentityResolutionSummary } from "@/lib/identity/resolver";
+import { interceptToolCall } from "@/lib/data-agent/tool-interceptor";
 import { getSegmentSummary } from "@/lib/segmentation/behavioral-engine";
 import { getEmailSummary } from "@/lib/email/email-generator";
 import { getCampaignSummary } from "@/lib/email/campaign-engine";
@@ -21,6 +22,7 @@ interface ChatRequest {
   currentPage: string;
   chatFileContents: { name: string; content: string }[];
   activeSegment?: { id: string; name: string; segment_type: string; member_count: number; description: string | null } | null;
+  conversationId?: string; // persistent session ID for multi-turn Data Agent context
 }
 
 /* ── Truncation helpers ────────────────────────────────── */
@@ -159,6 +161,31 @@ You can take actions in the user's workspace using tools:
 - View organization info: member count, departments, pending invites
 - **E-Commerce Analytics:** Run deep analytics on Shopify data — revenue trends, AOV over time, customer LTV rankings, repeat purchase rates, top products by revenue/quantity, customer cohort analysis, and RFM segmentation
 - **Rich Inline Content:** Render data tables and charts directly in chat responses for visual, actionable insights
+- **Data Agent (analyze_data):** Answer ANY data question across ALL domains — ecommerce, CRM, campaigns, segments, behavioral profiles — with natural language. Supports multi-turn follow-ups, cross-domain queries, and learns business terminology from conversations.
+
+## Data Agent — Primary Data Tool
+**IMPORTANT:** For ALL data questions, analytics queries, and business intelligence requests, use the **analyze_data** tool as your FIRST choice. It handles:
+- Customer queries (top customers, customer details, filtering by any field including JSONB like zip codes, cities)
+- Order analytics (revenue, AOV, order patterns, product-level queries)
+- CRM queries (deals by stage, contacts by status, company data)
+- Campaign analytics (open rates, delivery status, campaign performance)
+- Behavioral data (lifecycle stages, RFM scores, segment membership)
+- Cross-domain queries ("show me the CRM contacts for my top Shopify customers")
+- Multi-turn conversations ("top 5 steak customers" → "what are their zip codes" → "what campaigns did we send them")
+
+The analyze_data tool dynamically discovers your database schema, writes SQL, self-corrects errors, and formats results. It learns business terms from conversations (e.g., what "VIP" means for your org) and gets smarter over time.
+
+**When to use analyze_data vs legacy tools:**
+- Data questions → **analyze_data** (primary)
+- query_ecommerce → Still works for backward compatibility, but prefer analyze_data
+- search_crm → Still works for backward compatibility, but prefer analyze_data
+- query_ecommerce_analytics → Still works for pre-built metric dashboards (revenue, AOV, LTV, cohort, RFM)
+- search_order_line_items → Still works for product-level line item searches
+- create_segment / discover_segments → Still use these for CREATING segments (analyze_data is for querying, not creating)
+
+**If analyze_data returns needs_clarification**, relay the clarifying question to the user naturally. Their answer will inform the next analyze_data call.
+
+**CRITICAL: One query, not many.** When the user asks about multiple customers or entities (e.g., "what are my top 5 customers buying?"), pass that as ONE analyze_data question — NOT separate calls per customer. The Data Agent handles multi-customer queries in a single SQL statement. Never loop over individual entities.
 
 ## When to Clarify vs. Just Act
 Most requests are clear — just execute them. Only ask for clarification when the request has genuine ambiguity that could lead to wrong results.
@@ -232,7 +259,7 @@ Result types:
 4. **For product-specific customer queries, use search_order_line_items.** This is the ONLY tool that can search inside order line items. query_ecommerce and query_ecommerce_analytics cannot search by product name within orders.
 5. **Be thorough.** Use as many tool rounds as needed to fully complete the user's request. Complex multi-step workflows (discover segment → create segment → generate campaign → check status) are expected and encouraged. Plan efficiently but never cut corners or stop early — finish the job.
 6. **NEVER say "let me try a different approach" and re-query.** If a tool returns data, use it. Don't second-guess and re-query the same data differently.
-7. **For product-level queries (search_order_line_items), always ask a quick clarifying question showing your expanded search terms BEFORE searching.** This lets the user confirm or narrow down the scope. For all OTHER tool calls (analytics, ecommerce queries, segments, etc.), NEVER ask clarifying questions — just search. Only clarify non-product queries when the request is genuinely ambiguous (e.g., "update the deal" — which deal?).
+7. **For product-level queries (search_order_line_items), always ask a quick clarifying question showing your expanded search terms BEFORE searching.** This lets the user confirm or narrow down the scope. For all OTHER tool calls (analytics, ecommerce queries, segments, etc.), NEVER ask clarifying questions — just search. Only clarify non-product queries when the request is genuinely ambiguous (e.g., "update the deal" — which deal?). **Exception:** Campaign creation (create_campaign) follows the Campaign Pre-flight rules below.
 
 8. **Large tool results are automatically compressed but self-contained.** When a tool returns a large result, it is compressed to keep all data points, names, IDs, and numbers. The summary you receive IS your data — use it directly to answer the user. Do NOT call search_tool_results unless the user asks for something specific that is clearly missing from the summary. Never call search_tool_results more than once per conversation turn.
 
@@ -274,23 +301,45 @@ DO NOT try to create product-based segments using rules alone — the segment en
 - "Show me customers who haven't purchased in X days" / "Find lapsed customers" / "Customers with N+ orders" → Use **create_segment** directly with rules. Do NOT use query_ecommerce for this — segments are the proper tool for filtering customers by behavioral criteria.
 - "How many customers do we have?" / "Revenue by month" / "Top products" → Use **query_ecommerce** or **query_ecommerce_analytics** for data exploration.
 - "Find patterns" / "What clusters exist?" → Use **discover_segments** for AI-driven pattern discovery.
-- When asked to find customers matching criteria AND then create a campaign, you can either: (a) create a segment first, then use generate_campaign with that segment_id, OR (b) use generate_campaign without a segment_id to target all customers.
+- When asked to find customers matching criteria AND then create a campaign, you can either: (a) create a segment first, then use create_campaign with that segment_id, OR (b) pass customer_ids directly to create_campaign from the previous query results.
+
+**CRITICAL — Always pass customer_ids or segment_id to campaigns:**
+When the user names specific people or says "create a campaign for them/these customers," you MUST pass customer_ids. How to get them:
+- If a previous tool result has _customer_ids → use those directly
+- If the user names a specific person (e.g., "send an email to Chris Baggott") → first call query_ecommerce or get_customer_behavioral_profile to find their customer ID, then pass it as customer_ids=["<their_id>"]
+- If the user references a segment → pass segment_id
+NEVER call create_campaign without customer_ids or segment_id when the user is referring to specific people — omitting them targets ALL customers in the database.
 
 ## AI Campaign Builder
-You can generate personalized email campaigns for customers. The Campaign Builder can work off the **full customer list** (no segment required) or target a specific **segment** as an optional filter. The system supports three workflows:
-1. **One-off emails** — user crafts a single email with AI help, reviews it, and sends it manually
-2. **Quick campaigns** — use generate_campaign (optionally with a segment_id) for straightforward campaigns
-3. **Strategic campaigns** — use plan_campaign_strategy for AI-powered sub-grouping with tailored multi-email sequences per group
+There is ONE campaign tool: **create_campaign**. It handles everything — single emails, multi-email sequences, and AI-driven sub-group strategies. You never need to pick between tools.
+
+**How create_campaign works (the tool auto-routes based on parameters):**
+- **num_emails=1** (default) + small audience → Quick path: creates campaign, generates emails immediately
+- **num_emails=2+** + small audience → Sequence path: creates campaign with N-step schedule, user reviews in UI before generating
+- **Large audience (15+) or num_emails=2+** → AI Grouping path: Claude analyzes audience, creates 2-6 sub-groups with tailored sequences, user reviews in UI
+- You can override the auto-routing with the strategy parameter: "single_group" or "ai_grouping"
 
 **Campaign Builder — Key Principle:**
 Campaigns do NOT require a pre-built segment. The AI can work directly off the full customer list and create its own sub-groups internally. Segments are an OPTIONAL filter — use them when the user has already identified a specific audience, or when they say "create a campaign from this segment."
 
-**Strategic Campaign Flow (use plan_campaign_strategy):**
-When a user asks for a campaign with differentiated strategies (e.g., "different approaches for high-value vs low-value", "unique sequences for each group"), use plan_campaign_strategy. It can target a segment or the full customer list. It creates strategy groups with:
-- Sub-groupings based on customer attributes
-- Per-group email sequences (multi-step journeys with timing)
-- AI reasoning for why each group gets different treatment
-The user reviews the strategy in the Strategy View UI, then triggers email generation from there.
+**Campaign Pre-flight — Ask Before You Build:**
+Before calling create_campaign, ask the user 2-3 brief clarifying questions specific to their request. This makes you a strategic collaborator, not a task executor.
+
+**IMPORTANT:** Before asking pre-flight questions, if the user names a specific person or small group (e.g., "send an email to Chris Baggott", "create a campaign for Sarah and John"), immediately look up their customer IDs using query_ecommerce or get_customer_behavioral_profile. You need these IDs BEFORE calling create_campaign.
+
+Examples (pick 2-3 relevant ones, do NOT use a generic checklist):
+- "Single email or a multi-email drip sequence over several days?"
+- "How many emails in the sequence and over how many days?"
+- "Same approach for everyone, or different strategies per customer type?"
+- "Should I include a discount or incentive? If so, what percentage?"
+- "What's the primary goal — re-engagement, upsell, loyalty reward, announcement?"
+- "Casual/friendly tone or more professional?"
+- "Any specific products or categories to highlight?"
+- "Want me to reference their past purchases, or keep it general?"
+If the user already gave enough detail (e.g., "create a 15% off win-back for lapsed customers, casual tone"), skip pre-flight and execute immediately. If they say "just do it" or "skip questions," proceed directly without clarifying.
+
+**Passing sequence details:**
+When the user specifies a number of emails (e.g., "3 emails over 2 weeks"), pass num_emails and include the timing details in the prompt. For example: num_emails=3, prompt="Create a nurture sequence: Day 0 introduction, Day 5 product recommendations, Day 12 re-engagement. Focus on purchase consistency timing."
 
 **Key tools:**
 - "Save my email template" / "Here's how we write emails" → save_brand_asset (saves templates, examples, style guides, HTML from Klaviyo/Mailchimp as brand references)
@@ -303,11 +352,10 @@ The user reviews the strategy in the Strategy View UI, then triggers email gener
 
 When users paste or describe email content, proactively save it as a brand asset using save_brand_asset. When they ask to generate emails, always reference the brand assets and segment context.
 
-**CRITICAL — Inline Rendering Rules:**
-When a tool result contains \`<!--INLINE_CHART:...-->\` or \`<!--INLINE_TABLE:...-->\` markers, you MUST include them **exactly as-is** in your response text. These are special rendering directives that the frontend uses to display charts and tables visually. Do NOT strip, summarize, or paraphrase these markers. Copy them verbatim into your response, then add your analysis text around them. Example flow:
-1. Tool returns: \`<!--INLINE_CHART:{"chart_type":"bar",...}-->\`
-2. Your response: "Here's your revenue breakdown:\\n\\n<!--INLINE_CHART:{"chart_type":"bar",...}-->\\n\\nKey observations: ..."
-Never describe the data in text when a chart/table marker is available — let the visual render and add insights alongside it.
+**CRITICAL — Data Narration Rules:**
+When a tool result starts with \`[DATA SUMMARY — use ONLY these facts]\`, you MUST use ONLY the names, numbers, and facts from that summary in your response. Do NOT invent, guess, or hallucinate any names or numbers. The summary contains the exact data — wrap it in friendly, conversational language and add brief insights. Charts and tables are auto-rendered for the user — do NOT recreate them. Just narrate the facts and add analysis.
+
+Example: If the summary says "1. **Michael Jones** — Total Spent: $2,500.00", your response MUST reference Michael Jones and $2,500.00 — never "David Foster" or any other made-up name.
 
 ## User's Current Page
 ${currentPage}
@@ -558,7 +606,7 @@ ${currentPage}
         prompt += `- ${c.name} (${c.type}, ${c.status}, ${c.variants} variants)\n`;
       }
     }
-    prompt += `Use generate_campaign for quick campaigns (works with or without a segment). Use plan_campaign_strategy for differentiated sub-group strategies.\n`;
+    prompt += `Use create_campaign for all campaigns (works with or without a segment). It auto-routes: single email → quick path, multi-email → sequence/strategy path.\n`;
     prompt += `Use send_campaign to send approved campaigns. Use get_campaign_status to check progress.\n`;
   }
 
@@ -724,15 +772,19 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
   const { user, orgId } = orgCtx;
-  const sessionId = crypto.randomUUID();
 
-  /* 3. Parse request */
+  /* Parse request first so we can extract conversationId */
   let body: ChatRequest;
   try {
     body = await req.json();
   } catch {
     return new Response("Invalid JSON", { status: 400 });
   }
+
+  // Use persistent conversationId from frontend for multi-turn session state.
+  // Falls back to random UUID for backwards compatibility with clients
+  // that don't send conversationId yet.
+  const sessionId = body.conversationId || crypto.randomUUID();
 
   const { messages, currentPage, chatFileContents, activeSegment } = body;
 
@@ -1034,6 +1086,10 @@ export async function POST(req: Request) {
     }
 
     const TOOL_TIMEOUT = 60_000;    // 60s per tool execution
+    const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
+      analyze_data: 120_000,   // 120s for complex data agent queries (JSONB unnesting, cross-table joins)
+      create_campaign: 120_000, // 120s for AI strategy planning + email generation
+    };
     const STREAM_TIMEOUT = 120_000; // 120s per Anthropic API round
     const MAX_TOOL_ROUNDS = 15;     // prevent infinite tool loops
     const MAX_TOKENS = 16384;       // generous output limit for complex multi-tool responses
@@ -1047,6 +1103,14 @@ export async function POST(req: Request) {
         const safeClose = () => {
           if (!closed) { closed = true; controller.close(); }
         };
+
+        /* ── Heartbeat: keep TCP connection alive during long tool executions ── */
+        // Browsers kill idle HTTP connections after ~30-60s when the tab is backgrounded
+        // or the screen turns off.  A periodic no-op marker prevents this.
+        const HEARTBEAT_INTERVAL = 15_000; // 15 seconds
+        const heartbeatTimer = setInterval(() => {
+          safeEnqueue(encoder.encode("<!--HEARTBEAT-->"));
+        }, HEARTBEAT_INTERVAL);
 
         try {
           /* ── First API call (may trigger tool use) ── */
@@ -1092,27 +1156,60 @@ export async function POST(req: Request) {
             /* Execute all tools via Action Framework (with per-tool timeout) */
             console.log(`[chat] Executing ${toolUseBlocks.length} tools: ${toolUseBlocks.map(t => t.name).join(", ")}`);
             const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+            let analyzeDataFailed = false; // If analyze_data fails, bypass interception for remaining tools
             for (const toolBlock of toolUseBlocks) {
-              console.log(`[chat] Running tool: ${toolBlock.name}`);
+              // Deterministic tool routing: intercept data-read tools → analyze_data
+              // Pass user's original question to preserve intent ("top 5", "visual", etc.)
+              // If analyze_data already failed this round, bypass to let legacy tools handle it
+              const routed = interceptToolCall(
+                toolBlock.name,
+                toolBlock.input as Record<string, unknown>,
+                lastUserMessage,
+                analyzeDataFailed
+              );
+              const effectiveTool = routed.toolName;
+              const effectiveInput = routed.input;
+              if (routed.intercepted) {
+                console.log(`[chat] Intercepted: ${routed.originalTool} → ${effectiveTool}`);
+              }
+
+              // ── Emit progress indicator to frontend ──
+              // These get extracted and shown as animated status, then stripped from final message
+              const progressLabel = routed.intercepted
+                ? "Analyzing your data..."
+                : effectiveTool === "analyze_data"
+                  ? "Analyzing your data..."
+                  : `Running ${effectiveTool.replace(/_/g, " ")}...`;
+              safeEnqueue(encoder.encode(`<!--PROGRESS:${progressLabel}-->`));
+
+              console.log(`[chat] Running tool: ${effectiveTool}`);
               let result: { success: boolean; message: string };
               try {
                 result = await withTimeout(
                   executeAction(
-                    toolBlock.name,
-                    toolBlock.input as Record<string, unknown>,
+                    effectiveTool,
+                    effectiveInput,
                     supabase,
                     user.id,
                     orgId,
                     orgCtx.role,
                     sessionId
                   ),
-                  TOOL_TIMEOUT,
-                  `tool:${toolBlock.name}`
+                  TOOL_TIMEOUT_OVERRIDES[effectiveTool] ?? TOOL_TIMEOUT,
+                  `tool:${effectiveTool}`
                 );
               } catch (toolErr) {
                 const errMsg = toolErr instanceof Error ? toolErr.message : "Tool execution failed";
                 console.error(`[chat] Tool ${toolBlock.name} failed: ${errMsg}`);
                 result = { success: false, message: errMsg };
+              }
+
+              // If an intercepted tool (rerouted to analyze_data) failed,
+              // disable interception for remaining tools in this round.
+              // This prevents infinite loops: intercept → fail → retry → intercept → fail
+              if (routed.intercepted && !result.success) {
+                analyzeDataFailed = true;
+                console.log(`[chat] analyze_data failed for ${routed.originalTool}, bypassing interception for remaining tools this round`);
               }
 
               // Smart context management: store large results in vector index,
@@ -1127,13 +1224,16 @@ export async function POST(req: Request) {
                 const customerIdsMatch = resultMessage.match(/_customer_ids:\s*(\[.*?\])_/);
                 const preservedCustomerIds = customerIdsMatch ? customerIdsMatch[0] : null;
 
-                // Also extract inline chart/table markers before summarization
+                // Also extract inline chart/table markers and narrative before summarization
                 const inlineMarkers: string[] = [];
                 const markerRegex = /<!--INLINE_(?:TABLE|CHART):[\s\S]*?-->/g;
                 let markerMatch;
                 while ((markerMatch = markerRegex.exec(resultMessage)) !== null) {
                   inlineMarkers.push(markerMatch[0]);
                 }
+                // Preserve narrative summary — Haiku doesn't know about this marker
+                const narrativeMarkerMatch = resultMessage.match(/<!--NARRATIVE_SUMMARY:[\s\S]*?:END_NARRATIVE-->/);
+                const preservedNarrative = narrativeMarkerMatch ? narrativeMarkerMatch[0] : null;
 
                 // 1. Store full result as session-scoped chunks in vector index (fire-and-forget)
                 //    Uses sessionId as sourceId so we can clean up later
@@ -1149,13 +1249,23 @@ export async function POST(req: Request) {
                 //    Preserves all data points, names, IDs, and metrics
                 //    Budget: 8K chars covers 20+ results, full email content, analytics with charts
                 try {
+                  // Strip any error/retry text before sending to Haiku — defense in depth
+                  const cleanedForSummary = resultMessage
+                    .replace(/Query failed.*?(?=\n|$)/gi, "")
+                    .replace(/Last error:.*?(?=\n|$)/gi, "")
+                    .replace(/SQL execution failed.*?(?=\n|$)/gi, "")
+                    .replace(/\[.*?system.*?issue.*?\]/gi, "")
+                    .replace(/error:\s*\{[\s\S]*?\}/gi, "")
+                    .replace(/\n{3,}/g, "\n\n") // collapse extra blank lines
+                    .trim();
+
                   const summaryResponse = await withTimeout(
                     anthropic.messages.create({
                       model: "claude-haiku-4-5-20251001",
                       max_tokens: 8000,
                       messages: [{
                         role: "user",
-                        content: `Compress this tool result into a self-contained summary. You MUST keep ALL of these:\n- Every customer name, ID, and email\n- All numbers, amounts, dates, and metrics\n- All product names and categories\n- All key findings and patterns\n- All inline chart/table markers (<!--INLINE_TABLE:...-->, <!--INLINE_CHART:...-->) exactly as-is\n- Any _customer_ids field with its full JSON array — reproduce it EXACTLY\n\nRemove only: formatting whitespace, decorative separators, column alignment padding, and repeated headers. Do NOT remove any data rows or values. Max 8000 chars.\n\n${resultMessage}`
+                        content: `Compress this tool result into a self-contained summary. You MUST keep ALL of these:\n- Every customer name, ID, and email\n- All numbers, amounts, dates, and metrics\n- All product names and categories\n- All key findings and patterns\n- All inline chart/table markers (<!--INLINE_TABLE:...-->, <!--INLINE_CHART:...-->, <!--INLINE_PROFILE:...-->, <!--INLINE_METRIC:...-->) exactly as-is\n- Any _customer_ids field with its full JSON array — reproduce it EXACTLY\n\nYou MUST REMOVE:\n- Error messages, warnings, or retry text\n- SQL error snippets or database error messages\n- Lines containing "failed", "error:", "exception", "system issue"\n\nRemove only: formatting whitespace, decorative separators, column alignment padding, and repeated headers. Do NOT remove any data rows or values. Max 8000 chars.\n\n${cleanedForSummary}`
                       }],
                     }),
                     30000,
@@ -1179,6 +1289,10 @@ export async function POST(req: Request) {
                       resultMessage += `\n${marker}`;
                     }
                   }
+                  // Re-append narrative summary if Haiku dropped it
+                  if (preservedNarrative && !resultMessage.includes("NARRATIVE_SUMMARY")) {
+                    resultMessage += `\n${preservedNarrative}`;
+                  }
                 } catch (summaryErr) {
                   // Fallback: smart truncation if Haiku fails
                   console.error("[chat] Haiku summarization failed, falling back to truncation:", summaryErr);
@@ -1194,16 +1308,51 @@ export async function POST(req: Request) {
                 }
               }
 
+              // Extract inline viz markers BEFORE they go to Claude
+              // These get streamed directly to the user — Claude narrates, code renders
+              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE):[\s\S]*?-->/g;
+              const vizMarkers: string[] = [];
+              let vizMatch;
+              while ((vizMatch = vizMarkerRegex.exec(resultMessage)) !== null) {
+                vizMarkers.push(vizMatch[0]);
+              }
+
+              // Extract the pre-built narrative summary (factual data for Claude to wrap)
+              const narrativeMatch = resultMessage.match(/<!--NARRATIVE_SUMMARY:([\s\S]*?):END_NARRATIVE-->/);
+              const narrativeSummary = narrativeMatch ? narrativeMatch[1].trim() : null;
+
+              // Build what Claude sees: narrative facts + confirmation that visuals rendered
+              // Claude wraps these facts in conversation — it never extracts from tables
+              let messageForClaude = resultMessage
+                .replace(/<!--NARRATIVE_SUMMARY:[\s\S]*?:END_NARRATIVE-->/g, "") // strip narrative marker (restructured below)
+                .replace(/<!--INLINE_CHART:[\s\S]*?-->/g, "\n[A chart has been rendered and displayed to the user above. Do NOT create another chart or retry.]\n")
+                .replace(/<!--INLINE_TABLE:[\s\S]*?-->/g, "\n[A table has been rendered and displayed to the user above. Do NOT create another table or retry.]\n")
+                .replace(/<!--INLINE_PROFILE:[\s\S]*?-->/g, "\n[A customer profile card has been rendered and displayed to the user above. Do NOT recreate this information.]\n")
+                .replace(/<!--INLINE_METRIC:[\s\S]*?-->/g, "\n[Metric summary cards have been rendered and displayed to the user above. Do NOT recreate these numbers.]\n")
+                .replace(/<!--CLARIFICATION:[\s\S]*?-->/g, "\n[Clarification options have been shown to the user. Wait for their selection before proceeding.]\n")
+                .replace(/<!--CONFIDENCE:[\s\S]*?-->/g, "") // confidence metadata handled by frontend, not needed by Claude
+                .trim();
+
+              // Prepend the narrative summary so Claude leads with accurate facts
+              if (narrativeSummary) {
+                messageForClaude = `[DATA SUMMARY — use ONLY these facts in your response, do not invent names or numbers]\n${narrativeSummary}\n\n${messageForClaude}`;
+              }
+
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: toolBlock.id,
-                content: resultMessage,
+                content: messageForClaude,
                 is_error: !result.success,
               });
               allToolCalls.push({
                 name: toolBlock.name,
                 success: result.success,
               });
+
+              // Stream viz markers directly to user (bypasses Claude entirely)
+              for (const marker of vizMarkers) {
+                safeEnqueue(encoder.encode(`\n\n${marker}\n\n`));
+              }
             }
 
             /* Build messages with tool results */
@@ -1212,6 +1361,9 @@ export async function POST(req: Request) {
               { role: "assistant" as const, content: currentMessage.content },
               { role: "user" as const, content: toolResults },
             ];
+
+            /* Emit progress: done with tools, now Claude is writing the response */
+            safeEnqueue(encoder.encode("<!--PROGRESS:Preparing response...-->"));
 
             /* Next API call with tool results */
             const nextStream = anthropic.messages.stream({
@@ -1254,6 +1406,8 @@ export async function POST(req: Request) {
           safeEnqueue(encoder.encode(`\n\n*Error: ${logError}. Please try again.*`));
           safeClose();
         } finally {
+          clearInterval(heartbeatTimer);
+
           /* ── Log the LLM call (fire-and-forget) ── */
           const latencyMs = Date.now() - requestStart;
           const logEntry: LLMLogEntry = {

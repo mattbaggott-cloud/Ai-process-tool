@@ -1693,37 +1693,51 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
 
     /* ── Campaign Engine ───────────────────────────────────── */
     {
-      name: "generate_campaign",
+      name: "create_campaign",
       description:
-        "Generate an AI-powered email campaign with unique, personalized content for each customer. For 'per_customer' campaigns, each customer gets a completely unique email based on their purchase history, behavioral profile, lifecycle stage, and communication style. For 'broadcast' campaigns, one email is generated and sent to all customers. If segment_id is provided, targets only that segment's members. If omitted, targets the full customer list. Creates the campaign, generates all email variants, and puts them in review status.",
+        "Create an AI-powered email campaign. Handles ALL campaign types: single email, multi-email sequences, broadcast, and AI-segmented sub-groups. For quick single emails (num_emails=1, default), creates the campaign and generates emails immediately. For multi-email sequences (num_emails=2+) or AI sub-grouping (strategy='ai_grouping'), creates strategy groups — the user reviews in the Campaigns UI, then triggers generation. This is the ONLY campaign creation tool — use it for every campaign request.",
       input_schema: {
         type: "object" as const,
         properties: {
           name: {
             type: "string",
-            description: "Campaign name (e.g. 'Holiday Win-Back 2025', 'New Customer Welcome')",
+            description: "Campaign name (e.g. 'Holiday Win-Back 2025', 'VIP 3-Email Nurture Sequence')",
+          },
+          prompt: {
+            type: "string",
+            description: "Campaign goal, tone, and direction. For multi-email sequences, include timing guidance (e.g. '3 emails over 2 weeks: intro, product recs, urgency'). For AI grouping, describe the strategy (e.g. 'different approaches for high-value vs lapsed').",
+          },
+          segment_id: {
+            type: "string",
+            description: "Optional: Segment ID to target. If omitted and customer_ids not provided, targets all customers.",
+          },
+          customer_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: Specific customer UUIDs from a previous data query. Creates an auto-segment. Takes precedence over segment_id.",
+          },
+          num_emails: {
+            type: "number",
+            description: "Number of emails per customer. 1 (default) = single email, 2+ = multi-step sequence over time. Set to the exact count the user requested.",
+          },
+          strategy: {
+            type: "string",
+            enum: ["auto", "single_group", "ai_grouping"],
+            description: "How to group customers. 'auto' (default) = AI decides based on audience size. 'single_group' = everyone gets the same sequence. 'ai_grouping' = Claude analyzes customers and creates 2-6 distinct sub-groups with tailored approaches.",
           },
           campaign_type: {
             type: "string",
             enum: ["per_customer", "broadcast"],
-            description: "per_customer = unique AI email per person (recommended), broadcast = same email to all",
-          },
-          segment_id: {
-            type: "string",
-            description: "Optional: Segment ID to target. If omitted, targets all customers. Use list_segments to find existing segments.",
+            description: "per_customer (default) = unique AI email per person, broadcast = same email to all",
           },
           email_type: {
             type: "string",
             enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
-            description: "Type of email campaign",
-          },
-          prompt: {
-            type: "string",
-            description: "Natural language description of the campaign goal and tone. E.g. 'Write a win-back email with 15% off, reference their past purchases, create urgency'",
+            description: "Type of email campaign (default: custom)",
           },
           template_id: {
             type: "string",
-            description: "Optional: brand asset ID of an HTML template to wrap the email content in",
+            description: "Optional: brand asset ID of an HTML template to wrap email content in",
           },
           delivery_channel: {
             type: "string",
@@ -1731,7 +1745,7 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
             description: "Email delivery provider (default: klaviyo)",
           },
         },
-        required: ["name", "campaign_type", "email_type", "prompt"],
+        required: ["name", "prompt"],
       },
     },
     {
@@ -1754,56 +1768,6 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
       },
     },
     {
-      name: "create_sequence",
-      description:
-        "Create a multi-step email sequence (cadence) for a segment. Each step has its own delay, email type, and prompt. The sequence creates a campaign of type 'sequence' with individual steps that can be generated and sent independently.",
-      input_schema: {
-        type: "object" as const,
-        properties: {
-          name: {
-            type: "string",
-            description: "Sequence name (e.g. 'New Customer Onboarding', '3-Part Win-Back Series')",
-          },
-          segment_id: {
-            type: "string",
-            description: "Optional: Segment ID to target. If omitted, targets all customers.",
-          },
-          steps: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                delay_days: {
-                  type: "number",
-                  description: "Days after previous step (0 for immediate)",
-                },
-                email_type: {
-                  type: "string",
-                  enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
-                },
-                prompt: {
-                  type: "string",
-                  description: "What this step's email should say/accomplish",
-                },
-                subject_template: {
-                  type: "string",
-                  description: "Optional subject line template for this step",
-                },
-              },
-              required: ["delay_days", "email_type", "prompt"],
-            },
-            description: "Array of sequence steps in order",
-          },
-          delivery_channel: {
-            type: "string",
-            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
-            description: "Email delivery provider (default: klaviyo)",
-          },
-        },
-        required: ["name", "steps"],
-      },
-    },
-    {
       name: "get_campaign_status",
       description:
         "Get the current status of a campaign including variant counts (draft, approved, rejected, sent, failed), delivery metrics (delivered, opened, clicked, bounced), and campaign metadata.",
@@ -1818,37 +1782,20 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
         required: ["campaign_id"],
       },
     },
+    /* ── Data Agent ─────────────────────────────────────── */
     {
-      name: "plan_campaign_strategy",
+      name: "analyze_data",
       description:
-        "Analyze customers and create a strategic campaign plan with distinct sub-groups. The AI examines customer data (lifecycle stages, purchase behavior, communication styles, product affinities) and creates 2-6 tailored sub-groups, each with their own multi-step email sequence, timing, and messaging strategy. Can target a specific segment or the full customer list. Use this when the user wants different approaches for different customer types. After planning, the user reviews the strategy in the Campaigns UI before generating emails.",
+        "Analyze data across ALL domains — ecommerce customers/orders/products, CRM contacts/companies/deals, campaigns, segments, behavioral profiles, and cross-domain queries. This is the PRIMARY tool for ANY data question, analytics query, or business intelligence request. Supports multi-turn follow-up questions (e.g. 'top 5 customers' then 'what are their zip codes' then 'what campaigns did we send them'). Handles JSONB fields, cross-table joins, business term resolution (VIP, at-risk, churned, AOV, etc.), and self-corrects SQL errors automatically. Use this instead of query_ecommerce or search_crm for all new data questions.",
       input_schema: {
         type: "object" as const,
         properties: {
-          name: {
+          question: {
             type: "string",
-            description: "Campaign name (e.g. 'Strategic Win-Back Q1 2025')",
-          },
-          segment_id: {
-            type: "string",
-            description: "Optional: Segment ID to analyze. If omitted, analyzes all customers.",
-          },
-          strategy_prompt: {
-            type: "string",
-            description: "User's strategic direction. E.g. 'Different approaches for high-value vs low-value customers. Focus on premium upsells for high spenders, frequency for low spenders.'",
-          },
-          email_type: {
-            type: "string",
-            enum: ["promotional", "win_back", "nurture", "announcement", "welcome", "follow_up", "custom"],
-            description: "Default email type for the campaign",
-          },
-          delivery_channel: {
-            type: "string",
-            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
-            description: "Email delivery provider (default: klaviyo)",
+            description: "The user's data question in natural language. Pass the question exactly as the user asked it — the Data Agent handles intent classification, schema discovery, SQL generation, and formatting internally.",
           },
         },
-        required: ["name", "strategy_prompt"],
+        required: ["question"],
       },
     },
   ];

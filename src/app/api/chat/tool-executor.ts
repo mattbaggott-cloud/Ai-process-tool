@@ -6,6 +6,7 @@ import type { OrgRole, SegmentRule, BrandAssetType, EmailType, KlaviyoConfig } f
 import { pushSegmentToList } from "@/lib/klaviyo/sync-service";
 import { emitToolEvent } from "@/lib/agentic/event-emitter";
 import { syncRecordToGraphInBackground } from "@/lib/agentic/graph-sync";
+import { analyzeData } from "@/lib/data-agent/agent";
 import {
   discoverSegments,
   createSegment as createSegmentFn,
@@ -28,7 +29,7 @@ import {
   getCampaignStatus,
   planCampaignStrategy,
 } from "@/lib/email/campaign-engine";
-import type { CampaignType, CampaignEmailType, DeliveryChannel } from "@/lib/types/database";
+import type { CampaignType, CampaignEmailType, DeliveryChannel, StrategySequenceStep } from "@/lib/types/database";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -183,16 +184,20 @@ export async function executeTool(
         return await handlePushSegmentToKlaviyo(input, supabase, userId, orgId);
 
       // Campaign Engine
-      case "generate_campaign":
-        return await handleGenerateCampaign(input, supabase, orgId, userId);
+      case "create_campaign":
+      case "generate_campaign":          // legacy alias
+      case "plan_campaign_strategy":     // legacy alias
+      case "create_sequence":            // legacy alias
+        return await handleCreateCampaign(input, supabase, orgId, userId);
       case "send_campaign":
         return await handleSendCampaign(input, supabase, orgId);
-      case "create_sequence":
-        return await handleCreateSequence(input, supabase, orgId, userId);
       case "get_campaign_status":
         return await handleGetCampaignStatus(input, supabase, orgId);
-      case "plan_campaign_strategy":
-        return await handlePlanCampaignStrategy(input, supabase, orgId, userId);
+
+      /* Data Agent */
+      case "analyze_data":
+        return await handleAnalyzeData(input, supabase, orgId, userId, sessionId);
+
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -4903,95 +4908,474 @@ async function handlePushSegmentToKlaviyo(
 
 /* ── Campaign Engine Handlers ──────────────────────────── */
 
-async function handleGenerateCampaign(
+/**
+ * Unified campaign handler — routes to quick, sequence, or strategy paths.
+ *
+ * Three internal paths:
+ *  1. Quick  (single_group + num_emails=1) — create + generate immediately
+ *  2. Sequence (single_group + num_emails>1) — create + N-step group, defer to UI
+ *  3. AI Grouping (ai_grouping) — Claude analyzes audience, creates sub-groups
+ *
+ * Auto logic: num_emails > 1 OR customer count ≥ 15 → ai_grouping, else single_group
+ */
+async function handleCreateCampaign(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
   orgId: string,
   userId: string
 ): Promise<ToolResult> {
   try {
-    const campaignType = (input.campaign_type as CampaignType) || "per_customer";
-    const emailType = (input.email_type as CampaignEmailType) || "custom";
-    const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+    // ── Normalize legacy aliases ──
+    // plan_campaign_strategy used "strategy_prompt" instead of "prompt"
+    const prompt = (input.prompt as string) || (input.strategy_prompt as string);
+    const name = input.name as string;
 
-    // 1. Create the campaign record
-    const campaign = await createCampaign(supabase, orgId, userId, {
-      name: input.name as string,
-      campaignType,
-      segmentId: (input.segment_id as string) || undefined,
-      emailType,
-      prompt: input.prompt as string,
-      templateId: input.template_id as string | undefined,
-      deliveryChannel,
-    });
+    if (!name || !prompt) {
+      return { success: false, message: "name and prompt are required." };
+    }
 
-    const audienceLabel = campaign.segmentName
-      ? `${campaign.segmentName} (${campaign.customerCount} customers)`
-      : `All Customers (${campaign.customerCount})`;
-
-    // 2. Generate variants — run inline for small audiences, async for large
-    const MAX_INLINE_CUSTOMERS = 50;
-
-    if (campaign.customerCount <= MAX_INLINE_CUSTOMERS) {
-      const result = await generateCampaignVariants(supabase, orgId, campaign.campaignId);
-
-      let message = `**Campaign Created & Emails Generated: ${campaign.name}** ✅\n\n`;
-      message += `- **ID:** ${campaign.campaignId}\n`;
-      message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
-      message += `- **Audience:** ${audienceLabel}\n`;
-      message += `- **Email Type:** ${emailType}\n`;
-      message += `- **Delivery Channel:** ${deliveryChannel}\n`;
-      message += `- **Variants Generated:** ${result.totalGenerated}\n`;
-      message += `- **Status:** ${result.status}\n\n`;
-
-      if (campaignType === "per_customer") {
-        message += `Each customer received a unique, AI-generated email tailored to their purchase history, behavioral profile, and communication style.\n\n`;
+    // ── Resolve num_emails ──
+    let numEmails = input.num_emails as number | undefined;
+    if (!numEmails) {
+      // Try to parse from prompt (e.g., "3-email sequence", "5 emails")
+      const emailCountMatch = prompt.match(/(\d+)\s*(?:-?\s*)?email/i);
+      if (emailCountMatch) {
+        const parsed = parseInt(emailCountMatch[1], 10);
+        if (parsed >= 1 && parsed <= 10) numEmails = parsed;
       }
+    }
+    if (!numEmails || numEmails < 1) numEmails = 1;
 
-      // Show a few example subjects
-      const { data: sampleVariants } = await supabase
-        .from("email_customer_variants")
-        .select("customer_name, customer_email, subject_line, preview_text")
-        .eq("campaign_id", campaign.campaignId)
+    // ── Resolve audience size for auto-strategy logic ──
+    let audienceSize = 0;
+    let hasTargetedAudience = false; // true when user specified customer_ids or segment_id
+    const segmentId = input.segment_id as string | undefined;
+    let customerIds = input.customer_ids as string[] | undefined;
+
+    // ── Auto-resolve: if no targeting provided, try to extract customer names from the campaign name/prompt ──
+    // This is the scalable safety net: even if the AI forgets to look up IDs first,
+    // the handler catches specific-person campaigns and resolves them automatically.
+    if ((!customerIds || customerIds.length === 0) && !segmentId) {
+      const resolvedIds = await tryResolveCustomerNamesFromPrompt(supabase, orgId, name, prompt);
+      if (resolvedIds.length > 0) {
+        customerIds = resolvedIds;
+        // Inject back into input so downstream functions see them
+        input.customer_ids = customerIds;
+        console.log(`[Campaign] Auto-resolved ${resolvedIds.length} customer(s) from prompt/name`);
+      }
+    }
+
+    if (customerIds && customerIds.length > 0) {
+      audienceSize = customerIds.length;
+      hasTargetedAudience = true;
+    } else if (segmentId) {
+      const { data: seg } = await supabase
+        .from("segments")
+        .select("customer_count")
+        .eq("id", segmentId)
         .eq("org_id", orgId)
-        .limit(5);
-
-      if (sampleVariants && sampleVariants.length > 0) {
-        message += `**Sample emails generated:**\n`;
-        for (const v of sampleVariants) {
-          message += `- **${v.customer_name || v.customer_email}**: "${v.subject_line}"\n`;
-        }
-        message += `\n`;
-      }
-
-      message += `**Next steps:** Review the generated emails, then use \`send_campaign\` with campaign_id "${campaign.campaignId}" to send them through ${deliveryChannel}.`;
-
-      return { success: true, message };
+        .single();
+      audienceSize = (seg?.customer_count as number) || 0;
+      hasTargetedAudience = true;
     } else {
-      // Large audience — just create, tell user to trigger generation
-      let message = `**Campaign Created: ${campaign.name}** ✅\n\n`;
-      message += `- **ID:** ${campaign.campaignId}\n`;
-      message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
-      message += `- **Audience:** ${audienceLabel}\n`;
-      message += `- **Email Type:** ${emailType}\n`;
-      message += `- **Delivery Channel:** ${deliveryChannel}\n`;
-      message += `- **Status:** draft (generation pending)\n\n`;
-      message += `This campaign targets ${campaign.customerCount} customers. Email generation will take a few minutes. `;
-      message += `Use \`get_campaign_status\` with campaign_id "${campaign.campaignId}" to check progress.`;
+      // No targeting — will hit all customers. Count for reference but don't
+      // use this to trigger ai_grouping (user may have forgotten to pass IDs).
+      const { count } = await supabase
+        .from("ecom_customers")
+        .select("id", { count: "exact", head: true })
+        .eq("org_id", orgId);
+      audienceSize = count ?? 0;
+    }
 
-      // Kick off generation in background (fire and forget)
-      generateCampaignVariants(supabase, orgId, campaign.campaignId).catch((err) => {
-        console.error(`[Campaign] Background generation failed for ${campaign.campaignId}:`, err);
-      });
+    // ── Resolve strategy ──
+    // Only use audience-size-based ai_grouping when the audience was explicitly targeted.
+    // Without targeting, default to sequence (multi-email) or single_group (1 email)
+    // to avoid accidentally creating 6 sub-groups for a 2000-customer org when the
+    // user just forgot to pass customer_ids.
+    let strategy = (input.strategy as string) || "auto";
+    if (strategy === "auto") {
+      if (numEmails > 1 && hasTargetedAudience && audienceSize >= 15) {
+        strategy = "ai_grouping";
+      } else {
+        strategy = "single_group";
+      }
+    }
 
-      return { success: true, message };
+    // ── Route to path ──
+    if (strategy === "ai_grouping") {
+      return await handleStrategyCampaign(input, name, prompt, numEmails, supabase, orgId, userId);
+    } else if (numEmails > 1) {
+      return await handleSequenceCampaign(input, name, prompt, numEmails, supabase, orgId, userId);
+    } else {
+      return await handleQuickCampaign(input, name, prompt, supabase, orgId, userId);
     }
   } catch (err) {
     return {
       success: false,
-      message: `Failed to generate campaign: ${err instanceof Error ? err.message : "Unknown error"}`,
+      message: `Failed to create campaign: ${err instanceof Error ? err.message : "Unknown error"}`,
     };
   }
+}
+
+/**
+ * Quick path: 1 email, small audience → create campaign + strategy group + generate immediately.
+ */
+async function handleQuickCampaign(
+  input: Record<string, unknown>,
+  name: string,
+  prompt: string,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  const campaignType = (input.campaign_type as CampaignType) || "per_customer";
+  const emailType = (input.email_type as CampaignEmailType) || "custom";
+  const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+
+  // 1. Create the campaign record
+  const campaign = await createCampaign(supabase, orgId, userId, {
+    name,
+    campaignType,
+    segmentId: (input.segment_id as string) || undefined,
+    customerIds: (input.customer_ids as string[]) || undefined,
+    emailType,
+    prompt,
+    templateId: input.template_id as string | undefined,
+    deliveryChannel,
+  });
+
+  // 2. Load customer IDs for the strategy group
+  let groupCustomerIds: string[] = [];
+  if (input.customer_ids && Array.isArray(input.customer_ids)) {
+    groupCustomerIds = input.customer_ids as string[];
+  } else if (campaign.segmentId) {
+    const { data: members } = await supabase
+      .from("segment_members")
+      .select("ecom_customer_id")
+      .eq("segment_id", campaign.segmentId)
+      .eq("org_id", orgId);
+    groupCustomerIds = (members ?? []).map((m) => m.ecom_customer_id as string);
+  } else {
+    const { data: allCusts } = await supabase
+      .from("ecom_customers")
+      .select("id")
+      .eq("org_id", orgId);
+    groupCustomerIds = (allCusts ?? []).map((c) => c.id as string);
+  }
+
+  // 3. Create strategy group with 1 step
+  const step: StrategySequenceStep = {
+    step_number: 1,
+    delay_days: 0,
+    email_type: emailType,
+    prompt: prompt,
+    subject_hint: undefined,
+  };
+
+  await supabase.from("campaign_strategy_groups").insert({
+    org_id: orgId,
+    campaign_id: campaign.campaignId,
+    group_name: name,
+    group_description: `Single-send campaign: ${prompt.slice(0, 120)}`,
+    ai_reasoning: "Quick campaign — single email to all recipients.",
+    filter_criteria: {},
+    customer_ids: groupCustomerIds,
+    customer_count: groupCustomerIds.length,
+    sequence_steps: [step],
+    total_emails: groupCustomerIds.length,
+    sort_order: 0,
+    status: "draft",
+  });
+
+  // 4. Set has_strategy on campaign
+  await supabase
+    .from("email_campaigns")
+    .update({ has_strategy: true, updated_at: new Date().toISOString() })
+    .eq("id", campaign.campaignId);
+
+  const audienceLabel = campaign.segmentName
+    ? `${campaign.segmentName} (${campaign.customerCount} customers)`
+    : `All Customers (${campaign.customerCount})`;
+
+  // 5. Generate variants — inline for ≤50, background otherwise
+  const MAX_INLINE = 50;
+
+  if (campaign.customerCount <= MAX_INLINE) {
+    const result = await generateCampaignVariants(supabase, orgId, campaign.campaignId);
+
+    let message = `**Campaign Created & Emails Generated: ${campaign.name}** ✅\n\n`;
+    message += `- **ID:** ${campaign.campaignId}\n`;
+    message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
+    message += `- **Audience:** ${audienceLabel}\n`;
+    message += `- **Email Type:** ${emailType}\n`;
+    message += `- **Delivery Channel:** ${deliveryChannel}\n`;
+    message += `- **Variants Generated:** ${result.totalGenerated}\n`;
+    if (result.skippedNoEmail && result.skippedNoEmail > 0) {
+      message += `- **⚠️ Skipped:** ${result.skippedNoEmail} customer${result.skippedNoEmail > 1 ? "s" : ""} had no email address on file\n`;
+    }
+    message += `- **Status:** ${result.status}\n\n`;
+
+    if (campaignType === "per_customer") {
+      message += `Each customer received a unique, AI-generated email tailored to their purchase history, behavioral profile, and communication style.\n\n`;
+    }
+
+    // Show sample subjects
+    const { data: sampleVariants } = await supabase
+      .from("email_customer_variants")
+      .select("customer_name, customer_email, subject_line, preview_text")
+      .eq("campaign_id", campaign.campaignId)
+      .eq("org_id", orgId)
+      .limit(5);
+
+    if (sampleVariants && sampleVariants.length > 0) {
+      message += `**Sample emails generated:**\n`;
+      for (const v of sampleVariants) {
+        message += `- **${v.customer_name || v.customer_email}**: "${v.subject_line}"\n`;
+      }
+      message += `\n`;
+    }
+
+    message += `**Next steps:** Review the generated emails in the **Campaigns** page, then use \`send_campaign\` with campaign_id "${campaign.campaignId}" to send them through ${deliveryChannel}.`;
+
+    return { success: true, message };
+  } else {
+    // Large audience — background generation
+    let message = `**Campaign Created: ${campaign.name}** ✅\n\n`;
+    message += `- **ID:** ${campaign.campaignId}\n`;
+    message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
+    message += `- **Audience:** ${audienceLabel}\n`;
+    message += `- **Email Type:** ${emailType}\n`;
+    message += `- **Delivery Channel:** ${deliveryChannel}\n`;
+    message += `- **Status:** Generating emails in background...\n\n`;
+    message += `Email generation for ${campaign.customerCount} customers will take a few minutes. `;
+    message += `Use \`get_campaign_status\` with campaign_id "${campaign.campaignId}" to check progress.`;
+
+    generateCampaignVariants(supabase, orgId, campaign.campaignId).catch((err) => {
+      console.error(`[Campaign] Background generation failed for ${campaign.campaignId}:`, err);
+    });
+
+    return { success: true, message };
+  }
+}
+
+/**
+ * Sequence path: single_group + num_emails > 1.
+ * Creates campaign + 1 strategy group with N steps. Does NOT auto-generate — defers to UI review.
+ */
+async function handleSequenceCampaign(
+  input: Record<string, unknown>,
+  name: string,
+  prompt: string,
+  numEmails: number,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  const campaignType = (input.campaign_type as CampaignType) || "per_customer";
+  const emailType = (input.email_type as CampaignEmailType) || "custom";
+  const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+
+  // 1. Create campaign record
+  const campaign = await createCampaign(supabase, orgId, userId, {
+    name,
+    campaignType,
+    segmentId: (input.segment_id as string) || undefined,
+    customerIds: (input.customer_ids as string[]) || undefined,
+    emailType,
+    prompt,
+    templateId: input.template_id as string | undefined,
+    deliveryChannel,
+  });
+
+  // 2. Load customer IDs
+  let groupCustomerIds: string[] = [];
+  if (input.customer_ids && Array.isArray(input.customer_ids)) {
+    groupCustomerIds = input.customer_ids as string[];
+  } else if (campaign.segmentId) {
+    const { data: members } = await supabase
+      .from("segment_members")
+      .select("ecom_customer_id")
+      .eq("segment_id", campaign.segmentId)
+      .eq("org_id", orgId);
+    groupCustomerIds = (members ?? []).map((m) => m.ecom_customer_id as string);
+  } else {
+    const { data: allCusts } = await supabase
+      .from("ecom_customers")
+      .select("id")
+      .eq("org_id", orgId);
+    groupCustomerIds = (allCusts ?? []).map((c) => c.id as string);
+  }
+
+  // 3. Build N sequence steps with sensible timing
+  const stepDelays = [0, 3, 6, 10, 14, 21, 28, 35, 42, 49];
+  const stepTypes: CampaignEmailType[] = ["nurture", "promotional", "follow_up", "win_back", "announcement"];
+
+  const steps: StrategySequenceStep[] = Array.from({ length: numEmails }, (_, i) => ({
+    step_number: i + 1,
+    delay_days: stepDelays[i] ?? (i * 5),
+    email_type: i === 0 ? emailType : stepTypes[i % stepTypes.length],
+    prompt: i === 0
+      ? prompt
+      : `Write email ${i + 1} of ${numEmails} in this sequence. Build on the previous emails. ${prompt}`,
+    subject_hint: undefined,
+  }));
+
+  // 4. Insert strategy group
+  await supabase.from("campaign_strategy_groups").insert({
+    org_id: orgId,
+    campaign_id: campaign.campaignId,
+    group_name: name,
+    group_description: `${numEmails}-email sequence: ${prompt.slice(0, 120)}`,
+    ai_reasoning: `Multi-email sequence with ${numEmails} touchpoints for all recipients.`,
+    filter_criteria: {},
+    customer_ids: groupCustomerIds,
+    customer_count: groupCustomerIds.length,
+    sequence_steps: steps,
+    total_emails: groupCustomerIds.length * numEmails,
+    sort_order: 0,
+    status: "draft",
+  });
+
+  // 5. Set has_strategy
+  await supabase
+    .from("email_campaigns")
+    .update({ has_strategy: true, updated_at: new Date().toISOString() })
+    .eq("id", campaign.campaignId);
+
+  const audienceLabel = campaign.segmentName
+    ? `${campaign.segmentName} (${campaign.customerCount} customers)`
+    : `All Customers (${campaign.customerCount})`;
+
+  // 6. Return — do NOT auto-generate. User reviews schedule in UI first.
+  let message = `**${numEmails}-Email Campaign Created: ${name}** ✅\n\n`;
+  message += `- **ID:** ${campaign.campaignId}\n`;
+  message += `- **Type:** ${campaignType === "per_customer" ? "Per-Customer (unique emails)" : "Broadcast (same email)"}\n`;
+  message += `- **Audience:** ${audienceLabel}\n`;
+  message += `- **Delivery Channel:** ${deliveryChannel}\n`;
+  message += `- **Emails in Sequence:** ${numEmails}\n\n`;
+
+  message += `**Email Schedule:**\n`;
+  for (const s of steps) {
+    message += `- **Email ${s.step_number}** (${s.delay_days === 0 ? "Day 0 — Immediately" : `Day ${s.delay_days}`}): ${s.email_type}\n`;
+  }
+
+  message += `\n**Next steps:** Review the email sequence and strategy in the **Campaigns** page. When you're happy with the schedule, click **"Generate All Emails"** to create personalized content for every customer.`;
+
+  return { success: true, message };
+}
+
+/**
+ * AI Grouping path: Claude analyzes the audience and creates 2-6 sub-groups,
+ * each with their own multi-step sequence. Uses existing planCampaignStrategy().
+ */
+async function handleStrategyCampaign(
+  input: Record<string, unknown>,
+  name: string,
+  prompt: string,
+  numEmails: number,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  // Augment the prompt with num_emails if not already present
+  let strategyPrompt = prompt;
+  if (numEmails > 1 && !prompt.match(/\d+\s*(?:-?\s*)?email/i)) {
+    strategyPrompt = `${prompt}\n\nCreate a ${numEmails}-email sequence for each group.`;
+  }
+
+  const result = await planCampaignStrategy(supabase, orgId, {
+    name,
+    segmentId: (input.segment_id as string) || undefined,
+    customerIds: (input.customer_ids as string[]) || undefined,
+    strategyPrompt,
+    emailType: (input.email_type as CampaignEmailType) || undefined,
+    deliveryChannel: (input.delivery_channel as DeliveryChannel) || undefined,
+  }, userId);
+
+  let message = `**Campaign Strategy Created: ${name}** ✅\n\n`;
+  message += `- **Campaign ID:** ${result.campaignId}\n`;
+  message += `- **Strategy Groups:** ${result.groups.length}\n\n`;
+
+  for (const g of result.groups) {
+    message += `### ${g.name} (${g.customerCount} customers, ${g.steps} email${g.steps > 1 ? "s" : ""})\n`;
+    message += `${g.reasoning}\n\n`;
+  }
+
+  message += `---\n\n**Next steps:** Review the strategy in the **Campaigns** page. You can see each group's journey, member list, and email sequence. When you're happy with the strategy, click **"Generate All Emails"** to create personalized content for every customer in every group.`;
+
+  return { success: true, message };
+}
+
+/**
+ * Scalable safety net: extract potential customer names from the campaign name/prompt
+ * and resolve them to customer IDs. This catches cases where the AI forgot to look up
+ * customer IDs before calling create_campaign.
+ *
+ * Strategy: look for capitalized multi-word patterns that could be names (e.g., "Chris Baggott").
+ * If any resolve to real customers, return their IDs. Returns [] if nothing found.
+ */
+async function tryResolveCustomerNamesFromPrompt(
+  supabase: SupabaseClient,
+  orgId: string,
+  campaignName: string,
+  prompt: string
+): Promise<string[]> {
+  // Combine name + prompt for scanning
+  const text = `${campaignName} ${prompt}`;
+
+  // Extract potential person names: 2-3 consecutive capitalized words
+  // Exclude common non-name phrases to reduce false positives
+  const namePattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g;
+  const excludePatterns = new Set([
+    "Day", "Step", "Email", "Monday", "Tuesday", "Wednesday", "Thursday",
+    "Friday", "Saturday", "Sunday", "January", "February", "March", "April",
+    "May", "June", "July", "August", "September", "October", "November",
+    "December", "New Year", "Black Friday", "Cyber Monday",
+  ]);
+
+  const candidateNames: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = namePattern.exec(text)) !== null) {
+    const name = match[1];
+    // Skip if any word is in the exclude list
+    const words = name.split(/\s+/);
+    if (words.some((w) => excludePatterns.has(w))) continue;
+    // Skip very short first names (likely not a person)
+    if (words[0].length < 3) continue;
+    candidateNames.push(name);
+  }
+
+  if (candidateNames.length === 0) return [];
+
+  // Try to resolve each candidate against the customer database
+  const resolvedIds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidateName of candidateNames.slice(0, 10)) { // cap at 10 lookups
+    try {
+      // Try full name first
+      const customer = await findCustomerByEmailOrName(supabase, orgId, candidateName);
+      if (customer && !seen.has(customer.id)) {
+        resolvedIds.push(customer.id);
+        seen.add(customer.id);
+        continue;
+      }
+      // Try last name only (in case of "Chris Baggott" → search "Baggott")
+      const parts = candidateName.split(/\s+/);
+      if (parts.length >= 2) {
+        const lastName = parts[parts.length - 1];
+        const byLast = await findCustomerByEmailOrName(supabase, orgId, lastName);
+        if (byLast && !seen.has(byLast.id)) {
+          resolvedIds.push(byLast.id);
+          seen.add(byLast.id);
+        }
+      }
+    } catch {
+      // Non-fatal — name just didn't match
+    }
+  }
+
+  return resolvedIds;
 }
 
 async function handleSendCampaign(
@@ -5049,129 +5433,6 @@ async function handleSendCampaign(
   }
 }
 
-async function handleCreateSequence(
-  input: Record<string, unknown>,
-  supabase: SupabaseClient,
-  orgId: string,
-  userId: string
-): Promise<ToolResult> {
-  try {
-    const name = input.name as string;
-    const segmentId = input.segment_id as string | undefined;
-    const steps = input.steps as Array<{
-      delay_days: number;
-      email_type: CampaignEmailType;
-      prompt: string;
-      subject_template?: string;
-    }>;
-    const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
-
-    if (!name || !steps || steps.length === 0) {
-      return { success: false, message: "name and steps are required." };
-    }
-
-    // Validate segment if provided
-    let segmentName = "All Customers";
-    let customerCount = 0;
-    if (segmentId) {
-      const { data: segment } = await supabase
-        .from("segments")
-        .select("id, name, customer_count")
-        .eq("id", segmentId)
-        .eq("org_id", orgId)
-        .single();
-
-      if (!segment) {
-        return { success: false, message: `Segment not found: ${segmentId}` };
-      }
-      segmentName = segment.name as string;
-      customerCount = segment.customer_count as number;
-    } else {
-      const { count } = await supabase
-        .from("ecom_customers")
-        .select("id", { count: "exact", head: true })
-        .eq("org_id", orgId);
-      customerCount = count ?? 0;
-    }
-
-    // Resolve delivery config
-    const deliveryConfig: Record<string, unknown> = {};
-    if (deliveryChannel === "klaviyo") {
-      const { data: connector } = await supabase
-        .from("data_connectors")
-        .select("config")
-        .eq("org_id", orgId)
-        .eq("connector_type", "klaviyo")
-        .eq("status", "connected")
-        .maybeSingle();
-      if (connector?.config) {
-        Object.assign(deliveryConfig, connector.config as Record<string, unknown>);
-      }
-    }
-
-    // Create the sequence campaign
-    const { data: campaign, error: campErr } = await supabase
-      .from("email_campaigns")
-      .insert({
-        org_id: orgId,
-        name,
-        campaign_type: "sequence" as const,
-        segment_id: segmentId ?? null,
-        status: "draft",
-        email_type: steps[0].email_type || "follow_up",
-        prompt_used: steps.map((s, i) => `Step ${i + 1}: ${s.prompt}`).join("\n"),
-        delivery_channel: deliveryChannel,
-        delivery_config: deliveryConfig,
-        created_by: userId,
-      })
-      .select()
-      .single();
-
-    if (campErr || !campaign) {
-      throw new Error(`Failed to create sequence: ${campErr?.message}`);
-    }
-
-    // Create sequence steps
-    const stepRecords = steps.map((s, i) => ({
-      org_id: orgId,
-      campaign_id: campaign.id as string,
-      step_number: i + 1,
-      delay_days: s.delay_days,
-      email_type: s.email_type || "follow_up",
-      prompt: s.prompt,
-      subject_template: s.subject_template || null,
-      status: "draft" as const,
-    }));
-
-    const { error: stepErr } = await supabase
-      .from("email_sequence_steps")
-      .insert(stepRecords);
-
-    if (stepErr) {
-      throw new Error(`Failed to create sequence steps: ${stepErr.message}`);
-    }
-
-    let message = `**Email Sequence Created: ${name}** ✅\n\n`;
-    message += `- **ID:** ${campaign.id}\n`;
-    message += `- **Audience:** ${segmentName} (${customerCount} customers)\n`;
-    message += `- **Channel:** ${deliveryChannel}\n`;
-    message += `- **Steps:** ${steps.length}\n\n`;
-
-    steps.forEach((s, i) => {
-      message += `**Step ${i + 1}** (${s.delay_days === 0 ? "Immediately" : `Day ${s.delay_days}`}): ${s.email_type} — ${s.prompt}\n`;
-    });
-
-    message += `\n**Next:** Use \`generate_campaign\` on this campaign to generate the emails for each step.`;
-
-    return { success: true, message };
-  } catch (err) {
-    return {
-      success: false,
-      message: `Failed to create sequence: ${err instanceof Error ? err.message : "Unknown error"}`,
-    };
-  }
-}
-
 async function handleGetCampaignStatus(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
@@ -5217,47 +5478,108 @@ async function handleGetCampaignStatus(
   }
 }
 
-/* ── Plan Campaign Strategy ───────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   Data Agent
+   ══════════════════════════════════════════════════════════ */
 
-async function handlePlanCampaignStrategy(
+async function handleAnalyzeData(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
   orgId: string,
-  userId: string
+  userId: string,
+  sessionId?: string
 ): Promise<ToolResult> {
+  const question = input.question as string;
+  if (!question?.trim()) {
+    return { success: false, message: "Missing required parameter: question" };
+  }
+
   try {
-    const name = input.name as string;
-    const segmentId = input.segment_id as string | undefined;
-    const strategyPrompt = input.strategy_prompt as string;
+    const result = await analyzeData(
+      question,
+      sessionId || `session_${Date.now()}`,
+      orgId,
+      supabase,
+      userId
+    );
 
-    if (!name || !strategyPrompt) {
-      return { success: false, message: "name and strategy_prompt are required." };
+    // Build message with auto-injected visualization and narrative
+    let message = result.formatted_message;
+
+    // If the result needs clarification and has structured options, emit marker
+    if (result.needs_clarification && result.formatted_message) {
+      // Check if the plan had structured clarification (passed via the result)
+      // The structured clarification data is available when the agent returns early
+      // with needs_clarification = true
+      const clarificationData = (result as unknown as Record<string, unknown>).structured_clarification;
+      if (clarificationData) {
+        message += `\n\n<!--CLARIFICATION:${JSON.stringify(clarificationData)}-->`;
+      }
     }
 
-    const result = await planCampaignStrategy(supabase, orgId, {
-      name,
-      segmentId: segmentId || undefined,
-      strategyPrompt,
-      emailType: (input.email_type as CampaignEmailType) || undefined,
-      deliveryChannel: (input.delivery_channel as DeliveryChannel) || undefined,
-    }, userId);
-
-    let message = `**Campaign Strategy Created: ${name}** ✅\n\n`;
-    message += `- **Campaign ID:** ${result.campaignId}\n`;
-    message += `- **Strategy Groups:** ${result.groups.length}\n\n`;
-
-    for (const g of result.groups) {
-      message += `### ${g.name} (${g.customerCount} customers, ${g.steps} email${g.steps > 1 ? "s" : ""})\n`;
-      message += `${g.reasoning}\n\n`;
+    // Attach the pre-built narrative summary so Claude narrates facts, not hallucinations
+    // This goes BEFORE viz markers so route.ts can extract it for messageForClaude
+    if (result.narrative_summary) {
+      message += `\n\n<!--NARRATIVE_SUMMARY:${result.narrative_summary}:END_NARRATIVE-->`;
     }
 
-    message += `---\n\n**Next steps:** Review the strategy in the **Campaigns** page. You can see each group's journey, member list, and email sequence. When you're happy with the strategy, click "Generate All Emails" to create personalized content for every customer in every group.`;
+    // Emit confidence marker if any fields are AI-inferred
+    if (result.field_confidence && result.field_confidence.length > 0) {
+      const inferredFields = result.field_confidence
+        .filter((fc) => fc.confidence === "ai_inferred")
+        .map((fc) => fc.field);
+      if (inferredFields.length > 0) {
+        const confidencePayload = {
+          inferred_fields: inferredFields,
+          total_fields: result.field_confidence.length,
+        };
+        message += `\n\n<!--CONFIDENCE:${JSON.stringify(confidencePayload)}-->`;
+      }
+    }
 
-    return { success: true, message };
+    if (result.visualization) {
+      const viz = result.visualization;
+      if (viz.type === "chart" && viz.chart_data && viz.x_key && viz.y_keys) {
+        const chartPayload = {
+          chart_type: viz.chart_type || "bar",
+          title: viz.title,
+          data: viz.chart_data,
+          x_key: viz.x_key,
+          y_keys: viz.y_keys,
+          colors: viz.colors || [],
+        };
+        message += `\n\n<!--INLINE_CHART:${JSON.stringify(chartPayload)}-->`;
+      } else if (viz.type === "table" && viz.table_headers && viz.table_rows) {
+        const tablePayload = {
+          title: viz.title,
+          headers: viz.table_headers,
+          rows: viz.table_rows,
+          footer: viz.table_footer || "",
+        };
+        message += `\n\n<!--INLINE_TABLE:${JSON.stringify(tablePayload)}-->`;
+      } else if (viz.type === "profile" && viz.profile_sections) {
+        const profilePayload = {
+          title: viz.title,
+          sections: viz.profile_sections,
+        };
+        message += `\n\n<!--INLINE_PROFILE:${JSON.stringify(profilePayload)}-->`;
+      } else if (viz.type === "metric" && viz.metric_cards) {
+        const metricPayload = {
+          title: viz.title,
+          cards: viz.metric_cards,
+        };
+        message += `\n\n<!--INLINE_METRIC:${JSON.stringify(metricPayload)}-->`;
+      }
+    }
+
+    return {
+      success: result.success,
+      message,
+    };
   } catch (err) {
     return {
       success: false,
-      message: `Failed to plan campaign strategy: ${err instanceof Error ? err.message : "Unknown error"}`,
+      message: `Data analysis failed: ${err instanceof Error ? err.message : "Unknown error"}`,
     };
   }
 }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KlaviyoConfig } from "@/lib/types/database";
+import { syncRecordToGraph } from "@/lib/agentic/graph-sync";
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -823,4 +824,62 @@ export async function getKlaviyoSummary(
   } catch {
     return null;
   }
+}
+
+/* ── Graph Node Sync ────────────────────────────────────── */
+
+/**
+ * After a Klaviyo sync, create graph nodes for all imported records.
+ * Iterates through klaviyo_profiles, klaviyo_campaigns, and klaviyo_lists
+ * and calls syncRecordToGraph for each.
+ *
+ * Follows the same pattern as Shopify's syncGraphNodes() in
+ * src/lib/shopify/sync-service.ts.
+ */
+export async function syncGraphNodes(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<{ profiles: number; campaigns: number; lists: number }> {
+  const counts = { profiles: 0, campaigns: 0, lists: 0 };
+
+  // Sync profile nodes
+  const { data: profiles } = await supabase
+    .from("klaviyo_profiles")
+    .select("*")
+    .eq("org_id", orgId);
+
+  if (profiles) {
+    for (const profile of profiles) {
+      await syncRecordToGraph(supabase, orgId, "klaviyo_profiles", profile.id, profile);
+      counts.profiles++;
+    }
+  }
+
+  // Sync campaign nodes
+  const { data: campaigns } = await supabase
+    .from("klaviyo_campaigns")
+    .select("*")
+    .eq("org_id", orgId);
+
+  if (campaigns) {
+    for (const campaign of campaigns) {
+      await syncRecordToGraph(supabase, orgId, "klaviyo_campaigns", campaign.id, campaign);
+      counts.campaigns++;
+    }
+  }
+
+  // Sync list nodes
+  const { data: lists } = await supabase
+    .from("klaviyo_lists")
+    .select("*")
+    .eq("org_id", orgId);
+
+  if (lists) {
+    for (const list of lists) {
+      await syncRecordToGraph(supabase, orgId, "klaviyo_lists", list.id, list);
+      counts.lists++;
+    }
+  }
+
+  return counts;
 }

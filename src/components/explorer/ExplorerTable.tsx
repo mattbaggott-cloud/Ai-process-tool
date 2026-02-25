@@ -139,8 +139,8 @@ export default function ExplorerTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.id} className="crm-table-row">
+          {rows.map((row, ri) => (
+            <tr key={`${row.id}-${ri}`} className="crm-table-row">
               {columns.map((col, ci) => (
                 <td
                   key={col.key}

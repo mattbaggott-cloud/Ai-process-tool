@@ -836,10 +836,13 @@ export default function CampaignStrategyView({
                 <StrategyGroupCard
                   group={syntheticGroup}
                   isGenerating={generating}
-                  showMembers={false}
+                  showMembers={memberGroupId === "synthetic"}
                   campaignId={campaignId}
                   initialExpanded
                   onViewEmails={() => setReviewGroupId("all")}
+                  onViewMembers={() =>
+                    setMemberGroupId((prev) => (prev === "synthetic" ? null : "synthetic"))
+                  }
                   onGenerate={() => handleGenerateAll()}
                 />
               );
