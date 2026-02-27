@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useLayout } from "@/context/LayoutContext";
 import { RichMessageContent, hasInlineBlocks } from "@/components/chat/ChatMessageRenderer";
+import { useSlashMenu } from "@/hooks/useSlashMenu";
+import ChatSlashMenu from "@/components/chat/ChatSlashMenu";
 
 interface Message {
   role: "user" | "assistant";
@@ -61,6 +63,17 @@ export default function AIChat() {
       e.target.value = "";
     }
   }, [addChatFiles]);
+
+  /* ── Slash Command Menu ── */
+  const formRef = useRef<HTMLFormElement>(null);
+  const slashMenu = useSlashMenu({
+    onSelect: (cmd) => {
+      setInput(cmd.command);
+      setTimeout(() => {
+        if (formRef.current) formRef.current.requestSubmit();
+      }, 50);
+    },
+  });
 
   // When a user clicks a clarification option, send it as a chat message
   const handleClarificationSelect = useCallback((value: string) => {
@@ -313,16 +326,29 @@ export default function AIChat() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="ai-form">
+        <form onSubmit={handleSubmit} className="ai-form" ref={formRef}>
+          {slashMenu.isOpen && (
+            <ChatSlashMenu
+              commands={slashMenu.filteredCommands}
+              activeIndex={slashMenu.activeIndex}
+              onSelect={slashMenu.selectCommand}
+              onHover={slashMenu.setActiveIndex}
+              onClose={slashMenu.close}
+            />
+          )}
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={sending ? "Waiting for response..." : "Type your message..."}
+            onChange={(e) => {
+              setInput(e.target.value);
+              slashMenu.handleInputChange(e.target.value);
+            }}
+            placeholder={sending ? "Waiting for response..." : "Type your message... (type / for commands)"}
             rows={3}
             className="ai-textarea"
             disabled={sending}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !sending) {
+              slashMenu.handleKeyDown(e);
+              if (!slashMenu.isOpen && e.key === "Enter" && !e.shiftKey && !sending) {
                 e.preventDefault();
                 handleSubmit(e);
               }

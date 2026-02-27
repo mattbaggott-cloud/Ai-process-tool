@@ -6,6 +6,9 @@ import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useLayout } from "@/context/LayoutContext";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage } from "@/lib/types/database";
+import { RichMessageContent, hasInlineBlocks } from "@/components/chat/ChatMessageRenderer";
+import { useSlashMenu } from "@/hooks/useSlashMenu";
+import ChatSlashMenu from "@/components/chat/ChatSlashMenu";
 
 interface Message {
   role: "user" | "assistant";
@@ -116,6 +119,25 @@ export default function FullChat({ projectId, initialMessages }: Props) {
     },
     [addChatFiles]
   );
+
+  /* ── Slash Command Menu ── */
+  const formRef = useRef<HTMLFormElement>(null);
+  const slashMenu = useSlashMenu({
+    onSelect: (cmd) => {
+      setInput(cmd.command);
+      setTimeout(() => {
+        if (formRef.current) formRef.current.requestSubmit();
+      }, 50);
+    },
+  });
+
+  /* ── Clarification click ── */
+  const handleClarificationSelect = useCallback((value: string) => {
+    setInput(value);
+    setTimeout(() => {
+      if (formRef.current) formRef.current.requestSubmit();
+    }, 100);
+  }, []);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -287,6 +309,11 @@ export default function FullChat({ projectId, initialMessages }: Props) {
                   {progressStatus || "Thinking..."}
                 </span>
               </div>
+            ) : msg.role === "assistant" && hasInlineBlocks(msg.content) ? (
+              <RichMessageContent
+                content={msg.content}
+                onClarificationSelect={handleClarificationSelect}
+              />
             ) : (
               <p style={{ whiteSpace: "pre-wrap" }}>{msg.content}</p>
             )}
@@ -341,16 +368,29 @@ export default function FullChat({ projectId, initialMessages }: Props) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="ai-form" style={{ maxWidth: 800, margin: "0 auto", width: "100%" }}>
+        <form onSubmit={handleSubmit} className="ai-form" style={{ maxWidth: 800, margin: "0 auto", width: "100%" }} ref={formRef}>
+          {slashMenu.isOpen && (
+            <ChatSlashMenu
+              commands={slashMenu.filteredCommands}
+              activeIndex={slashMenu.activeIndex}
+              onSelect={slashMenu.selectCommand}
+              onHover={slashMenu.setActiveIndex}
+              onClose={slashMenu.close}
+            />
+          )}
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={sending ? "Waiting for response..." : "Type your message..."}
+            onChange={(e) => {
+              setInput(e.target.value);
+              slashMenu.handleInputChange(e.target.value);
+            }}
+            placeholder={sending ? "Waiting for response..." : "Type your message... (type / for commands)"}
             rows={3}
             className="ai-textarea"
             disabled={sending}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !sending) {
+              slashMenu.handleKeyDown(e);
+              if (!slashMenu.isOpen && e.key === "Enter" && !e.shiftKey && !sending) {
                 e.preventDefault();
                 handleSubmit(e);
               }

@@ -12,14 +12,7 @@ import GlobalSearch from "./GlobalSearch";
 
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
-  { label: "Dashboards", href: "/dashboards",  icon: "chart" },
-  { label: "CRM",        href: "/crm",         icon: "briefcase" },
-  { label: "Explorer",   href: "/explorer",    icon: "target" },
-  { label: "Segments",   href: "/segments",    icon: "segments" },
-  { label: "Campaigns",  href: "/campaigns",   icon: "zap" },
   { label: "Data",       href: "/data",        icon: "database" },
-  { label: "Library",    href: "/library",     icon: "book" },
-  { label: "Tools",      href: "/tools",       icon: "wrench" },
   { label: "Settings",   href: "/settings",    icon: "gear" },
 ];
 

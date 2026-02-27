@@ -1965,5 +1965,116 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
         required: ["question"],
       },
     },
+    /* ── Slash Command Views ──────────────────────────────── */
+    {
+      name: "get_pipeline_view",
+      description:
+        "Fetch the complete deal pipeline for the user's organization. Returns deals grouped by stage with summary statistics (total pipeline value, weighted value, deal count per stage, won value). Call this when the user sends the /pipeline slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_people_view",
+      description:
+        "Fetch all contacts for the user's organization with company names, status, source, and last activity date. Call this when the user sends the /people slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_accounts_view",
+      description:
+        "Fetch all companies for the user's organization with contact count, deal count, total deal value, and industry. Call this when the user sends the /accounts slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_knowledge_view",
+      description:
+        "Fetch all non-archived library items for the user's organization, grouped by category, with tags and last updated dates. Call this when the user sends the /knowledge slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_campaigns_view",
+      description:
+        "Fetch all email campaigns for the user's organization with status, variant counts, delivery metrics (sent, opened, clicked). Call this when the user sends the /campaigns slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_projects_view",
+      description:
+        "Fetch all projects in the user's workspace with mode (canvas/workflow/chat), block and node counts, and last updated dates. Call this when the user sends the /projects slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_customers_view",
+      description:
+        "Fetch e-commerce customers for the user's organization with order counts, total spend, and last order dates. Call this when the user sends the /customers slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_orders_view",
+      description:
+        "Fetch recent e-commerce orders for the user's organization with customer names, financial status, item counts, and totals. Call this when the user sends the /orders slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_products_view",
+      description:
+        "Fetch the product catalog for the user's organization with types, prices, variant counts, and sales totals. Call this when the user sends the /products slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_dashboard_view",
+      description:
+        "Fetch an aggregated dashboard overview with key metrics across CRM (pipeline, contacts, companies), e-commerce (customers, orders, revenue), campaigns, and projects. Call this when the user sends the /dashboard slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_tools_view",
+      description:
+        "Fetch the user's tech stack tools showing name, category, status, teams, and descriptions. Includes stats by status and category breakdown. Call this when the user sends the /tools slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
   ];
 }
