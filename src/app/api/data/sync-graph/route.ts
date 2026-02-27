@@ -9,6 +9,9 @@
  * Also works as a one-time backfill for existing data that was
  * imported before graph sync was wired up.
  *
+ * Phase 4: Uses unified entity types (person, company, etc.) via
+ * syncRecordToGraph which internally resolves source table → unified type.
+ *
  * Body: { table: string, batchSize?: number }
  * Returns: { synced: number, total: number, errors: number }
  */
@@ -16,22 +19,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getOrgContext } from "@/lib/org";
-import { syncRecordToGraph } from "@/lib/agentic/graph-sync";
+import { syncRecordToGraph, getSupportedEntityTypes } from "@/lib/agentic/graph-sync";
 
 const DEFAULT_BATCH_SIZE = 50;
 const MAX_BATCH_SIZE = 200;
 const BATCH_DELAY_MS = 100; // small delay between batches to avoid hammering DB
 
-// Tables that have graph mappings in graph-sync.ts
-const SYNCABLE_TABLES = new Set([
-  "ecom_customers",
-  "ecom_orders",
-  "ecom_products",
-  "crm_contacts",
-  "crm_companies",
-  "crm_deals",
-  "crm_activities",
-]);
+// Use getSupportedEntityTypes() so this stays in sync with TABLE_MAPPINGS
+const SYNCABLE_TABLES = new Set(getSupportedEntityTypes());
 
 export async function POST(req: Request) {
   const supabase = await createClient();
@@ -102,6 +97,7 @@ export async function POST(req: Request) {
       }
 
       // Sync each record in this batch
+      // syncRecordToGraph internally resolves table → unified entity type
       for (const record of records) {
         try {
           await syncRecordToGraph(

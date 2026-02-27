@@ -105,15 +105,25 @@ export async function executeTool(
       case "create_contact":
         return await handleCreateContact(input, supabase, userId, orgId);
       case "update_contact":
-        return await handleUpdateContact(input, supabase);
+        return await handleUpdateContact(input, supabase, userId, orgId);
       case "create_company":
         return await handleCreateCompany(input, supabase, userId, orgId);
+      case "update_company":
+        return await handleUpdateCompany(input, supabase);
       case "create_deal":
         return await handleCreateDeal(input, supabase, userId, orgId);
+      case "update_deal":
+        return await handleUpdateDeal(input, supabase, userId, orgId);
       case "update_deal_stage":
         return await handleUpdateDealStage(input, supabase, orgId);
       case "log_activity":
         return await handleLogActivity(input, supabase, userId, orgId);
+      case "update_activity":
+        return await handleUpdateActivity(input, supabase);
+      case "archive_record":
+        return await handleArchiveRecord(input, supabase);
+      case "restore_record":
+        return await handleRestoreRecord(input, supabase);
       case "search_crm":
         return await handleSearchCrm(input, supabase);
       case "get_crm_summary":
@@ -1837,7 +1847,9 @@ async function handleCreateContact(
 
 async function handleUpdateContact(
   input: Record<string, unknown>,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
 ): Promise<ToolResult> {
   const contactName = (input.contact_name as string)?.trim();
   if (!contactName) return { success: false, message: "contact_name is required" };
@@ -1852,8 +1864,15 @@ async function handleUpdateContact(
   if (input.phone !== undefined) updates.phone = (input.phone as string).trim();
   if (input.title !== undefined) updates.title = (input.title as string).trim();
   if (input.status !== undefined) updates.status = input.status;
+  if (input.source !== undefined) updates.source = input.source;
   if (input.notes !== undefined) updates.notes = (input.notes as string).trim();
   if (input.tags !== undefined) updates.tags = input.tags;
+
+  // Resolve company_name → company_id (auto-creates if not found)
+  if (input.company_name !== undefined) {
+    const companyId = await resolveCompanyId(input.company_name as string, supabase, userId, orgId);
+    if (companyId) updates.company_id = companyId;
+  }
 
   const { data, error } = await supabase
     .from("crm_contacts")
@@ -2068,18 +2087,26 @@ async function handleLogActivity(
   }
   if (input.deal_title) dealId = await resolveDealId(input.deal_title as string, supabase);
 
+  const actRow: Record<string, unknown> = {
+    user_id: userId,
+    org_id: orgId,
+    type: actType,
+    subject,
+    description: ((input.description as string) ?? "").trim(),
+    contact_id: contactId,
+    company_id: companyId,
+    deal_id: dealId,
+  };
+
+  // New fields from Phase 5
+  if (input.duration_minutes !== undefined) actRow.duration_minutes = input.duration_minutes as number;
+  if (input.outcome !== undefined) actRow.outcome = (input.outcome as string).trim();
+  if (input.scheduled_at) actRow.scheduled_at = input.scheduled_at as string;
+  if (input.completed === true) actRow.completed_at = new Date().toISOString();
+
   const { data, error } = await supabase
     .from("crm_activities")
-    .insert({
-      user_id: userId,
-      org_id: orgId,
-      type: actType,
-      subject,
-      description: ((input.description as string) ?? "").trim(),
-      contact_id: contactId,
-      company_id: companyId,
-      deal_id: dealId,
-    })
+    .insert(actRow)
     .select()
     .single();
 
@@ -2089,7 +2116,360 @@ async function handleLogActivity(
 
   let msg = `Logged ${actType}: ${subject}`;
   if (input.contact_name) msg += ` (with ${input.contact_name})`;
+  if (input.duration_minutes) msg += ` (${input.duration_minutes} min)`;
+  if (input.outcome) msg += ` — Outcome: ${input.outcome}`;
+  if (input.completed) msg += ` [completed]`;
   return { success: true, message: msg };
+}
+
+
+/* ── update_company ── */
+
+async function handleUpdateCompany(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const companyName = (input.company_name as string)?.trim();
+  if (!companyName) return { success: false, message: "company_name is required" };
+
+  // Find company by name or domain (don't auto-create — we're updating, not creating)
+  let companyId: string | null = null;
+  const { data: byName } = await supabase
+    .from("crm_companies")
+    .select("id")
+    .ilike("name", companyName)
+    .single();
+  if (byName?.id) {
+    companyId = byName.id;
+  } else {
+    // Try domain match
+    const { data: byDomain } = await supabase
+      .from("crm_companies")
+      .select("id")
+      .ilike("domain", companyName)
+      .single();
+    companyId = byDomain?.id ?? null;
+  }
+
+  if (!companyId) return { success: false, message: `Company not found: "${companyName}"` };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.name !== undefined) updates.name = (input.name as string).trim();
+  if (input.domain !== undefined) updates.domain = (input.domain as string).trim();
+  if (input.industry !== undefined) updates.industry = (input.industry as string).trim();
+  if (input.size !== undefined) updates.size = input.size;
+  if (input.description !== undefined) updates.description = (input.description as string).trim();
+  if (input.website !== undefined) updates.website = (input.website as string).trim();
+  if (input.phone !== undefined) updates.phone = (input.phone as string).trim();
+  if (input.annual_revenue !== undefined) updates.annual_revenue = input.annual_revenue;
+  if (input.employees !== undefined) updates.employees = input.employees;
+  if (input.sector !== undefined) updates.sector = (input.sector as string).trim();
+  if (input.account_owner !== undefined) updates.account_owner = (input.account_owner as string).trim();
+
+  const { data, error } = await supabase
+    .from("crm_companies")
+    .update(updates)
+    .eq("id", companyId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  reembedInBackground(supabase, data.user_id, "crm_companies", companyId, data);
+
+  return { success: true, message: `Updated company: ${data.name}` };
+}
+
+
+/* ── update_deal (full) ── */
+
+async function handleUpdateDeal(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  const dealTitle = (input.deal_title as string)?.trim();
+  if (!dealTitle) return { success: false, message: "deal_title is required" };
+
+  const dealId = await resolveDealId(dealTitle, supabase);
+  if (!dealId) return { success: false, message: `Deal not found: "${dealTitle}"` };
+
+  // Get current deal state for stage change logic
+  const { data: currentDeal } = await supabase
+    .from("crm_deals")
+    .select("stage, user_id")
+    .eq("id", dealId)
+    .single();
+  const oldStage = currentDeal?.stage ?? "";
+
+  const probMap: Record<string, number> = { lead: 10, qualified: 25, proposal: 50, negotiation: 75, won: 100, lost: 0 };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+  // Simple field updates
+  if (input.title !== undefined) updates.title = (input.title as string).trim();
+  if (input.value !== undefined) updates.value = input.value;
+  if (input.expected_close_date !== undefined) updates.expected_close_date = (input.expected_close_date as string) || null;
+  if (input.next_steps !== undefined) updates.next_steps = (input.next_steps as string).trim();
+  if (input.notes !== undefined) updates.notes = (input.notes as string).trim();
+  if (input.close_reason !== undefined) updates.close_reason = (input.close_reason as string).trim();
+  if (input.lost_to !== undefined) updates.lost_to = (input.lost_to as string).trim();
+
+  // Stage change logic (same pattern as update_deal_stage)
+  const newStage = input.stage as string | undefined;
+  if (newStage !== undefined) {
+    updates.stage = newStage;
+    // Auto-set probability unless explicitly overridden
+    if (input.probability !== undefined) {
+      updates.probability = input.probability;
+    } else {
+      updates.probability = probMap[newStage] ?? 10;
+    }
+    // Handle won/lost close fields
+    if (newStage === "won" || newStage === "lost") {
+      updates.closed_at = new Date().toISOString();
+    }
+    // Clear close fields when moving away from won/lost
+    if (newStage !== "won" && newStage !== "lost" && (oldStage === "won" || oldStage === "lost")) {
+      updates.closed_at = null;
+      updates.close_reason = "";
+      updates.lost_to = "";
+    }
+  } else if (input.probability !== undefined) {
+    // Probability set without stage change
+    updates.probability = input.probability;
+  }
+
+  // Resolve contact/company if changing associations
+  if (input.contact_name !== undefined) {
+    const contactId = await resolveContactId(input.contact_name as string, supabase);
+    if (contactId) updates.contact_id = contactId;
+  }
+  if (input.company_name !== undefined) {
+    const companyId = await resolveCompanyId(input.company_name as string, supabase, userId, orgId);
+    if (companyId) updates.company_id = companyId;
+  }
+
+  const { data, error } = await supabase
+    .from("crm_deals")
+    .update(updates)
+    .eq("id", dealId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // Record stage history if stage changed
+  if (newStage && oldStage !== newStage && currentDeal?.user_id) {
+    await supabase.from("crm_deal_stage_history").insert({
+      user_id: currentDeal.user_id,
+      org_id: orgId,
+      deal_id: dealId,
+      from_stage: oldStage,
+      to_stage: newStage,
+      notes: ((input.close_reason as string) ?? (input.notes as string) ?? "").trim(),
+    });
+  }
+
+  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data);
+
+  const parts: string[] = [`Updated deal: "${data.title}"`];
+  if (newStage && oldStage !== newStage) parts.push(`${oldStage} → ${newStage}`);
+  if (input.value !== undefined) parts.push(`$${Number(data.value).toLocaleString()}`);
+  if (input.next_steps) parts.push(`Next steps: ${input.next_steps}`);
+  return { success: true, message: parts.join(" — ") };
+}
+
+
+/* ── update_activity ── */
+
+async function handleUpdateActivity(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const actSubject = (input.activity_subject as string)?.trim();
+  if (!actSubject) return { success: false, message: "activity_subject is required" };
+
+  // Resolve activity by subject, optionally scoped to contact
+  let query = supabase
+    .from("crm_activities")
+    .select("id, user_id, subject, type, contact_id")
+    .ilike("subject", `%${actSubject}%`)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  // If contact_name provided, narrow down
+  if (input.contact_name) {
+    const contactId = await resolveContactId(input.contact_name as string, supabase);
+    if (contactId) {
+      query = query.eq("contact_id", contactId);
+    }
+  }
+
+  const { data: activity } = await query.single();
+  if (!activity?.id) return { success: false, message: `Activity not found: "${actSubject}"` };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.subject !== undefined) updates.subject = (input.subject as string).trim();
+  if (input.description !== undefined) updates.description = (input.description as string).trim();
+  if (input.outcome !== undefined) updates.outcome = (input.outcome as string).trim();
+  if (input.duration_minutes !== undefined) updates.duration_minutes = input.duration_minutes;
+  if (input.scheduled_at !== undefined) updates.scheduled_at = (input.scheduled_at as string) || null;
+
+  // Handle completed flag
+  if (input.completed === true) {
+    updates.completed_at = new Date().toISOString();
+  } else if (input.completed === false) {
+    updates.completed_at = null;
+  }
+
+  const { data, error } = await supabase
+    .from("crm_activities")
+    .update(updates)
+    .eq("id", activity.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  reembedInBackground(supabase, data.user_id, "crm_activities", activity.id, data);
+
+  const parts: string[] = [`Updated ${data.type}: "${data.subject}"`];
+  if (input.completed === true) parts.push("[completed]");
+  if (input.outcome) parts.push(`Outcome: ${input.outcome}`);
+  if (input.duration_minutes) parts.push(`${input.duration_minutes} min`);
+  return { success: true, message: parts.join(" — ") };
+}
+
+
+/* ── archive_record ── */
+
+async function handleArchiveRecord(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const recordType = (input.record_type as string)?.trim();
+  const recordName = (input.record_name as string)?.trim();
+  if (!recordType || !recordName) return { success: false, message: "record_type and record_name are required" };
+
+  const tableMap: Record<string, { table: string; nameCol: string; displayCol: string }> = {
+    contact: { table: "crm_contacts", nameCol: "first_name", displayCol: "first_name" },
+    company: { table: "crm_companies", nameCol: "name", displayCol: "name" },
+    deal: { table: "crm_deals", nameCol: "title", displayCol: "title" },
+    activity: { table: "crm_activities", nameCol: "subject", displayCol: "subject" },
+  };
+
+  const mapping = tableMap[recordType];
+  if (!mapping) return { success: false, message: `Invalid record_type: "${recordType}". Must be contact, company, deal, or activity.` };
+
+  // Resolve record — contacts need special handling (first_name + last_name)
+  let recordId: string | null = null;
+  if (recordType === "contact") {
+    recordId = await resolveContactId(recordName, supabase);
+  } else {
+    const { data } = await supabase
+      .from(mapping.table)
+      .select("id")
+      .ilike(mapping.nameCol, `%${recordName}%`)
+      .eq("is_archived", false)
+      .limit(1)
+      .single();
+    recordId = data?.id ?? null;
+  }
+
+  if (!recordId) return { success: false, message: `${recordType} not found: "${recordName}"` };
+
+  const { error } = await supabase
+    .from(mapping.table)
+    .update({ is_archived: true, updated_at: new Date().toISOString() })
+    .eq("id", recordId);
+
+  if (error) throw error;
+
+  return { success: true, message: `Archived ${recordType}: "${recordName}". Use restore_record to undo.` };
+}
+
+
+/* ── restore_record ── */
+
+async function handleRestoreRecord(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const recordType = (input.record_type as string)?.trim();
+  const recordName = (input.record_name as string)?.trim();
+  if (!recordType || !recordName) return { success: false, message: "record_type and record_name are required" };
+
+  const tableMap: Record<string, { table: string; nameCol: string; displayCol: string }> = {
+    contact: { table: "crm_contacts", nameCol: "first_name", displayCol: "first_name" },
+    company: { table: "crm_companies", nameCol: "name", displayCol: "name" },
+    deal: { table: "crm_deals", nameCol: "title", displayCol: "title" },
+    activity: { table: "crm_activities", nameCol: "subject", displayCol: "subject" },
+  };
+
+  const mapping = tableMap[recordType];
+  if (!mapping) return { success: false, message: `Invalid record_type: "${recordType}". Must be contact, company, deal, or activity.` };
+
+  // Find archived records — contacts need special handling
+  let recordId: string | null = null;
+  if (recordType === "contact") {
+    // Search archived contacts by name
+    const parts = recordName.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      const { data } = await supabase
+        .from("crm_contacts")
+        .select("id")
+        .ilike("first_name", parts[0])
+        .ilike("last_name", parts.slice(1).join(" "))
+        .eq("is_archived", true)
+        .single();
+      recordId = data?.id ?? null;
+    }
+    if (!recordId) {
+      const { data } = await supabase
+        .from("crm_contacts")
+        .select("id")
+        .ilike("first_name", recordName.trim())
+        .eq("is_archived", true)
+        .limit(1)
+        .single();
+      recordId = data?.id ?? null;
+    }
+  } else {
+    const { data } = await supabase
+      .from(mapping.table)
+      .select("id")
+      .ilike(mapping.nameCol, `%${recordName}%`)
+      .eq("is_archived", true)
+      .limit(1)
+      .single();
+    recordId = data?.id ?? null;
+  }
+
+  if (!recordId) return { success: false, message: `No archived ${recordType} found: "${recordName}"` };
+
+  const { error } = await supabase
+    .from(mapping.table)
+    .update({ is_archived: false, updated_at: new Date().toISOString() })
+    .eq("id", recordId);
+
+  if (error) throw error;
+
+  // Re-embed restored record so it appears in searches again
+  // Fetch full record for re-embedding
+  const { data: restored } = await supabase
+    .from(mapping.table)
+    .select("*")
+    .eq("id", recordId)
+    .single();
+
+  if (restored) {
+    const uid = (restored as Record<string, unknown>).user_id as string;
+    if (uid) reembedInBackground(supabase, uid, mapping.table, recordId, restored as Record<string, unknown>);
+  }
+
+  return { success: true, message: `Restored ${recordType}: "${recordName}". It is now visible again.` };
 }
 
 
