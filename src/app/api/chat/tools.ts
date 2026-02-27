@@ -224,7 +224,7 @@ export function getToolDefinitions(): Tool[] {
     {
       name: "create_library_item",
       description:
-        "Create a new item in the user's library (a note, document, template, or reference). Use when the user wants to save content, create a note, or document something.",
+        "Create a new item in the user's library (a note, document, template, or reference). Use when the user wants to save content, create a note, or document something. Optionally link to CRM entities.",
       input_schema: {
         type: "object" as const,
         properties: {
@@ -240,8 +240,78 @@ export function getToolDefinitions(): Tool[] {
             items: { type: "string" },
             description: "Tags for organization (e.g. ['sales', 'pipeline'])",
           },
+          company_name: { type: "string", description: "Company this document is about (creates a graph edge)" },
+          contact_name: { type: "string", description: "Person this document is about (creates a graph edge)" },
+          deal_title: { type: "string", description: "Deal/opportunity this document relates to (creates a graph edge)" },
+          product_name: { type: "string", description: "Product this document relates to (creates a graph edge)" },
         },
         required: ["title", "content"],
+      },
+    },
+    {
+      name: "update_library_item",
+      description:
+        "Update an existing library item (note, document, template). Use when the user wants to modify, revise, or update a saved document.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          item_title: { type: "string", description: "Title of the library item to update (fuzzy match)" },
+          title: { type: "string", description: "New title" },
+          content: { type: "string", description: "New content text (replaces existing)" },
+          category: {
+            type: "string",
+            enum: ["Note", "Document", "Template", "Reference"],
+            description: "New category",
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "New tags (replaces existing)",
+          },
+        },
+        required: ["item_title"],
+      },
+    },
+    {
+      name: "search_library",
+      description:
+        "Search the knowledge library using semantic + keyword hybrid search. Returns matching documents, notes, templates, and files. Use when the user asks about saved documents or when you need to find previously saved information.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string", description: "Search query — topic, keyword, or question" },
+          category: {
+            type: "string",
+            enum: ["Note", "Document", "Template", "Reference"],
+            description: "Optional category filter",
+          },
+          limit: { type: "number", description: "Max results to return (default 5, max 20)" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "archive_library_item",
+      description:
+        "Archive (soft-delete) a library item. The item is hidden from searches but can be restored later.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          item_title: { type: "string", description: "Title of the library item to archive (fuzzy match)" },
+        },
+        required: ["item_title"],
+      },
+    },
+    {
+      name: "restore_library_item",
+      description:
+        "Restore a previously archived library item, making it visible again in searches.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          item_title: { type: "string", description: "Title of the archived library item to restore" },
+        },
+        required: ["item_title"],
       },
     },
 

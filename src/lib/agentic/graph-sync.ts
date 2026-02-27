@@ -192,6 +192,15 @@ const TABLE_MAPPINGS: Record<string, TableGraphMapping> = {
     edges: [],
   },
 
+  library_files: {
+    entity: {
+      entityType: "document", // unified — same as library_items
+      labelField: "name",
+      sublabelBuilder: (r) => (r.category as string) || (r.mime_type as string) || null,
+    },
+    edges: [],
+  },
+
   /* ── E-Commerce entities ── */
   ecom_customers: {
     entity: {
@@ -324,7 +333,7 @@ export async function ensureGraphNode(
  * Create a graph edge between two nodes.
  * Only creates if source and target nodes exist.
  */
-async function createEdge(
+export async function createEdge(
   supabase: SupabaseClient,
   orgId: string,
   sourceNodeId: string,

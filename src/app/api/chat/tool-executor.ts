@@ -5,7 +5,7 @@ import { hasMinRole } from "@/lib/org";
 import type { OrgRole, SegmentRule, BrandAssetType, EmailType, KlaviyoConfig } from "@/lib/types/database";
 import { pushSegmentToList } from "@/lib/klaviyo/sync-service";
 import { emitToolEvent } from "@/lib/agentic/event-emitter";
-import { syncRecordToGraphInBackground } from "@/lib/agentic/graph-sync";
+import { syncRecordToGraphInBackground, syncRecordToGraph, createEdge } from "@/lib/agentic/graph-sync";
 import { analyzeData } from "@/lib/data-agent/agent";
 import {
   discoverSegments,
@@ -69,6 +69,14 @@ export async function executeTool(
         return await handleUpdateGoalStatus(input, supabase);
       case "create_library_item":
         return await handleCreateLibraryItem(input, supabase, userId, orgId);
+      case "update_library_item":
+        return await handleUpdateLibraryItem(input, supabase, userId);
+      case "search_library":
+        return await handleSearchLibrary(input, supabase, userId);
+      case "archive_library_item":
+        return await handleArchiveLibraryItem(input, supabase);
+      case "restore_library_item":
+        return await handleRestoreLibraryItem(input, supabase, userId);
       case "delete_team_roles":
         return await handleDeleteTeamRoles(input, supabase);
       case "delete_team_kpis":
@@ -287,6 +295,9 @@ function inferEntityFromTool(
     update_pain_point_status: "pain_points",
     delete_pain_point: "pain_points",
     create_library_item: "library_items",
+    update_library_item: "library_items",
+    archive_library_item: "library_items",
+    restore_library_item: "library_items",
     create_project: "projects",
     update_canvas: "projects",
     create_contact: "crm_contacts",
@@ -910,6 +921,7 @@ async function handleCreateLibraryItem(
     content,
     category: (input.category as string) ?? "Note",
     tags: (input.tags as string[]) ?? [],
+    source_type: "ai",
   };
 
   const { data, error } = await supabase
@@ -923,8 +935,279 @@ async function handleCreateLibraryItem(
   // Embed the new library item (fire-and-forget)
   embedInBackground(supabase, userId, "library_items", data.id, data);
 
-  return { success: true, message: `Created library item "${data.title}" (${data.category})` };
+  // Link document to entities via graph edges (if any entity params provided)
+  const hasEntityLinks = input.company_name || input.contact_name || input.deal_title || input.product_name;
+  if (hasEntityLinks) {
+    // Create graph node synchronously so edges can reference it
+    // (the executeToolWithGraph wrapper will upsert harmlessly after)
+    linkDocumentToEntities(
+      supabase, orgId, userId, "library_items", data.id, data, input
+    ).catch(() => { /* fire-and-forget — edge creation is best-effort */ });
+  }
+
+  const linkedTo: string[] = [];
+  if (input.company_name) linkedTo.push(`company: ${input.company_name}`);
+  if (input.contact_name) linkedTo.push(`contact: ${input.contact_name}`);
+  if (input.deal_title) linkedTo.push(`deal: ${input.deal_title}`);
+  if (input.product_name) linkedTo.push(`product: ${input.product_name}`);
+
+  let msg = `Created library item "${data.title}" (${data.category})`;
+  if (linkedTo.length > 0) msg += ` — linked to ${linkedTo.join(", ")}`;
+  return { success: true, message: msg };
 }
+
+
+/**
+ * Links a document to CRM entities by creating graph edges.
+ * Creates the document graph node first (sync), then creates edges to each entity.
+ */
+async function linkDocumentToEntities(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+  sourceTable: string,
+  docId: string,
+  docRecord: Record<string, unknown>,
+  input: Record<string, unknown>
+): Promise<void> {
+  // Ensure document graph node exists
+  const docNodeId = await syncRecordToGraph(supabase, orgId, sourceTable, docId, docRecord, userId);
+  if (!docNodeId) return;
+
+  // Define entity link targets
+  const links: { param: string; resolver: () => Promise<string | null>; entityType: string; relationType: string }[] = [];
+
+  if (input.company_name) {
+    links.push({
+      param: input.company_name as string,
+      resolver: () => resolveCompanyId(input.company_name as string, supabase, userId, orgId),
+      entityType: "company",
+      relationType: "documents",
+    });
+  }
+  if (input.contact_name) {
+    links.push({
+      param: input.contact_name as string,
+      resolver: () => resolveContactId(input.contact_name as string, supabase),
+      entityType: "person",
+      relationType: "documents_person",
+    });
+  }
+  if (input.deal_title) {
+    links.push({
+      param: input.deal_title as string,
+      resolver: () => resolveDealId(input.deal_title as string, supabase),
+      entityType: "pipeline_item",
+      relationType: "documents_deal",
+    });
+  }
+  if (input.product_name) {
+    links.push({
+      param: input.product_name as string,
+      resolver: () => resolveProductId(input.product_name as string, supabase),
+      entityType: "product",
+      relationType: "documents_product",
+    });
+  }
+
+  for (const link of links) {
+    try {
+      const entityId = await link.resolver();
+      if (!entityId) continue;
+
+      // Find target graph node
+      const { data: targetNode } = await supabase
+        .from("graph_nodes")
+        .select("id")
+        .eq("org_id", orgId)
+        .eq("entity_type", link.entityType)
+        .eq("entity_id", entityId)
+        .limit(1)
+        .single();
+
+      if (targetNode?.id) {
+        await createEdge(supabase, orgId, docNodeId, targetNode.id, link.relationType);
+      }
+    } catch {
+      // Best-effort — don't fail the whole operation if one edge fails
+    }
+  }
+}
+
+
+/* ── Helper: resolve product name → id ── */
+
+async function resolveProductId(
+  productName: string,
+  supabase: SupabaseClient
+): Promise<string | null> {
+  if (!productName) return null;
+  // Try ecom_products first
+  const { data: ecom } = await supabase
+    .from("ecom_products")
+    .select("id")
+    .ilike("title", `%${productName}%`)
+    .limit(1)
+    .single();
+  if (ecom?.id) return ecom.id;
+  return null;
+}
+
+
+/* ── update_library_item ── */
+
+async function handleUpdateLibraryItem(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const itemTitle = (input.item_title as string)?.trim();
+  if (!itemTitle) return { success: false, message: "item_title is required" };
+
+  // Resolve by title (fuzzy)
+  const { data: item } = await supabase
+    .from("library_items")
+    .select("id")
+    .ilike("title", `%${itemTitle}%`)
+    .eq("is_archived", false)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!item?.id) return { success: false, message: `Library item not found: "${itemTitle}"` };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.title !== undefined) updates.title = (input.title as string).trim();
+  if (input.content !== undefined) updates.content = (input.content as string).trim();
+  if (input.category !== undefined) updates.category = input.category;
+  if (input.tags !== undefined) updates.tags = input.tags;
+
+  const { data, error } = await supabase
+    .from("library_items")
+    .update(updates)
+    .eq("id", item.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  reembedInBackground(supabase, userId, "library_items", item.id, data as Record<string, unknown>);
+
+  return { success: true, message: `Updated library item "${(data as Record<string, unknown>).title}" (${(data as Record<string, unknown>).category})` };
+}
+
+
+/* ── search_library ── */
+
+async function handleSearchLibrary(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const query = (input.query as string)?.trim();
+  if (!query) return { success: false, message: "query is required" };
+
+  const limit = Math.min((input.limit as number) || 5, 20);
+
+  const results = await hybridSearch(supabase, userId, query, {
+    limit,
+    sourceFilter: ["library_items", "library_files"],
+  });
+
+  if (results.length === 0) {
+    return { success: true, message: "No matching documents found in the library." };
+  }
+
+  // Optional category filter via metadata
+  let filtered = results;
+  const category = input.category as string | undefined;
+  if (category) {
+    const catFiltered = results.filter(
+      (r) => (r.metadata?.category as string)?.toLowerCase() === category.toLowerCase()
+    );
+    if (catFiltered.length > 0) filtered = catFiltered;
+  }
+
+  let message = `**Found ${filtered.length} matching document(s):**\n\n`;
+  for (const r of filtered) {
+    const title = (r.metadata?.title as string) || "Untitled";
+    const cat = (r.metadata?.category as string) || "";
+    const source = r.sourceTable === "library_files" ? "File" : "Document";
+    message += `### ${title} [${source}${cat ? ` / ${cat}` : ""}]\n`;
+    message += `${r.chunkText.slice(0, 500)}${r.chunkText.length > 500 ? "..." : ""}\n`;
+    message += `*(Relevance: ${(r.combinedScore * 100).toFixed(0)}%)*\n\n`;
+  }
+
+  return { success: true, message };
+}
+
+
+/* ── archive_library_item ── */
+
+async function handleArchiveLibraryItem(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const itemTitle = (input.item_title as string)?.trim();
+  if (!itemTitle) return { success: false, message: "item_title is required" };
+
+  const { data: item } = await supabase
+    .from("library_items")
+    .select("id, title")
+    .ilike("title", `%${itemTitle}%`)
+    .eq("is_archived", false)
+    .limit(1)
+    .single();
+
+  if (!item?.id) return { success: false, message: `Library item not found: "${itemTitle}"` };
+
+  const { error } = await supabase
+    .from("library_items")
+    .update({ is_archived: true, updated_at: new Date().toISOString() })
+    .eq("id", item.id);
+
+  if (error) throw error;
+
+  // Remove from vector search
+  deleteChunksInBackground(supabase, "library_items", item.id);
+
+  return { success: true, message: `Archived library item: "${item.title}". Use restore_library_item to undo.` };
+}
+
+
+/* ── restore_library_item ── */
+
+async function handleRestoreLibraryItem(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const itemTitle = (input.item_title as string)?.trim();
+  if (!itemTitle) return { success: false, message: "item_title is required" };
+
+  const { data: item } = await supabase
+    .from("library_items")
+    .select("*")
+    .ilike("title", `%${itemTitle}%`)
+    .eq("is_archived", true)
+    .limit(1)
+    .single();
+
+  if (!item) return { success: false, message: `No archived library item found: "${itemTitle}"` };
+
+  const { error } = await supabase
+    .from("library_items")
+    .update({ is_archived: false, updated_at: new Date().toISOString() })
+    .eq("id", item.id);
+
+  if (error) throw error;
+
+  // Re-embed so it appears in searches again
+  embedInBackground(supabase, userId, "library_items", item.id, item as Record<string, unknown>);
+
+  return { success: true, message: `Restored library item: "${item.title}". It is now visible again.` };
+}
+
 
 /* ══════════════════════════════════════════════════════════
    DELETE HANDLERS
