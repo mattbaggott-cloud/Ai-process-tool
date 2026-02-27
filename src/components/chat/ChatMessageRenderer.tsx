@@ -2,6 +2,19 @@
 
 import { useMemo } from "react";
 import dynamic from "next/dynamic";
+import {
+  SlashPipelineView,
+  SlashPeopleView,
+  SlashAccountsView,
+  SlashKnowledgeView,
+  SlashCampaignsView,
+  SlashProjectsView,
+  SlashCustomersView,
+  SlashOrdersView,
+  SlashProductsView,
+  SlashDashboardView,
+  SlashToolsView,
+} from "@/components/chat/SlashViews";
 
 /* Lazy-load ChartRenderer (uses Recharts which is heavy) */
 const ChartRenderer = dynamic(
@@ -65,6 +78,192 @@ export interface ConfidenceData {
   total_fields: number;
 }
 
+/* ── Slash View Data Types ─────────────────────────────── */
+
+export interface SlashPipelineData {
+  total_deals: number;
+  active_deals: number;
+  total_value: number;
+  weighted_value: number;
+  won_value: number;
+  columns: Array<{
+    stage: string;
+    label: string;
+    color: string;
+    deal_count: number;
+    total_value: number;
+    deals: Array<{
+      id: string;
+      title: string;
+      value: number;
+      currency: string;
+      probability: number;
+      contact_name: string;
+      company_name: string;
+      expected_close_date: string | null;
+      days_in_stage: number;
+    }>;
+  }>;
+}
+
+export interface SlashPeopleData {
+  total_contacts: number;
+  by_status: Record<string, number>;
+  contacts: Array<{
+    id: string;
+    name: string;
+    email: string;
+    phone: string;
+    title: string;
+    company_name: string;
+    status: string;
+    source: string;
+    last_activity: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface SlashAccountsData {
+  total_companies: number;
+  companies: Array<{
+    id: string;
+    name: string;
+    domain: string;
+    industry: string;
+    size: string;
+    contact_count: number;
+    deal_count: number;
+    total_deal_value: number;
+    annual_revenue: number | null;
+    created_at: string;
+  }>;
+}
+
+export interface SlashKnowledgeData {
+  total_items: number;
+  by_category: Record<string, number>;
+  items: Array<{
+    id: string;
+    title: string;
+    category: string;
+    tags: string[];
+    content_preview: string;
+    updated_at: string;
+    created_at: string;
+  }>;
+}
+
+export interface SlashCampaignsData {
+  total_campaigns: number;
+  by_status: Record<string, number>;
+  campaigns: Array<{
+    id: string;
+    name: string;
+    status: string;
+    campaign_type: string;
+    variant_count: number;
+    sent_count: number;
+    open_rate: number | null;
+    click_rate: number | null;
+    sent_at: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface SlashProjectsData {
+  total_projects: number;
+  by_mode: Record<string, number>;
+  projects: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    description: string;
+    active_mode: string;
+    block_count: number;
+    node_count: number;
+    message_count: number;
+    updated_at: string;
+    created_at: string;
+  }>;
+}
+
+export interface SlashCustomersData {
+  total_customers: number;
+  total_revenue: number;
+  avg_order_value: number;
+  customers: Array<{
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    order_count: number;
+    total_spent: number;
+    last_order_date: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface SlashOrdersData {
+  total_orders: number;
+  total_revenue: number;
+  avg_order_value: number;
+  by_status: Record<string, number>;
+  orders: Array<{
+    id: string;
+    order_number: string;
+    customer_name: string;
+    financial_status: string;
+    item_count: number;
+    total_price: number;
+    created_at: string;
+  }>;
+}
+
+export interface SlashProductsData {
+  total_products: number;
+  by_type: Record<string, number>;
+  products: Array<{
+    id: string;
+    title: string;
+    product_type: string;
+    price: number;
+    variant_count: number;
+    total_sold: number;
+    status: string;
+  }>;
+}
+
+export interface SlashDashboardData {
+  sections: Array<{
+    title: string;
+    metrics: Array<{
+      label: string;
+      value: string;
+      change?: string;
+      trend?: "up" | "down" | "neutral";
+    }>;
+  }>;
+  highlights: Array<{
+    icon: string;
+    text: string;
+  }>;
+}
+
+export interface SlashToolsData {
+  total: number;
+  status_counts: Record<string, number>;
+  category_counts: Record<string, number>;
+  tools: Array<{
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    teams: string[];
+    team_usage: Record<string, string>;
+    status: string;
+  }>;
+}
+
 export type ContentSegment =
   | { type: "text"; content: string }
   | { type: "table"; data: InlineTableData }
@@ -72,11 +271,22 @@ export type ContentSegment =
   | { type: "profile"; data: InlineProfileData }
   | { type: "metric"; data: InlineMetricData }
   | { type: "clarification"; data: ClarificationData }
-  | { type: "confidence"; data: ConfidenceData };
+  | { type: "confidence"; data: ConfidenceData }
+  | { type: "slash_pipeline"; data: SlashPipelineData }
+  | { type: "slash_people"; data: SlashPeopleData }
+  | { type: "slash_accounts"; data: SlashAccountsData }
+  | { type: "slash_knowledge"; data: SlashKnowledgeData }
+  | { type: "slash_campaigns"; data: SlashCampaignsData }
+  | { type: "slash_projects"; data: SlashProjectsData }
+  | { type: "slash_customers"; data: SlashCustomersData }
+  | { type: "slash_orders"; data: SlashOrdersData }
+  | { type: "slash_products"; data: SlashProductsData }
+  | { type: "slash_dashboard"; data: SlashDashboardData }
+  | { type: "slash_tools"; data: SlashToolsData };
 
 /* ── Parse message content for inline blocks ────────────── */
 
-export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)):([\s\S]*?)-->/g;
+export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)|(SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS))):([\s\S]*?)-->/g;
 
 export function parseMessageContent(content: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
@@ -93,11 +303,13 @@ export function parseMessageContent(content: string): ContentSegment[] {
     // match[1] = INLINE_ type (TABLE|CHART|PROFILE|METRIC)
     // match[2] = CLARIFICATION
     // match[3] = CONFIDENCE
-    // match[4] = JSON payload
+    // match[4] = SLASH_ type (SLASH_PIPELINE|SLASH_PEOPLE|SLASH_ACCOUNTS|SLASH_KNOWLEDGE)
+    // match[5] = JSON payload
     const inlineType = match[1];
     const isClarification = match[2];
     const isConfidence = match[3];
-    const jsonStr = match[4];
+    const slashType = match[4];
+    const jsonStr = match[5];
 
     try {
       const parsed = JSON.parse(jsonStr);
@@ -113,6 +325,28 @@ export function parseMessageContent(content: string): ContentSegment[] {
         segments.push({ type: "clarification", data: parsed as ClarificationData });
       } else if (isConfidence && parsed.inferred_fields) {
         segments.push({ type: "confidence", data: parsed as ConfidenceData });
+      } else if (slashType === "SLASH_PIPELINE" && parsed.columns) {
+        segments.push({ type: "slash_pipeline", data: parsed as SlashPipelineData });
+      } else if (slashType === "SLASH_PEOPLE" && parsed.contacts) {
+        segments.push({ type: "slash_people", data: parsed as SlashPeopleData });
+      } else if (slashType === "SLASH_ACCOUNTS" && parsed.companies) {
+        segments.push({ type: "slash_accounts", data: parsed as SlashAccountsData });
+      } else if (slashType === "SLASH_KNOWLEDGE") {
+        segments.push({ type: "slash_knowledge", data: parsed as SlashKnowledgeData });
+      } else if (slashType === "SLASH_CAMPAIGNS" && parsed.campaigns) {
+        segments.push({ type: "slash_campaigns", data: parsed as SlashCampaignsData });
+      } else if (slashType === "SLASH_PROJECTS" && parsed.projects) {
+        segments.push({ type: "slash_projects", data: parsed as SlashProjectsData });
+      } else if (slashType === "SLASH_CUSTOMERS" && parsed.customers) {
+        segments.push({ type: "slash_customers", data: parsed as SlashCustomersData });
+      } else if (slashType === "SLASH_ORDERS" && parsed.orders) {
+        segments.push({ type: "slash_orders", data: parsed as SlashOrdersData });
+      } else if (slashType === "SLASH_PRODUCTS" && parsed.products) {
+        segments.push({ type: "slash_products", data: parsed as SlashProductsData });
+      } else if (slashType === "SLASH_DASHBOARD" && parsed.sections) {
+        segments.push({ type: "slash_dashboard", data: parsed as SlashDashboardData });
+      } else if (slashType === "SLASH_TOOLS" && parsed.tools) {
+        segments.push({ type: "slash_tools", data: parsed as SlashToolsData });
       } else {
         // Malformed inline block — skip silently
         segments.push({ type: "text", content: "" });
@@ -332,6 +566,39 @@ export function RichMessageContent({
         if (seg.type === "confidence") {
           return <InlineConfidence key={i} data={seg.data} />;
         }
+        if (seg.type === "slash_pipeline") {
+          return <SlashPipelineView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_people") {
+          return <SlashPeopleView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_accounts") {
+          return <SlashAccountsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_knowledge") {
+          return <SlashKnowledgeView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_campaigns") {
+          return <SlashCampaignsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_projects") {
+          return <SlashProjectsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_customers") {
+          return <SlashCustomersView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_orders") {
+          return <SlashOrdersView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_products") {
+          return <SlashProductsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_dashboard") {
+          return <SlashDashboardView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_tools") {
+          return <SlashToolsView key={i} data={seg.data} />;
+        }
         if (seg.type === "text") {
           return (
             <p key={i} style={{ whiteSpace: "pre-wrap" }}>
@@ -351,6 +618,7 @@ export function hasInlineBlocks(content: string): boolean {
   return (
     content.includes("<!--INLINE_") ||
     content.includes("<!--CLARIFICATION:") ||
-    content.includes("<!--CONFIDENCE:")
+    content.includes("<!--CONFIDENCE:") ||
+    content.includes("<!--SLASH_")
   );
 }

@@ -236,6 +236,22 @@ You can create, update, search, and archive documents in the organization's know
 - update_library_item — update content, title, category, or tags
 - archive_library_item — soft-delete (recoverable via restore_library_item)
 
+## Slash Commands
+When the user sends a message that is exactly a slash command, IMMEDIATELY call the corresponding tool without asking clarifying questions:
+- "/pipeline" → call get_pipeline_view (CRM deal pipeline Kanban)
+- "/people" → call get_people_view (CRM contacts table)
+- "/accounts" → call get_accounts_view (CRM companies grid)
+- "/knowledge" → call get_knowledge_view (knowledge base library)
+- "/campaigns" → call get_campaigns_view (email campaigns list)
+- "/projects" → call get_projects_view (workspace projects)
+- "/customers" → call get_customers_view (e-commerce customers)
+- "/orders" → call get_orders_view (e-commerce orders)
+- "/products" → call get_products_view (product catalog)
+- "/dashboard" → call get_dashboard_view (aggregated overview)
+- "/tools" → call get_tools_view (tech stack)
+
+After the view renders, add a brief 1-2 sentence commentary about the data shown (e.g., pipeline health, notable trends). Do NOT reproduce the data in text form — the view already shows it visually.
+
 ## When to Clarify vs. Just Act
 Most requests are clear — just execute them. Only ask for clarification when the request has genuine ambiguity that could lead to wrong results.
 
@@ -1359,7 +1375,7 @@ export async function POST(req: Request) {
 
               // Extract inline viz markers BEFORE they go to Claude
               // These get streamed directly to the user — Claude narrates, code renders
-              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE):[\s\S]*?-->/g;
+              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE|SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS)):[\s\S]*?-->/g;
               const vizMarkers: string[] = [];
               let vizMatch;
               while ((vizMatch = vizMarkerRegex.exec(resultMessage)) !== null) {
@@ -1380,6 +1396,17 @@ export async function POST(req: Request) {
                 .replace(/<!--INLINE_METRIC:[\s\S]*?-->/g, "\n[Metric summary cards have been rendered and displayed to the user above. Do NOT recreate these numbers.]\n")
                 .replace(/<!--CLARIFICATION:[\s\S]*?-->/g, "\n[Clarification options have been shown to the user. Wait for their selection before proceeding.]\n")
                 .replace(/<!--CONFIDENCE:[\s\S]*?-->/g, "") // confidence metadata handled by frontend, not needed by Claude
+                .replace(/<!--SLASH_PIPELINE:[\s\S]*?-->/g, "\n[A pipeline Kanban view has been rendered for the user. Add a brief 1-2 sentence commentary about pipeline health.]\n")
+                .replace(/<!--SLASH_PEOPLE:[\s\S]*?-->/g, "\n[A contacts list view has been rendered for the user. Add a brief 1-2 sentence commentary about the contact base.]\n")
+                .replace(/<!--SLASH_ACCOUNTS:[\s\S]*?-->/g, "\n[An accounts view has been rendered for the user. Add a brief 1-2 sentence commentary about the account portfolio.]\n")
+                .replace(/<!--SLASH_KNOWLEDGE:[\s\S]*?-->/g, "\n[A knowledge base view has been rendered for the user. Add a brief 1-2 sentence commentary about the library.]\n")
+                .replace(/<!--SLASH_CAMPAIGNS:[\s\S]*?-->/g, "\n[An email campaigns view has been rendered for the user. Add a brief 1-2 sentence commentary about campaign activity.]\n")
+                .replace(/<!--SLASH_PROJECTS:[\s\S]*?-->/g, "\n[A projects view has been rendered for the user. Add a brief 1-2 sentence commentary about the workspace.]\n")
+                .replace(/<!--SLASH_CUSTOMERS:[\s\S]*?-->/g, "\n[An e-commerce customers view has been rendered for the user. Add a brief 1-2 sentence commentary about the customer base.]\n")
+                .replace(/<!--SLASH_ORDERS:[\s\S]*?-->/g, "\n[A recent orders view has been rendered for the user. Add a brief 1-2 sentence commentary about order activity.]\n")
+                .replace(/<!--SLASH_PRODUCTS:[\s\S]*?-->/g, "\n[A product catalog view has been rendered for the user. Add a brief 1-2 sentence commentary about the catalog.]\n")
+                .replace(/<!--SLASH_DASHBOARD:[\s\S]*?-->/g, "\n[A dashboard overview with metrics and highlights has been rendered for the user. Add a brief 2-3 sentence summary of the overall business health and any notable items.]\n")
+                .replace(/<!--SLASH_TOOLS:[\s\S]*?-->/g, "\n[A tech stack view has been rendered for the user. Add a brief 1-2 sentence commentary about their tool stack.]\n")
                 .trim();
 
               // Prepend the narrative summary so Claude leads with accurate facts

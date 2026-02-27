@@ -216,6 +216,30 @@ export async function executeTool(
       case "analyze_data":
         return await handleAnalyzeData(input, supabase, orgId, userId, sessionId);
 
+      /* Slash Command Views */
+      case "get_pipeline_view":
+        return await handleGetPipelineView(supabase, orgId);
+      case "get_people_view":
+        return await handleGetPeopleView(supabase, orgId);
+      case "get_accounts_view":
+        return await handleGetAccountsView(supabase, orgId);
+      case "get_knowledge_view":
+        return await handleGetKnowledgeView(supabase, orgId);
+      case "get_campaigns_view":
+        return await handleGetCampaignsView(supabase, orgId);
+      case "get_projects_view":
+        return await handleGetProjectsView(supabase, userId);
+      case "get_customers_view":
+        return await handleGetCustomersView(supabase, orgId);
+      case "get_orders_view":
+        return await handleGetOrdersView(supabase, orgId);
+      case "get_products_view":
+        return await handleGetProductsView(supabase, orgId);
+      case "get_dashboard_view":
+        return await handleGetDashboardView(supabase, orgId, userId);
+      case "get_tools_view":
+        return await handleGetToolsView(supabase, orgId, userId);
+
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
     }
@@ -6244,5 +6268,799 @@ async function handleAnalyzeData(
       success: false,
       message: `Data analysis failed: ${err instanceof Error ? err.message : "Unknown error"}`,
     };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH COMMAND VIEW HANDLERS
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetPipelineView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch all non-archived deals
+    const { data: deals, error } = await supabase
+      .from("crm_deals")
+      .select("id, title, value, currency, stage, probability, expected_close_date, contact_id, company_id, updated_at, is_archived")
+      .eq("org_id", orgId)
+      .or("is_archived.is.null,is_archived.eq.false")
+      .order("value", { ascending: false });
+
+    if (error) return { success: false, message: `Failed to fetch pipeline: ${error.message}` };
+
+    const allDeals = deals || [];
+
+    // Batch-fetch contact + company names
+    const contactIds = [...new Set(allDeals.filter(d => d.contact_id).map(d => d.contact_id))];
+    const companyIds = [...new Set(allDeals.filter(d => d.company_id).map(d => d.company_id))];
+
+    const [contactsRes, companiesRes] = await Promise.all([
+      contactIds.length > 0
+        ? supabase.from("crm_contacts").select("id, first_name, last_name").in("id", contactIds)
+        : Promise.resolve({ data: [] as { id: string; first_name: string; last_name: string }[] }),
+      companyIds.length > 0
+        ? supabase.from("crm_companies").select("id, name").in("id", companyIds)
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+    ]);
+
+    const contactMap: Record<string, string> = {};
+    for (const c of contactsRes.data || []) contactMap[c.id] = `${c.first_name} ${c.last_name}`.trim();
+    const companyMap: Record<string, string> = {};
+    for (const c of companiesRes.data || []) companyMap[c.id] = c.name;
+
+    // Group by stage
+    const stages = ["lead", "qualified", "proposal", "negotiation", "won", "lost"];
+    const stageColors: Record<string, string> = {
+      lead: "#2563eb", qualified: "#7c3aed", proposal: "#d97706",
+      negotiation: "#ea580c", won: "#16a34a", lost: "#dc2626",
+    };
+    const stageLabels: Record<string, string> = {
+      lead: "Lead", qualified: "Qualified", proposal: "Proposal",
+      negotiation: "Negotiation", won: "Won", lost: "Lost",
+    };
+
+    const columns = stages.map((stage) => {
+      const stageDeals = allDeals.filter(d => d.stage === stage);
+      return {
+        stage,
+        label: stageLabels[stage] || stage,
+        color: stageColors[stage] || "#6b7280",
+        deal_count: stageDeals.length,
+        total_value: stageDeals.reduce((s, d) => s + (d.value || 0), 0),
+        deals: stageDeals.map(d => ({
+          id: d.id,
+          title: d.title,
+          value: d.value || 0,
+          currency: d.currency || "USD",
+          probability: d.probability || 0,
+          contact_name: d.contact_id ? contactMap[d.contact_id] || "" : "",
+          company_name: d.company_id ? companyMap[d.company_id] || "" : "",
+          expected_close_date: d.expected_close_date || null,
+          days_in_stage: Math.floor((Date.now() - new Date(d.updated_at).getTime()) / 86400000),
+        })),
+      };
+    });
+
+    const activeDeals = allDeals.filter(d => d.stage !== "won" && d.stage !== "lost");
+    const totalValue = activeDeals.reduce((s, d) => s + (d.value || 0), 0);
+    const weightedValue = activeDeals.reduce((s, d) => s + (d.value || 0) * ((d.probability || 0) / 100), 0);
+    const wonValue = allDeals.filter(d => d.stage === "won").reduce((s, d) => s + (d.value || 0), 0);
+
+    const payload = {
+      total_deals: allDeals.length,
+      active_deals: activeDeals.length,
+      total_value: totalValue,
+      weighted_value: weightedValue,
+      won_value: wonValue,
+      columns,
+    };
+
+    return { success: true, message: `<!--SLASH_PIPELINE:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Pipeline view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetPeopleView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch contacts
+    const { data: contacts, error } = await supabase
+      .from("crm_contacts")
+      .select("id, first_name, last_name, email, phone, title, company_id, status, source, created_at, is_archived")
+      .eq("org_id", orgId)
+      .or("is_archived.is.null,is_archived.eq.false")
+      .order("created_at", { ascending: false });
+
+    if (error) return { success: false, message: `Failed to fetch contacts: ${error.message}` };
+
+    const allContacts = contacts || [];
+
+    // Batch-fetch company names
+    const companyIds = [...new Set(allContacts.filter(c => c.company_id).map(c => c.company_id))];
+    const companiesRes = companyIds.length > 0
+      ? await supabase.from("crm_companies").select("id, name").in("id", companyIds)
+      : { data: [] as { id: string; name: string }[] };
+    const companyMap: Record<string, string> = {};
+    for (const c of companiesRes.data || []) companyMap[c.id] = c.name;
+
+    // Fetch last activity per contact (most recent activity date)
+    const contactIds = allContacts.map(c => c.id);
+    let activityMap: Record<string, string> = {};
+    if (contactIds.length > 0) {
+      const { data: activities } = await supabase
+        .from("crm_activities")
+        .select("contact_id, created_at")
+        .in("contact_id", contactIds)
+        .order("created_at", { ascending: false });
+      if (activities) {
+        for (const a of activities) {
+          if (a.contact_id && !activityMap[a.contact_id]) {
+            activityMap[a.contact_id] = a.created_at;
+          }
+        }
+      }
+    }
+
+    // Count by status
+    const byStatus: Record<string, number> = {};
+    for (const c of allContacts) {
+      const s = c.status || "unknown";
+      byStatus[s] = (byStatus[s] || 0) + 1;
+    }
+
+    const payload = {
+      total_contacts: allContacts.length,
+      by_status: byStatus,
+      contacts: allContacts.map(c => ({
+        id: c.id,
+        name: `${c.first_name || ""} ${c.last_name || ""}`.trim() || "Unnamed",
+        email: c.email || "",
+        phone: c.phone || "",
+        title: c.title || "",
+        company_name: c.company_id ? companyMap[c.company_id] || "" : "",
+        status: c.status || "unknown",
+        source: c.source || "",
+        last_activity: activityMap[c.id] || null,
+        created_at: c.created_at,
+      })),
+    };
+
+    return { success: true, message: `<!--SLASH_PEOPLE:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `People view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetAccountsView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch companies
+    const { data: companies, error } = await supabase
+      .from("crm_companies")
+      .select("id, name, domain, industry, size, annual_revenue, created_at, is_archived")
+      .eq("org_id", orgId)
+      .or("is_archived.is.null,is_archived.eq.false")
+      .order("name", { ascending: true });
+
+    if (error) return { success: false, message: `Failed to fetch accounts: ${error.message}` };
+
+    const allCompanies = companies || [];
+    const companyIds = allCompanies.map(c => c.id);
+
+    // Count contacts + deals per company
+    let contactCounts: Record<string, number> = {};
+    let dealCounts: Record<string, number> = {};
+    let dealValues: Record<string, number> = {};
+
+    if (companyIds.length > 0) {
+      const [contactsRes, dealsRes] = await Promise.all([
+        supabase
+          .from("crm_contacts")
+          .select("company_id")
+          .in("company_id", companyIds)
+          .or("is_archived.is.null,is_archived.eq.false"),
+        supabase
+          .from("crm_deals")
+          .select("company_id, value")
+          .in("company_id", companyIds)
+          .or("is_archived.is.null,is_archived.eq.false"),
+      ]);
+
+      for (const c of contactsRes.data || []) {
+        if (c.company_id) contactCounts[c.company_id] = (contactCounts[c.company_id] || 0) + 1;
+      }
+      for (const d of dealsRes.data || []) {
+        if (d.company_id) {
+          dealCounts[d.company_id] = (dealCounts[d.company_id] || 0) + 1;
+          dealValues[d.company_id] = (dealValues[d.company_id] || 0) + (d.value || 0);
+        }
+      }
+    }
+
+    const payload = {
+      total_companies: allCompanies.length,
+      companies: allCompanies.map(c => ({
+        id: c.id,
+        name: c.name || "Unnamed",
+        domain: c.domain || "",
+        industry: c.industry || "",
+        size: c.size || "",
+        contact_count: contactCounts[c.id] || 0,
+        deal_count: dealCounts[c.id] || 0,
+        total_deal_value: dealValues[c.id] || 0,
+        annual_revenue: c.annual_revenue || null,
+        created_at: c.created_at,
+      })),
+    };
+
+    return { success: true, message: `<!--SLASH_ACCOUNTS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Accounts view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+async function handleGetKnowledgeView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: items, error } = await supabase
+      .from("library_items")
+      .select("id, title, category, tags, content, updated_at, created_at, is_archived")
+      .eq("org_id", orgId)
+      .or("is_archived.is.null,is_archived.eq.false")
+      .order("updated_at", { ascending: false });
+
+    if (error) return { success: false, message: `Failed to fetch knowledge base: ${error.message}` };
+
+    const allItems = items || [];
+
+    // Count by category
+    const byCategory: Record<string, number> = {};
+    for (const item of allItems) {
+      const cat = item.category || "Uncategorized";
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    }
+
+    const payload = {
+      total_items: allItems.length,
+      by_category: byCategory,
+      items: allItems.map(item => ({
+        id: item.id,
+        title: item.title || "Untitled",
+        category: item.category || "Uncategorized",
+        tags: Array.isArray(item.tags) ? item.tags : [],
+        content_preview: (item.content || "").slice(0, 120),
+        updated_at: item.updated_at || item.created_at,
+        created_at: item.created_at,
+      })),
+    };
+
+    return { success: true, message: `<!--SLASH_KNOWLEDGE:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Knowledge view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: CAMPAIGNS
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetCampaignsView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: campaigns, error } = await supabase
+      .from("email_campaigns")
+      .select("id, name, status, campaign_type, created_at, sent_at")
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false });
+
+    if (error) return { success: false, message: `Failed to fetch campaigns: ${error.message}` };
+
+    const allCampaigns = campaigns || [];
+
+    // Batch-fetch variant counts and delivery metrics per campaign
+    const campaignIds = allCampaigns.map(c => c.id);
+    let variantMap: Record<string, { total: number; sent: number; opens: number; clicks: number }> = {};
+
+    if (campaignIds.length > 0) {
+      const { data: variants } = await supabase
+        .from("email_customer_variants")
+        .select("campaign_id, status, email_sent, email_opened, link_clicked")
+        .in("campaign_id", campaignIds);
+
+      for (const v of (variants || [])) {
+        if (!variantMap[v.campaign_id]) {
+          variantMap[v.campaign_id] = { total: 0, sent: 0, opens: 0, clicks: 0 };
+        }
+        variantMap[v.campaign_id].total++;
+        if (v.email_sent) variantMap[v.campaign_id].sent++;
+        if (v.email_opened) variantMap[v.campaign_id].opens++;
+        if (v.link_clicked) variantMap[v.campaign_id].clicks++;
+      }
+    }
+
+    // Count by status
+    const byStatus: Record<string, number> = {};
+    for (const c of allCampaigns) {
+      const s = c.status || "draft";
+      byStatus[s] = (byStatus[s] || 0) + 1;
+    }
+
+    const payload = {
+      total_campaigns: allCampaigns.length,
+      by_status: byStatus,
+      campaigns: allCampaigns.map(c => {
+        const stats = variantMap[c.id] || { total: 0, sent: 0, opens: 0, clicks: 0 };
+        return {
+          id: c.id,
+          name: c.name || "Untitled Campaign",
+          status: c.status || "draft",
+          campaign_type: c.campaign_type || "",
+          variant_count: stats.total,
+          sent_count: stats.sent,
+          open_rate: stats.sent > 0 ? Math.round((stats.opens / stats.sent) * 100) : null,
+          click_rate: stats.sent > 0 ? Math.round((stats.clicks / stats.sent) * 100) : null,
+          sent_at: c.sent_at || null,
+          created_at: c.created_at,
+        };
+      }),
+    };
+
+    return { success: true, message: `<!--SLASH_CAMPAIGNS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Campaigns view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: PROJECTS
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetProjectsView(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const { data: projects, error } = await supabase
+      .from("projects")
+      .select("id, name, slug, description, active_mode, canvas_blocks, workflow_nodes, chat_messages, updated_at, created_at")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false });
+
+    if (error) return { success: false, message: `Failed to fetch projects: ${error.message}` };
+
+    const allProjects = projects || [];
+
+    // Count by active mode
+    const byMode: Record<string, number> = {};
+    for (const p of allProjects) {
+      const mode = p.active_mode || "canvas";
+      byMode[mode] = (byMode[mode] || 0) + 1;
+    }
+
+    const payload = {
+      total_projects: allProjects.length,
+      by_mode: byMode,
+      projects: allProjects.map(p => ({
+        id: p.id,
+        name: p.name || "Untitled Project",
+        slug: p.slug || p.id,
+        description: p.description || "",
+        active_mode: p.active_mode || "canvas",
+        block_count: Array.isArray(p.canvas_blocks) ? p.canvas_blocks.length : 0,
+        node_count: Array.isArray(p.workflow_nodes) ? p.workflow_nodes.length : 0,
+        message_count: Array.isArray(p.chat_messages) ? p.chat_messages.length : 0,
+        updated_at: p.updated_at || p.created_at,
+        created_at: p.created_at,
+      })),
+    };
+
+    return { success: true, message: `<!--SLASH_PROJECTS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Projects view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: CUSTOMERS (E-Commerce / B2C)
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetCustomersView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: customers, error } = await supabase
+      .from("ecom_customers")
+      .select("id, first_name, last_name, email, order_count, total_spent, created_at")
+      .eq("org_id", orgId)
+      .order("total_spent", { ascending: false })
+      .limit(100);
+
+    if (error) return { success: false, message: `Failed to fetch customers: ${error.message}` };
+
+    const allCustomers = customers || [];
+
+    // Get total count (may be more than 100)
+    const { count: totalCount } = await supabase
+      .from("ecom_customers")
+      .select("id", { count: "exact", head: true })
+      .eq("org_id", orgId);
+
+    // Get last order date per customer
+    const customerIds = allCustomers.map(c => c.id);
+    let lastOrderMap: Record<string, string> = {};
+
+    if (customerIds.length > 0) {
+      const { data: orders } = await supabase
+        .from("ecom_orders")
+        .select("customer_id, created_at")
+        .in("customer_id", customerIds)
+        .order("created_at", { ascending: false });
+
+      for (const o of (orders || [])) {
+        if (o.customer_id && !lastOrderMap[o.customer_id]) {
+          lastOrderMap[o.customer_id] = o.created_at;
+        }
+      }
+    }
+
+    const totalRevenue = allCustomers.reduce((sum, c) => sum + (c.total_spent || 0), 0);
+    const totalOrders = allCustomers.reduce((sum, c) => sum + (c.order_count || 0), 0);
+
+    const payload = {
+      total_customers: totalCount || allCustomers.length,
+      total_revenue: totalRevenue,
+      avg_order_value: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0,
+      customers: allCustomers.map(c => ({
+        id: c.id,
+        first_name: c.first_name || "",
+        last_name: c.last_name || "",
+        email: c.email || "",
+        order_count: c.order_count || 0,
+        total_spent: c.total_spent || 0,
+        last_order_date: lastOrderMap[c.id] || null,
+        created_at: c.created_at,
+      })),
+    };
+
+    return { success: true, message: `<!--SLASH_CUSTOMERS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Customers view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: ORDERS (E-Commerce / B2C)
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetOrdersView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: orders, error } = await supabase
+      .from("ecom_orders")
+      .select("id, order_number, customer_id, financial_status, total_price, line_items, created_at")
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) return { success: false, message: `Failed to fetch orders: ${error.message}` };
+
+    const allOrders = orders || [];
+
+    // Get total count
+    const { count: totalCount } = await supabase
+      .from("ecom_orders")
+      .select("id", { count: "exact", head: true })
+      .eq("org_id", orgId);
+
+    // Batch-fetch customer names
+    const customerIds = [...new Set(allOrders.filter(o => o.customer_id).map(o => o.customer_id))];
+    let customerNames: Record<string, string> = {};
+
+    if (customerIds.length > 0) {
+      const { data: custs } = await supabase
+        .from("ecom_customers")
+        .select("id, first_name, last_name")
+        .in("id", customerIds);
+
+      for (const c of (custs || [])) {
+        customerNames[c.id] = [c.first_name, c.last_name].filter(Boolean).join(" ") || "Unknown";
+      }
+    }
+
+    // Count by financial status
+    const byStatus: Record<string, number> = {};
+    for (const o of allOrders) {
+      const s = o.financial_status || "unknown";
+      byStatus[s] = (byStatus[s] || 0) + 1;
+    }
+
+    const totalRevenue = allOrders.reduce((sum, o) => sum + (o.total_price || 0), 0);
+
+    const payload = {
+      total_orders: totalCount || allOrders.length,
+      total_revenue: totalRevenue,
+      avg_order_value: allOrders.length > 0 ? Math.round(totalRevenue / allOrders.length) : 0,
+      by_status: byStatus,
+      orders: allOrders.map(o => {
+        const lineItems = Array.isArray(o.line_items) ? o.line_items : [];
+        return {
+          id: o.id,
+          order_number: o.order_number || "",
+          customer_name: o.customer_id ? (customerNames[o.customer_id] || "Unknown") : "Guest",
+          financial_status: o.financial_status || "unknown",
+          item_count: lineItems.length,
+          total_price: o.total_price || 0,
+          created_at: o.created_at,
+        };
+      }),
+    };
+
+    return { success: true, message: `<!--SLASH_ORDERS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Orders view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: PRODUCTS (E-Commerce / B2C)
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetProductsView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: products, error } = await supabase
+      .from("ecom_products")
+      .select("id, title, product_type, status, variants, created_at")
+      .eq("org_id", orgId)
+      .order("title", { ascending: true });
+
+    if (error) return { success: false, message: `Failed to fetch products: ${error.message}` };
+
+    const allProducts = products || [];
+
+    // Count by product type
+    const byType: Record<string, number> = {};
+    for (const p of allProducts) {
+      const t = p.product_type || "Other";
+      byType[t] = (byType[t] || 0) + 1;
+    }
+
+    const payload = {
+      total_products: allProducts.length,
+      by_type: byType,
+      products: allProducts.map(p => {
+        const vars = Array.isArray(p.variants) ? p.variants : [];
+        // Get the lowest non-zero price from variants
+        const prices = vars.map((v: Record<string, unknown>) => Number(v.price) || 0).filter((pr: number) => pr > 0);
+        const price = prices.length > 0 ? Math.min(...prices) : 0;
+
+        return {
+          id: p.id,
+          title: p.title || "Untitled Product",
+          product_type: p.product_type || "",
+          price,
+          variant_count: vars.length,
+          total_sold: 0, // Would need order line_items aggregation
+          status: p.status || "active",
+        };
+      }),
+    };
+
+    return { success: true, message: `<!--SLASH_PRODUCTS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Products view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: DASHBOARD (Aggregated overview)
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetDashboardView(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    // Run all queries in parallel for speed
+    const [
+      dealsRes,
+      contactsRes,
+      companiesRes,
+      customersRes,
+      ordersRes,
+      campaignsRes,
+      projectsRes,
+      libraryRes,
+    ] = await Promise.all([
+      supabase.from("crm_deals").select("id, value, stage, probability").eq("org_id", orgId),
+      supabase.from("crm_contacts").select("id, status").eq("org_id", orgId),
+      supabase.from("crm_companies").select("id").eq("org_id", orgId),
+      supabase.from("ecom_customers").select("id, total_spent, order_count").eq("org_id", orgId),
+      supabase.from("ecom_orders").select("id, total_price, financial_status, created_at").eq("org_id", orgId).order("created_at", { ascending: false }).limit(100),
+      supabase.from("email_campaigns").select("id, status").eq("org_id", orgId),
+      supabase.from("projects").select("id").eq("user_id", userId),
+      supabase.from("library_items").select("id").eq("org_id", orgId).or("is_archived.is.null,is_archived.eq.false"),
+    ]);
+
+    const deals = dealsRes.data || [];
+    const contacts = contactsRes.data || [];
+    const companies = companiesRes.data || [];
+    const customers = customersRes.data || [];
+    const orders = ordersRes.data || [];
+    const campaigns = campaignsRes.data || [];
+    const projects = projectsRes.data || [];
+    const libraryItems = libraryRes.data || [];
+
+    // CRM metrics
+    const activeDeals = deals.filter(d => d.stage !== "won" && d.stage !== "lost");
+    const wonDeals = deals.filter(d => d.stage === "won");
+    const totalPipeline = activeDeals.reduce((s, d) => s + (d.value || 0), 0);
+    const weightedPipeline = activeDeals.reduce((s, d) => s + ((d.value || 0) * (d.probability || 0) / 100), 0);
+    const totalWon = wonDeals.reduce((s, d) => s + (d.value || 0), 0);
+
+    // E-commerce metrics
+    const totalRevenue = customers.reduce((s, c) => s + (c.total_spent || 0), 0);
+    const totalOrders = orders.length;
+    const avgOrderValue = totalOrders > 0 ? orders.reduce((s, o) => s + (o.total_price || 0), 0) / totalOrders : 0;
+
+    // Campaign metrics
+    const sentCampaigns = campaigns.filter(c => c.status === "sent").length;
+    const draftCampaigns = campaigns.filter(c => c.status === "draft").length;
+
+    const sections = [];
+
+    // CRM section (only if they have CRM data)
+    if (deals.length > 0 || contacts.length > 0 || companies.length > 0) {
+      sections.push({
+        title: "CRM",
+        metrics: [
+          { label: "Pipeline Value", value: formatCurrencyShort(totalPipeline) },
+          { label: "Weighted Pipeline", value: formatCurrencyShort(weightedPipeline) },
+          { label: "Active Deals", value: String(activeDeals.length) },
+          ...(totalWon > 0 ? [{ label: "Won Revenue", value: formatCurrencyShort(totalWon), trend: "up" as const }] : []),
+          { label: "Contacts", value: String(contacts.length) },
+          { label: "Companies", value: String(companies.length) },
+        ],
+      });
+    }
+
+    // E-commerce section (only if they have ecom data)
+    if (customers.length > 0 || orders.length > 0) {
+      sections.push({
+        title: "E-Commerce",
+        metrics: [
+          { label: "Total Revenue", value: formatCurrencyShort(totalRevenue) },
+          { label: "Customers", value: String(customers.length) },
+          { label: "Orders", value: String(totalOrders) },
+          { label: "Avg Order", value: formatCurrencyShort(avgOrderValue) },
+        ],
+      });
+    }
+
+    // Marketing & Workspace section
+    if (campaigns.length > 0 || projects.length > 0 || libraryItems.length > 0) {
+      sections.push({
+        title: "Marketing & Workspace",
+        metrics: [
+          ...(campaigns.length > 0 ? [
+            { label: "Campaigns", value: String(campaigns.length) },
+            ...(sentCampaigns > 0 ? [{ label: "Sent", value: String(sentCampaigns) }] : []),
+            ...(draftCampaigns > 0 ? [{ label: "Drafts", value: String(draftCampaigns) }] : []),
+          ] : []),
+          ...(projects.length > 0 ? [{ label: "Projects", value: String(projects.length) }] : []),
+          ...(libraryItems.length > 0 ? [{ label: "Knowledge Items", value: String(libraryItems.length) }] : []),
+        ],
+      });
+    }
+
+    // Build highlights
+    const highlights: Array<{ icon: string; text: string }> = [];
+
+    if (activeDeals.length > 0) {
+      const topDeal = activeDeals.sort((a, b) => (b.value || 0) - (a.value || 0))[0];
+      if (topDeal && topDeal.value) {
+        highlights.push({ icon: "deal", text: `Largest active deal: ${formatCurrencyShort(topDeal.value)}` });
+      }
+    }
+
+    if (contacts.length > 0) {
+      const leads = contacts.filter(c => c.status === "lead" || c.status === "Lead").length;
+      if (leads > 0) {
+        highlights.push({ icon: "contact", text: `${leads} contacts in lead stage — consider qualifying them` });
+      }
+    }
+
+    if (draftCampaigns > 0) {
+      highlights.push({ icon: "campaign", text: `${draftCampaigns} campaign draft${draftCampaigns > 1 ? "s" : ""} ready to review` });
+    }
+
+    if (sections.length === 0) {
+      highlights.push({ icon: "info", text: "Get started by importing data or creating contacts and deals" });
+    }
+
+    const payload = { sections, highlights };
+
+    return { success: true, message: `<!--SLASH_DASHBOARD:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Dashboard view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/** Short currency format for dashboard metrics */
+function formatCurrencyShort(value: number): string {
+  if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+  return `$${Math.round(value)}`;
+}
+
+/* ─────────────────────────────────────────────────────────
+   /tools — Tech Stack View
+   ───────────────────────────────────────────────────────── */
+
+async function handleGetToolsView(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const { data: tools, error } = await supabase
+      .from("user_stack_tools")
+      .select("id, name, description, category, teams, team_usage, status, created_at")
+      .or(`org_id.eq.${orgId},user_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const rows = (tools ?? []).map((t) => ({
+      id: t.id,
+      name: t.name ?? "",
+      description: t.description ?? "",
+      category: t.category ?? "",
+      teams: t.teams ?? [],
+      team_usage: (t.team_usage as Record<string, string>) ?? {},
+      status: t.status ?? "Active",
+    }));
+
+    // Status counts
+    const statusCounts: Record<string, number> = {};
+    for (const t of rows) {
+      statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
+    }
+
+    // Category counts
+    const categoryCounts: Record<string, number> = {};
+    for (const t of rows) {
+      if (t.category) {
+        categoryCounts[t.category] = (categoryCounts[t.category] || 0) + 1;
+      }
+    }
+
+    const payload = {
+      total: rows.length,
+      status_counts: statusCounts,
+      category_counts: categoryCounts,
+      tools: rows,
+    };
+
+    return { success: true, message: `<!--SLASH_TOOLS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Tools view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
   }
 }
