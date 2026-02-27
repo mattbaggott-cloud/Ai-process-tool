@@ -17,7 +17,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ensureGraphNode } from "@/lib/agentic/graph-sync";
+import { ensureGraphNode, resolveEntityType } from "@/lib/agentic/graph-sync";
 
 /* ================================================================ */
 /*  Types                                                            */
@@ -801,11 +801,11 @@ export async function applyResolution(
   for (const c of candidates) {
     const candidate = c as Record<string, unknown>;
     try {
-      // Ensure graph nodes exist for both records
+      // Ensure graph nodes exist for both records (using unified entity types)
       const nodeAId = await ensureGraphNode(
         supabase,
         orgId,
-        candidate.source_a_type as string,
+        resolveEntityType(candidate.source_a_type as string),
         candidate.source_a_id as string,
         candidate.source_a_label as string,
         null,
@@ -816,7 +816,7 @@ export async function applyResolution(
       const nodeBId = await ensureGraphNode(
         supabase,
         orgId,
-        candidate.source_b_type as string,
+        resolveEntityType(candidate.source_b_type as string),
         candidate.source_b_id as string,
         candidate.source_b_label as string,
         null,

@@ -1,18 +1,27 @@
 /**
  * Graph Query — hybrid entity resolution + graph traversal.
  *
- * Powers Phase 4: Graph Intelligence. When a user asks about entities,
+ * Powers the Knowledge Graph intelligence layer. When a user asks about entities,
  * this module finds the relevant graph nodes and traverses the graph
- * to surface connected context (contacts, deals, companies, goals, etc.)
+ * to surface connected context (people, companies, pipeline items, orders, etc.)
+ *
+ * Phase 4 changes:
+ *   - Uses registry-driven display names via loadRegistryLabels()
+ *   - Falls back to hardcoded labels if registry unavailable
+ *   - Supports unified entity types (person, company, pipeline_item, etc.)
+ *   - Preserves backwards compat with legacy entity types (crm_contacts, etc.)
  *
  * Flow:
- *   1. Extract entity mentions from the user's message
- *   2. Resolve mentions to graph nodes (label matching + fuzzy search)
- *   3. Traverse the graph from matched nodes (2-hop)
- *   4. Format connected entities into a prompt section
+ *   1. Load registry labels for the org (cached, 5-min TTL)
+ *   2. Extract entity mentions from the user's message
+ *   3. Resolve mentions to graph nodes (label matching + fuzzy search)
+ *   4. Traverse the graph from matched nodes (2-hop)
+ *   5. Format connected entities into a prompt section using registry display names
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { RegistryLabels } from "./types";
+import { loadRegistryLabels } from "./graph-sync";
 
 /* ── Types ── */
 
@@ -42,32 +51,6 @@ interface GraphContext {
   formatted: string; // ready for system prompt injection
 }
 
-/* ── Entity Type Labels ── */
-
-const ENTITY_LABELS: Record<string, string> = {
-  crm_contacts: "Contact",
-  crm_companies: "Company",
-  crm_deals: "Deal",
-  crm_activities: "Activity",
-  goals: "Goal",
-  sub_goals: "Sub-Goal",
-  pain_points: "Pain Point",
-  teams: "Team",
-  projects: "Project",
-  library_items: "Library Item",
-};
-
-const RELATION_LABELS: Record<string, string> = {
-  works_at: "works at",
-  primary_contact: "primary contact for",
-  for_company: "deal for",
-  regarding_contact: "regarding",
-  regarding_company: "regarding",
-  regarding_deal: "regarding",
-  child_of: "sub-goal of",
-  linked_to: "linked to",
-};
-
 /* ── Main Entry Point ── */
 
 /**
@@ -82,6 +65,9 @@ export async function getGraphContext(
   const empty: GraphContext = { resolvedEntities: [], connectedNodes: [], formatted: "" };
 
   try {
+    // Step 0: Load registry labels (cached)
+    const registry = await loadRegistryLabels(supabase, orgId);
+
     // Step 1: Extract potential entity mentions from the message
     const searchTerms = extractSearchTerms(message);
     if (searchTerms.length === 0) return empty;
@@ -113,8 +99,8 @@ export async function getGraphContext(
       }
     }
 
-    // Step 4: Format into prompt section
-    const formatted = formatGraphContext(resolved, allConnected);
+    // Step 4: Format into prompt section using registry labels
+    const formatted = formatGraphContext(resolved, allConnected, registry);
 
     return {
       resolvedEntities: resolved,
@@ -285,19 +271,23 @@ async function resolveEntities(
 
 /**
  * Format graph context for injection into the system prompt.
+ * Uses registry labels for display names (falls back to raw entity_type).
  */
 function formatGraphContext(
   resolved: ResolvedEntity[],
-  connected: GraphNodeResult[]
+  connected: GraphNodeResult[],
+  registry: RegistryLabels
 ): string {
   if (resolved.length === 0) return "";
+
+  const { entityLabels, relationLabels } = registry;
 
   let output = "## Related Entities (Knowledge Graph)\n";
   output += "The following entities and their connections were found in the knowledge graph. Use this to provide richer, cross-entity context.\n\n";
 
   // Group connected nodes by which resolved entity they came from
   for (const entity of resolved) {
-    const typeLabel = ENTITY_LABELS[entity.entityType] ?? entity.entityType;
+    const typeLabel = entityLabels[entity.entityType] ?? entity.entityType;
     output += `### ${typeLabel}: ${entity.label}`;
     if (entity.sublabel) output += ` — ${entity.sublabel}`;
     output += "\n";
@@ -315,9 +305,9 @@ function formatGraphContext(
     if (directConnections.length > 0) {
       output += "**Direct connections:**\n";
       for (const conn of directConnections) {
-        const connTypeLabel = ENTITY_LABELS[conn.entity_type] ?? conn.entity_type;
+        const connTypeLabel = entityLabels[conn.entity_type] ?? conn.entity_type;
         const relationLabel = conn.relation_types.length > 0
-          ? conn.relation_types.map(r => RELATION_LABELS[r] ?? r).join(", ")
+          ? conn.relation_types.map(r => relationLabels[r] ?? r).join(", ")
           : "connected to";
         output += `- [${connTypeLabel}] **${conn.label}**`;
         if (conn.sublabel) output += ` (${conn.sublabel})`;
@@ -328,10 +318,10 @@ function formatGraphContext(
     if (secondHop.length > 0) {
       output += "**Extended network:**\n";
       for (const conn of secondHop.slice(0, 10)) { // Cap at 10 to avoid prompt bloat
-        const connTypeLabel = ENTITY_LABELS[conn.entity_type] ?? conn.entity_type;
+        const connTypeLabel = entityLabels[conn.entity_type] ?? conn.entity_type;
         output += `- [${connTypeLabel}] ${conn.label}`;
         if (conn.sublabel) output += ` (${conn.sublabel})`;
-        const relations = conn.relation_types.map(r => RELATION_LABELS[r] ?? r).join(" → ");
+        const relations = conn.relation_types.map(r => relationLabels[r] ?? r).join(" → ");
         if (relations) output += ` via ${relations}`;
         output += "\n";
       }

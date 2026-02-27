@@ -854,7 +854,9 @@ Always include a start and end node. Map document sections/steps to process node
           email: { type: "string" },
           phone: { type: "string" },
           title: { type: "string" },
+          company_name: { type: "string", description: "Company name to link to (will auto-create if not found)" },
           status: { type: "string", enum: ["lead", "active", "inactive", "churned"] },
+          source: { type: "string", enum: ["manual", "import", "ai", "referral"], description: "How this contact was added" },
           notes: { type: "string" },
           tags: { type: "array", items: { type: "string" } },
         },
@@ -931,8 +933,103 @@ Always include a start and end node. Map document sections/steps to process node
           contact_name: { type: "string", description: "Contact name to link to" },
           company_name: { type: "string", description: "Company name to link to" },
           deal_title: { type: "string", description: "Deal title to link to" },
+          duration_minutes: { type: "integer", description: "How long the activity lasted in minutes" },
+          outcome: { type: "string", description: "Result of the activity (e.g. 'scheduled follow-up', 'verbal commit')" },
+          completed: { type: "boolean", description: "Mark as already completed (sets completed_at to now)" },
+          scheduled_at: { type: "string", description: "When this activity is scheduled for (ISO datetime)" },
         },
         required: ["type", "subject"],
+      },
+    },
+    {
+      name: "update_company",
+      description:
+        "Update an existing CRM company's details. Use when the user asks to update, change, or edit a company.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          company_name: { type: "string", description: "Name or domain of the company to update" },
+          name: { type: "string", description: "New company name" },
+          domain: { type: "string", description: "Company domain (e.g. acme.com)" },
+          industry: { type: "string", description: "Industry sector" },
+          size: { type: "string", enum: ["startup", "small", "medium", "large", "enterprise"], description: "Company size" },
+          description: { type: "string", description: "What the company does" },
+          website: { type: "string", description: "Company website URL" },
+          phone: { type: "string", description: "Company phone number" },
+          annual_revenue: { type: "number", description: "Annual revenue in dollars" },
+          employees: { type: "number", description: "Number of employees" },
+          sector: { type: "string", description: "Business sector" },
+          account_owner: { type: "string", description: "Account owner name" },
+        },
+        required: ["company_name"],
+      },
+    },
+    {
+      name: "update_deal",
+      description:
+        "Update any fields on a deal/opportunity — value, title, next steps, close date, contacts, and more. Use this when the user asks to update deal details beyond just the stage. For stage-only changes, update_deal_stage also works.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          deal_title: { type: "string", description: "Title of the deal to update" },
+          title: { type: "string", description: "New deal title" },
+          value: { type: "number", description: "Deal value in dollars" },
+          stage: { type: "string", enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost"], description: "Pipeline stage" },
+          probability: { type: "integer", description: "Win probability 0-100 (auto-set from stage if not provided)" },
+          expected_close_date: { type: "string", description: "Expected close date (YYYY-MM-DD)" },
+          next_steps: { type: "string", description: "Next steps or actions for this deal" },
+          notes: { type: "string", description: "Deal notes" },
+          close_reason: { type: "string", description: "Why the deal was won or lost" },
+          lost_to: { type: "string", description: "Competitor name if the deal was lost" },
+          contact_name: { type: "string", description: "Change the primary contact (name or email)" },
+          company_name: { type: "string", description: "Change the associated company" },
+        },
+        required: ["deal_title"],
+      },
+    },
+    {
+      name: "update_activity",
+      description:
+        "Update an existing CRM activity (call, meeting, task, note). Use to mark activities as completed, add outcomes, set duration, or update details.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          activity_subject: { type: "string", description: "Subject line of the activity to update" },
+          contact_name: { type: "string", description: "Narrow search to activities for this contact" },
+          subject: { type: "string", description: "New subject line" },
+          description: { type: "string", description: "Updated description/details" },
+          outcome: { type: "string", description: "Result of the activity (e.g. 'scheduled follow-up', 'verbal commit', 'no answer')" },
+          duration_minutes: { type: "integer", description: "How long the activity lasted in minutes" },
+          completed: { type: "boolean", description: "Mark as completed (true) or incomplete (false)" },
+          scheduled_at: { type: "string", description: "Reschedule: ISO datetime (YYYY-MM-DDTHH:MM:SS)" },
+        },
+        required: ["activity_subject"],
+      },
+    },
+    {
+      name: "archive_record",
+      description:
+        "Archive (soft-delete) a CRM record. The record is hidden from searches and AI responses but NOT permanently deleted — it can be restored later. Use when the user asks to remove, delete, or archive a record.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          record_type: { type: "string", enum: ["contact", "company", "deal", "activity"], description: "Type of record to archive" },
+          record_name: { type: "string", description: "Name, title, or subject to find the record" },
+        },
+        required: ["record_type", "record_name"],
+      },
+    },
+    {
+      name: "restore_record",
+      description:
+        "Restore a previously archived CRM record, making it visible again in searches and AI responses.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          record_type: { type: "string", enum: ["contact", "company", "deal", "activity"], description: "Type of record to restore" },
+          record_name: { type: "string", description: "Name, title, or subject to find the record" },
+        },
+        required: ["record_type", "record_name"],
       },
     },
     {

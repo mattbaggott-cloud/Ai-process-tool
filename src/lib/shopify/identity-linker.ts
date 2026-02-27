@@ -13,7 +13,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ensureGraphNode } from "@/lib/agentic/graph-sync";
+import { ensureGraphNode, resolveEntityType } from "@/lib/agentic/graph-sync";
 
 interface LinkResult {
   linked: number;
@@ -146,21 +146,21 @@ async function createIdentityGraphEdge(
   ecomCustomerId: string
 ): Promise<void> {
   try {
-    // Find graph node for CRM contact
+    // Find graph node for CRM contact (unified type: person)
     const { data: crmNode } = await supabase
       .from("graph_nodes")
       .select("id")
       .eq("org_id", orgId)
-      .eq("entity_type", "crm_contacts")
+      .eq("entity_type", resolveEntityType("crm_contacts"))
       .eq("entity_id", crmContactId)
       .maybeSingle();
 
-    // Find graph node for ecom customer
+    // Find graph node for ecom customer (unified type: person)
     const { data: ecomNode } = await supabase
       .from("graph_nodes")
       .select("id")
       .eq("org_id", orgId)
-      .eq("entity_type", "ecom_customers")
+      .eq("entity_type", resolveEntityType("ecom_customers"))
       .eq("entity_id", ecomCustomerId)
       .maybeSingle();
 
@@ -248,11 +248,11 @@ export async function linkKlaviyoProfiles(
         const last = (profile.last_name as string) || "";
         const label = `${first} ${last}`.trim() || email;
 
-        // Ensure graph node for this Klaviyo profile
+        // Ensure graph node for this Klaviyo profile (unified type: person)
         const nodeId = await ensureGraphNode(
           supabase,
           orgId,
-          "klaviyo_profiles",
+          resolveEntityType("klaviyo_profiles"),
           profile.id as string,
           label,
           `Klaviyo subscriber`,
@@ -268,7 +268,7 @@ export async function linkKlaviyoProfiles(
             .from("graph_nodes")
             .select("id")
             .eq("org_id", orgId)
-            .eq("entity_type", "ecom_customers")
+            .eq("entity_type", resolveEntityType("ecom_customers"))
             .eq("entity_id", ecomId)
             .maybeSingle();
 
@@ -294,7 +294,7 @@ export async function linkKlaviyoProfiles(
             .from("graph_nodes")
             .select("id")
             .eq("org_id", orgId)
-            .eq("entity_type", "crm_contacts")
+            .eq("entity_type", resolveEntityType("crm_contacts"))
             .eq("entity_id", crmId)
             .maybeSingle();
 

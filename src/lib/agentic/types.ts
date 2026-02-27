@@ -144,3 +144,39 @@ export interface TableGraphMapping {
   entity: EntityMapping;
   edges: EdgeMapping[];
 }
+
+/* ── Entity & Relation Registry (from DB) ────────────── */
+
+/** Row from entity_type_registry (returned by get_entity_registry RPC) */
+export interface EntityTypeRegistryEntry {
+  entity_type: string;
+  display_name: string;
+  display_name_plural: string;
+  icon: string | null;
+  source_tables: string[];
+  label_template: string | null;
+  description: string | null;
+  workspace_types: string[];
+  sort_order: number;
+}
+
+/** Row from relation_type_registry (returned by get_relation_registry RPC) */
+export interface RelationTypeRegistryEntry {
+  relation_type: string;
+  display_name: string;
+  from_entity_type: string;
+  to_entity_type: string;
+  description: string | null;
+  cardinality: string;
+  is_directed: boolean;
+  workspace_types: string[];
+  sort_order: number;
+}
+
+/** Cached registry labels for use in graph-query formatting */
+export interface RegistryLabels {
+  entityLabels: Record<string, string>;       // entity_type → display_name
+  relationLabels: Record<string, string>;     // relation_type → display_name
+  entityEntries: EntityTypeRegistryEntry[];   // full entries for richer context
+  relationEntries: RelationTypeRegistryEntry[]; // full entries for richer context
+}
