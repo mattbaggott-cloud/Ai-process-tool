@@ -22,6 +22,7 @@ export interface OrgMember {
   org_id: string;
   user_id: string;
   role: OrgRole;
+  onboarding_completed: boolean;
   created_at: string;
 }
 
@@ -478,7 +479,20 @@ export type {
 /* ── CRM Module ────────────────────────────────────────── */
 
 export type ContactStatus = "lead" | "active" | "inactive" | "churned";
-export type ContactSource = "manual" | "import" | "ai" | "referral";
+export type ContactSource =
+  | "manual"
+  | "import"
+  | "ai"
+  | "referral"
+  | "gmail"
+  | "outreach"
+  | "hubspot"
+  | "shopify"
+  | "klaviyo"
+  | "google_calendar"
+  | "google_drive"
+  | "salesforce"
+  | "salesloft";
 export type CompanySize = "" | "startup" | "small" | "medium" | "large" | "enterprise";
 export type DealStage = "lead" | "qualified" | "proposal" | "negotiation" | "won" | "lost";
 export type ActivityType = "call" | "email" | "meeting" | "note" | "task";
@@ -714,6 +728,163 @@ export interface KlaviyoConfig {
   account_name?: string;        // from GET /accounts/
 }
 
+/* ── Google Connectors (shared config) ─────────────────── */
+
+export interface GoogleConnectorConfig {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;           // Unix timestamp in ms
+  scopes: string[];
+  email?: string;               // user's Google email
+}
+
+/* ── Outreach Connector ────────────────────────────────── */
+
+export interface OutreachConfig {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  scopes: string[];
+  org_name?: string;
+}
+
+/* ── Gmail Types ───────────────────────────────────────── */
+
+export interface GmailMessage {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  thread_id: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  to_emails: string[];
+  cc_emails: string[];
+  subject: string | null;
+  snippet: string | null;
+  body_text: string | null;
+  labels: string[];
+  is_read: boolean;
+  is_starred: boolean;
+  has_attachments: boolean;
+  internal_date: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
+/* ── Calendar Types ────────────────────────────────────── */
+
+export interface CalendarEvent {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  calendar_id: string;
+  summary: string | null;
+  description: string | null;
+  location: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  all_day: boolean;
+  status: string | null;
+  organizer_email: string | null;
+  attendees: Array<{ email: string; name?: string; response_status?: string }>;
+  recurrence: string[];
+  html_link: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
+/* ── Drive Types ───────────────────────────────────────── */
+
+export interface DriveFile {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  web_view_link: string | null;
+  icon_link: string | null;
+  parent_folder_id: string | null;
+  parent_folder_name: string | null;
+  owners: Array<{ email: string; name?: string }>;
+  shared_with: Array<{ email: string; name?: string }>;
+  modified_time: string | null;
+  created_time: string | null;
+  is_indexed: boolean;
+  library_item_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
+/* ── Outreach Types ────────────────────────────────────── */
+
+export interface OutreachProspect {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  company_name: string | null;
+  phone: string | null;
+  tags: string[];
+  stage: string | null;
+  owner_email: string | null;
+  engaged_at: string | null;
+  contacted_at: string | null;
+  replied_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
+export interface OutreachSequence {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  sequence_type: string | null;
+  step_count: number;
+  prospect_count: number;
+  open_rate: number | null;
+  click_rate: number | null;
+  reply_rate: number | null;
+  bounce_rate: number | null;
+  owner_email: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
+export interface OutreachTask {
+  id: string;
+  org_id: string;
+  user_id: string;
+  external_id: string;
+  subject: string | null;
+  task_type: string | null;
+  status: string | null;
+  due_at: string | null;
+  completed_at: string | null;
+  prospect_external_id: string | null;
+  sequence_external_id: string | null;
+  owner_email: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  synced_at: string;
+}
+
 /* ── E-Commerce (Shopify + future platforms) ──────────── */
 
 export interface EcomCustomer {
@@ -817,7 +988,14 @@ export interface EcomProduct {
 
 /* ── Customer Identity Linking ────────────────────────── */
 
-export type MatchType = 'email_exact' | 'phone_match' | 'name_match' | 'manual';
+export type MatchType =
+  | 'email_exact'
+  | 'phone_match'
+  | 'name_company'
+  | 'name_email_domain'
+  | 'name_city'
+  | 'name_only'
+  | 'manual';
 export type CustomerClassification = 'customer' | 'lead' | 'prospect' | 'ecom_only';
 
 export interface CustomerIdentityLink {
@@ -835,7 +1013,7 @@ export interface CustomerIdentityLink {
 
 /* ── Data Home types ──────────────────────────────────── */
 
-export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'shopify' | 'klaviyo' | 'meta_ads' | 'dynamics' | 'sharepoint' | 'google_workspace';
+export type ConnectorType = 'csv' | 'salesforce' | 'hubspot' | 'shopify' | 'klaviyo' | 'meta_ads' | 'dynamics' | 'sharepoint' | 'google_workspace' | 'gmail' | 'google_calendar' | 'google_drive' | 'outreach';
 export type ConnectorStatus = 'available' | 'connected' | 'error' | 'coming_soon';
 export type ImportStatus = 'pending' | 'mapping' | 'importing' | 'completed' | 'failed';
 export type SyncEventType = 'info' | 'warning' | 'error' | 'success';
@@ -1039,7 +1217,30 @@ export type CampaignType = "per_customer" | "broadcast" | "sequence";
 export type CampaignStatus = "draft" | "generating" | "review" | "approved" | "sending" | "sent" | "paused" | "cancelled" | "failed";
 export type VariantStatus = "draft" | "approved" | "edited" | "rejected" | "sending" | "sent" | "failed";
 export type DeliveryStatus = "pending" | "sent" | "delivered" | "opened" | "clicked" | "bounced" | "failed";
-export type DeliveryChannel = "klaviyo" | "mailchimp" | "sendgrid" | "salesloft";
+export type DeliveryChannel = "klaviyo" | "mailchimp" | "sendgrid" | "salesloft" | "gmail" | "outreach";
+
+export type StepType =
+  | "auto_email"
+  | "manual_email"
+  | "phone_call"
+  | "linkedin_view"
+  | "linkedin_connect"
+  | "linkedin_message"
+  | "custom_task";
+
+export type ExecutionMode = "manual" | "automatic";
+
+export type CampaignTaskStatus = "pending" | "in_progress" | "completed" | "skipped" | "failed";
+
+export type ValidationFailureReason =
+  | "missing_email"
+  | "invalid_email"
+  | "empty_subject"
+  | "empty_body"
+  | "missing_variables"
+  | "provider_error"
+  | "bounce_hard"
+  | "bounce_soft";
 export type CampaignEmailType = "promotional" | "win_back" | "nurture" | "announcement" | "welcome" | "follow_up" | "custom";
 
 export interface EmailCampaign {
@@ -1060,6 +1261,7 @@ export interface EmailCampaign {
   failed_count: number;
   stats: Record<string, unknown>;
   has_strategy: boolean;
+  execution_mode: ExecutionMode;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -1115,6 +1317,9 @@ export interface StrategySequenceStep {
   email_type: string;
   prompt: string;
   subject_hint?: string;
+  step_type?: StepType;          // defaults to "auto_email" if absent (backward compat)
+  channel?: DeliveryChannel;     // per-step channel override; falls back to campaign-level
+  task_instructions?: string;    // instructions for manual/non-email steps
 }
 
 export interface CampaignStrategyGroup {
@@ -1133,6 +1338,40 @@ export interface CampaignStrategyGroup {
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+/* ── Campaign Task types ──────────────────────────────── */
+
+export interface CampaignTask {
+  id: string;
+  org_id: string;
+  campaign_id: string;
+  variant_id: string | null;
+  strategy_group_id: string | null;
+  step_number: number;
+  step_type: StepType;
+  ecom_customer_id: string | null;
+  customer_email: string;
+  customer_name: string | null;
+  assigned_to: string | null;
+  title: string;
+  instructions: string | null;
+  status: CampaignTaskStatus;
+  due_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  notes: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SendValidationError {
+  variant_id: string;
+  customer_email: string;
+  customer_name: string | null;
+  reasons: ValidationFailureReason[];
+  details?: Record<string, string>;
 }
 
 /* ── Workflow Builder types ────────────────────────────── */

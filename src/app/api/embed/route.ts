@@ -75,7 +75,8 @@ export async function POST(req: Request) {
       user.id,
       sourceTable,
       sourceId,
-      record
+      record,
+      (record as Record<string, unknown>).org_id as string | undefined,
     );
     return Response.json({
       success: true,

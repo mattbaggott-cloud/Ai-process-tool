@@ -186,7 +186,7 @@ export async function indexSchemaToInfrastructure(
       batch.map((task) =>
         embedDocument(supabase, userId, "schema", task.sourceId, {
           content: task.content,
-        })
+        }, orgId)
       )
     );
   }

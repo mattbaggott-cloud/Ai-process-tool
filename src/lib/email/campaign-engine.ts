@@ -22,8 +22,12 @@ import type {
   EmailBrandAsset,
   CampaignStrategyGroup,
   StrategySequenceStep,
+  ExecutionMode,
+  StepType,
 } from "@/lib/types/database";
-import { createSendProvider } from "./send-provider";
+import { createSendProvider, type EmailSendProvider } from "./send-provider";
+import { validateCampaignVariants } from "./send-validator";
+import { logCampaignSend } from "./campaign-activity-logger";
 import { loadKlaviyoConfig } from "@/lib/klaviyo/api-client";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -37,6 +41,8 @@ export interface CreateCampaignInput {
   prompt: string;
   templateId?: string;
   deliveryChannel?: DeliveryChannel;
+  executionMode?: ExecutionMode;
+  stepType?: StepType;
 }
 
 export interface CreateCampaignResult {
@@ -274,6 +280,7 @@ export async function createCampaign(
       delivery_channel: channel,
       delivery_config: deliveryConfig,
       template_id: input.templateId ?? null,
+      execution_mode: input.executionMode || "automatic",
       created_by: userId,
     })
     .select()
@@ -665,10 +672,18 @@ export async function generateCampaignVariants(
 
 /**
  * Send all approved/edited variants through the delivery provider.
+ *
+ * Multi-channel orchestration:
+ *  - Validates all variants before sending (catches empty content, bad emails, etc.)
+ *  - Routes each variant through the correct provider based on per-step channel
+ *  - If execution_mode is "manual", creates tasks instead of sending
+ *  - Non-email step types always create tasks regardless of mode
+ *  - Logs sends to CRM activities + knowledge graph for unified timeline
  */
 export async function sendCampaign(
   supabase: SupabaseClient,
   orgId: string,
+  userId: string,
   campaignId: string
 ): Promise<SendCampaignResult> {
   // Load campaign
@@ -686,22 +701,73 @@ export async function sendCampaign(
     throw new Error(`Campaign is not ready to send (status: ${camp.status})`);
   }
 
-  // Load approved variants
-  const { data: variants, error: varErr } = await supabase
-    .from("email_customer_variants")
-    .select("*")
-    .eq("campaign_id", campaignId)
-    .eq("org_id", orgId)
-    .in("status", ["approved", "edited"]);
+  // ── Step 1: Validate all variants ──
+  const validation = await validateCampaignVariants(supabase, orgId, campaignId);
 
-  if (varErr) throw new Error(`Failed to load variants: ${varErr.message}`);
-  if (!variants || variants.length === 0) {
-    throw new Error("No approved variants to send. Please review and approve emails first.");
+  if (validation.valid.length === 0 && validation.invalid.length > 0) {
+    await supabase
+      .from("email_campaigns")
+      .update({
+        status: "failed",
+        failed_count: validation.invalid.length,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", campaignId);
+
+    throw new Error(
+      `All ${validation.invalid.length} variants failed validation. ` +
+      "Use get_failed_sends to see specific issues."
+    );
   }
 
-  // Get delivery config
-  const providerConfig = await resolveDeliveryConfig(supabase, orgId, camp.delivery_channel);
-  const provider = await createSendProvider(camp.delivery_channel, providerConfig);
+  const typedVariants = validation.valid;
+
+  // ── Step 2: Check execution mode ──
+  const executionMode = camp.execution_mode || "automatic";
+
+  if (executionMode === "manual") {
+    // Manual mode: create tasks for each variant instead of sending
+    return await createTasksForVariants(supabase, orgId, userId, campaignId, camp, typedVariants);
+  }
+
+  // ── Step 3: Load strategy groups for per-step channel routing ──
+  const stepChannelMap = new Map<string, DeliveryChannel>();
+  const stepTypeMap = new Map<string, StepType>();
+
+  if (camp.has_strategy) {
+    const { data: groups } = await supabase
+      .from("campaign_strategy_groups")
+      .select("id, sequence_steps")
+      .eq("campaign_id", campaignId);
+
+    for (const group of (groups || []) as unknown as CampaignStrategyGroup[]) {
+      for (const step of (group.sequence_steps || [])) {
+        const key = `${group.id}_${step.step_number}`;
+        if (step.channel) stepChannelMap.set(key, step.channel);
+        if (step.step_type) stepTypeMap.set(key, step.step_type);
+      }
+    }
+  }
+
+  // ── Step 4: Build provider cache (channel → provider) ──
+  const providerCache = new Map<DeliveryChannel, EmailSendProvider>();
+
+  async function getProvider(channel: DeliveryChannel): Promise<EmailSendProvider> {
+    const cached = providerCache.get(channel);
+    if (cached) return cached;
+
+    const config = await resolveDeliveryConfig(supabase, orgId, channel);
+    // Gmail and Outreach providers need supabase + org context
+    const enrichedConfig = {
+      ...config,
+      supabase,
+      org_id: orgId,
+      user_id: userId,
+    };
+    const provider = await createSendProvider(channel, enrichedConfig);
+    providerCache.set(channel, provider);
+    return provider;
+  }
 
   // Load template if needed
   let templateHtml: string | null = null;
@@ -723,15 +789,34 @@ export async function sendCampaign(
 
   let sentCount = 0;
   let failedCount = 0;
+  let taskCount = 0;
 
-  // Send in batches with concurrency control
-  const typedVariants = variants as unknown as EmailCustomerVariant[];
+  // ── Step 5: Send/route each variant ──
   for (let i = 0; i < typedVariants.length; i += SEND_CONCURRENCY) {
     const batch = typedVariants.slice(i, i + SEND_CONCURRENCY);
 
-    const results = await Promise.allSettled(
+    await Promise.allSettled(
       batch.map(async (variant) => {
         try {
+          // Determine per-step channel and step type
+          const stepKey = variant.strategy_group_id
+            ? `${variant.strategy_group_id}_${variant.step_number || 1}`
+            : "";
+          const stepChannel = stepChannelMap.get(stepKey) || camp.delivery_channel;
+          const stepType = stepTypeMap.get(stepKey) || "auto_email";
+
+          // Non-email step types → create a task instead of sending
+          if (
+            stepType !== "auto_email" &&
+            stepType !== "manual_email"
+          ) {
+            await createSingleTask(
+              supabase, orgId, userId, campaignId, camp.name, variant, stepType,
+            );
+            taskCount++;
+            return;
+          }
+
           // Get the content — use edited version if available
           const content = variant.status === "edited" && variant.edited_content
             ? variant.edited_content as { subject_line?: string; body_html?: string; body_text?: string; preview_text?: string }
@@ -742,6 +827,9 @@ export async function sendCampaign(
           if (templateHtml) {
             htmlBody = wrapContentInTemplate(htmlBody, templateHtml);
           }
+
+          // Get provider for this step's channel
+          const provider = await getProvider(stepChannel);
 
           // Send through provider
           const result = await provider.sendOne({
@@ -776,6 +864,14 @@ export async function sendCampaign(
             .eq("id", variant.id);
 
           sentCount++;
+
+          // Fire-and-forget: log to CRM activities + graph
+          logCampaignSend(supabase, orgId, userId, variant, {
+            campaignId,
+            campaignName: camp.name,
+            channel: stepChannel,
+            stepNumber: variant.step_number,
+          }).catch(() => {}); // Swallow — non-fatal
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : "Send failed";
           await supabase
@@ -783,7 +879,10 @@ export async function sendCampaign(
             .update({
               status: "failed",
               delivery_status: "failed",
-              delivery_metrics: { error: errorMsg },
+              delivery_metrics: {
+                error: errorMsg,
+                failure_type: "provider_error",
+              },
               updated_at: new Date().toISOString(),
             })
             .eq("id", variant.id);
@@ -800,18 +899,168 @@ export async function sendCampaign(
   }
 
   // Update campaign final status
-  const finalStatus = failedCount === typedVariants.length ? "failed" : "sent";
+  const totalAttempted = sentCount + failedCount + taskCount;
+  const finalStatus = totalAttempted === 0
+    ? "failed"
+    : failedCount === totalAttempted
+      ? "failed"
+      : "sent";
+
   await supabase
     .from("email_campaigns")
     .update({
       status: finalStatus,
       sent_count: sentCount,
-      failed_count: failedCount,
+      failed_count: failedCount + validation.invalid.length,
       updated_at: new Date().toISOString(),
     })
     .eq("id", campaignId);
 
-  return { campaignId, sent: sentCount, failed: failedCount, status: finalStatus };
+  return {
+    campaignId,
+    sent: sentCount,
+    failed: failedCount + validation.invalid.length,
+    status: finalStatus,
+  };
+}
+
+/* ── Task Generation ──────────────────────────────────── */
+
+/**
+ * Build a human-readable task title from step type and customer info.
+ */
+function buildTaskTitle(
+  stepType: StepType,
+  customerName: string,
+  stepNumber: number,
+): string {
+  const actionLabels: Record<StepType, string> = {
+    auto_email: "Send email to",
+    manual_email: "Review & send email to",
+    phone_call: "Call",
+    linkedin_view: "View LinkedIn profile of",
+    linkedin_connect: "Send LinkedIn connect to",
+    linkedin_message: "Send LinkedIn message to",
+    custom_task: "Complete task for",
+  };
+
+  const action = actionLabels[stepType] || "Complete task for";
+  return `${action} ${customerName} (Step ${stepNumber})`;
+}
+
+/**
+ * Create a single campaign task row for a variant (manual steps / non-email).
+ */
+async function createSingleTask(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+  campaignId: string,
+  campaignName: string,
+  variant: EmailCustomerVariant,
+  stepType: StepType,
+): Promise<void> {
+  const title = buildTaskTitle(
+    stepType,
+    variant.customer_name || variant.customer_email,
+    variant.step_number || 1,
+  );
+
+  await supabase.from("campaign_tasks").insert({
+    org_id: orgId,
+    campaign_id: campaignId,
+    variant_id: variant.id,
+    strategy_group_id: variant.strategy_group_id || null,
+    step_number: variant.step_number || 1,
+    step_type: stepType,
+    ecom_customer_id: variant.ecom_customer_id,
+    customer_email: variant.customer_email,
+    customer_name: variant.customer_name,
+    assigned_to: userId,
+    title,
+    instructions: null,
+    status: "pending",
+  });
+}
+
+/**
+ * Create tasks for ALL variants (manual execution mode).
+ * Instead of sending, the campaign creates one task per variant
+ * for the rep to review and execute manually.
+ */
+async function createTasksForVariants(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+  campaignId: string,
+  camp: EmailCampaign,
+  variants: EmailCustomerVariant[],
+): Promise<SendCampaignResult> {
+  // Load step types from strategy groups
+  const stepTypeMap = new Map<string, StepType>();
+  if (camp.has_strategy) {
+    const { data: groups } = await supabase
+      .from("campaign_strategy_groups")
+      .select("id, sequence_steps")
+      .eq("campaign_id", campaignId);
+
+    for (const group of (groups || []) as unknown as CampaignStrategyGroup[]) {
+      for (const step of (group.sequence_steps || [])) {
+        stepTypeMap.set(`${group.id}_${step.step_number}`, step.step_type || "manual_email");
+      }
+    }
+  }
+
+  // Create tasks in batches
+  let taskCount = 0;
+  for (let i = 0; i < variants.length; i += 50) {
+    const batch = variants.slice(i, i + 50);
+    const rows = batch.map((variant) => {
+      const stepKey = variant.strategy_group_id
+        ? `${variant.strategy_group_id}_${variant.step_number || 1}`
+        : "";
+      const stepType = stepTypeMap.get(stepKey) || "manual_email";
+      const title = buildTaskTitle(
+        stepType,
+        variant.customer_name || variant.customer_email,
+        variant.step_number || 1,
+      );
+
+      return {
+        org_id: orgId,
+        campaign_id: campaignId,
+        variant_id: variant.id,
+        strategy_group_id: variant.strategy_group_id || null,
+        step_number: variant.step_number || 1,
+        step_type: stepType,
+        ecom_customer_id: variant.ecom_customer_id,
+        customer_email: variant.customer_email,
+        customer_name: variant.customer_name,
+        assigned_to: userId,
+        title,
+        status: "pending",
+      };
+    });
+
+    await supabase.from("campaign_tasks").insert(rows);
+    taskCount += rows.length;
+  }
+
+  // Update campaign status
+  await supabase
+    .from("email_campaigns")
+    .update({
+      status: "review",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", campaignId);
+
+  return {
+    campaignId,
+    sent: 0,
+    failed: 0,
+    status: `manual_tasks_created:${taskCount}`,
+  };
 }
 
 /**

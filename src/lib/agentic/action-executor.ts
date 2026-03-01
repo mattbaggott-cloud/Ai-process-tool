@@ -46,7 +46,8 @@ export async function executeAction(
   orgId: string,
   userRole: OrgRole = "viewer",
   sessionId?: string,
-  actorType: string = "ai"
+  actorType: string = "ai",
+  userTimezone: string = "America/New_York",
 ): Promise<ActionResult> {
   const actionName = resolveActionName(toolName);
   const startTime = Date.now();
@@ -151,7 +152,7 @@ export async function executeAction(
 
   // Call the existing tool executor (handles events + graph sync)
   const result = await executeToolWithGraph(
-    toolName, input, supabase, userId, orgId, userRole, sessionId
+    toolName, input, supabase, userId, orgId, userRole, sessionId, userTimezone
   );
 
   // ── 5. Update execution record ──

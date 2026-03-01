@@ -102,6 +102,7 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
       org_id: row.org_id,
       user_id: row.user_id,
       role: row.role as OrgRole,
+      onboarding_completed: (row.onboarding_completed as boolean) ?? false,
       created_at: row.created_at,
     }));
 
@@ -146,6 +147,18 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     loadDepartments();
   }, [loadDepartments]);
+
+  // Auto-detect and persist user timezone from browser
+  useEffect(() => {
+    if (!user) return;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!tz) return;
+    supabase
+      .from("user_profiles")
+      .update({ timezone: tz })
+      .eq("user_id", user.id)
+      .then(() => {});
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const switchOrg = useCallback(
     (orgId: string) => {

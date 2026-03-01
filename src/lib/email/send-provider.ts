@@ -7,7 +7,9 @@
  * delivery metrics.
  *
  * Supported providers:
- *  - Klaviyo (first implementation)
+ *  - Klaviyo (event-based sends via API)
+ *  - Gmail (sends through user's OAuth account)
+ *  - Outreach (enrolls prospects in sequences)
  *  - Mailchimp (future)
  *  - SendGrid (future)
  *  - Salesloft (future)
@@ -71,6 +73,14 @@ export async function createSendProvider(
     case "klaviyo": {
       const { KlaviyoSendProvider } = await import("./providers/klaviyo-send-provider");
       return new KlaviyoSendProvider(config);
+    }
+    case "gmail": {
+      const { GmailSendProvider } = await import("./providers/gmail-send-provider");
+      return new GmailSendProvider(config);
+    }
+    case "outreach": {
+      const { OutreachSendProvider } = await import("./providers/outreach-send-provider");
+      return new OutreachSendProvider(config);
     }
     case "mailchimp":
       throw new Error("Mailchimp send provider not yet implemented");

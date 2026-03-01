@@ -14,6 +14,11 @@ import {
   SlashProductsView,
   SlashDashboardView,
   SlashToolsView,
+  SlashGoalsView,
+  SlashPainpointsView,
+  SlashCadenceView,
+  SlashOrganizationView,
+  SlashDataView,
 } from "@/components/chat/SlashViews";
 
 /* Lazy-load ChartRenderer (uses Recharts which is heavy) */
@@ -264,6 +269,101 @@ export interface SlashToolsData {
   }>;
 }
 
+export interface SlashGoalsData {
+  total: number;
+  total_sub_goals: number;
+  status_counts: Record<string, number>;
+  goals: Array<{
+    id: string;
+    name: string;
+    description: string;
+    status: string;
+    owner: string;
+    teams: string[];
+    start_date: string | null;
+    end_date: string | null;
+    metric: string;
+    metric_target: string;
+    sub_goals: Array<{ id: string; name: string; status: string }>;
+  }>;
+}
+
+export interface SlashPainpointsData {
+  total: number;
+  severity_counts: Record<string, number>;
+  status_counts: Record<string, number>;
+  pain_points: Array<{
+    id: string;
+    name: string;
+    description: string;
+    severity: string;
+    status: string;
+    teams: string[];
+    owner: string;
+    impact_metric: string;
+    linked_goal: string | null;
+  }>;
+}
+
+export interface SlashCadenceData {
+  total: number;
+  status_counts: Record<string, number>;
+  channel_counts: Record<string, number>;
+  cadences: Array<{
+    id: string;
+    name: string;
+    description: string;
+    status: string;
+    target_persona: string;
+    total_steps: number;
+    total_days: number;
+    channels: string[];
+    steps: Array<{ day: number; channel: string; action: string }>;
+  }>;
+}
+
+export interface SlashOrganizationData {
+  name: string;
+  description: string;
+  industry: string;
+  website: string;
+  stage: string;
+  target_market: string;
+  differentiators: string;
+  notes: string;
+  created_at: string | null;
+  member_count: number;
+  members: Array<{
+    role: string;
+    display_name: string | null;
+    job_title: string | null;
+    department: string | null;
+    joined_at: string | null;
+  }>;
+}
+
+export interface SlashDataData {
+  total_connectors: number;
+  active_connectors: number;
+  connectors: Array<{
+    id: string;
+    type: string;
+    name: string;
+    status: string;
+    last_sync: string | null;
+    created_at: string;
+  }>;
+  recent_imports: Array<{
+    id: string;
+    type: string;
+    source: string;
+    status: string;
+    row_count: number;
+    created_at: string;
+  }>;
+  available_types: string[];
+}
+
 export type ContentSegment =
   | { type: "text"; content: string }
   | { type: "table"; data: InlineTableData }
@@ -282,11 +382,16 @@ export type ContentSegment =
   | { type: "slash_orders"; data: SlashOrdersData }
   | { type: "slash_products"; data: SlashProductsData }
   | { type: "slash_dashboard"; data: SlashDashboardData }
-  | { type: "slash_tools"; data: SlashToolsData };
+  | { type: "slash_tools"; data: SlashToolsData }
+  | { type: "slash_goals"; data: SlashGoalsData }
+  | { type: "slash_painpoints"; data: SlashPainpointsData }
+  | { type: "slash_cadence"; data: SlashCadenceData }
+  | { type: "slash_organization"; data: SlashOrganizationData }
+  | { type: "slash_data"; data: SlashDataData };
 
 /* ── Parse message content for inline blocks ────────────── */
 
-export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)|(SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS))):([\s\S]*?)-->/g;
+export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)|(SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA))):([\s\S]*?)-->/g;
 
 export function parseMessageContent(content: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
@@ -347,6 +452,16 @@ export function parseMessageContent(content: string): ContentSegment[] {
         segments.push({ type: "slash_dashboard", data: parsed as SlashDashboardData });
       } else if (slashType === "SLASH_TOOLS" && parsed.tools) {
         segments.push({ type: "slash_tools", data: parsed as SlashToolsData });
+      } else if (slashType === "SLASH_GOALS") {
+        segments.push({ type: "slash_goals", data: parsed as SlashGoalsData });
+      } else if (slashType === "SLASH_PAINPOINTS") {
+        segments.push({ type: "slash_painpoints", data: parsed as SlashPainpointsData });
+      } else if (slashType === "SLASH_CADENCE") {
+        segments.push({ type: "slash_cadence", data: parsed as SlashCadenceData });
+      } else if (slashType === "SLASH_ORGANIZATION") {
+        segments.push({ type: "slash_organization", data: parsed as SlashOrganizationData });
+      } else if (slashType === "SLASH_DATA") {
+        segments.push({ type: "slash_data", data: parsed as SlashDataData });
       } else {
         // Malformed inline block — skip silently
         segments.push({ type: "text", content: "" });
@@ -370,7 +485,17 @@ export function parseMessageContent(content: string): ContentSegment[] {
     segments.push({ type: "text", content });
   }
 
-  return segments;
+  // Deduplicate slash views — only keep the first of each type (safety net against double-streaming)
+  const seenSlashTypes = new Set<string>();
+  const deduped = segments.filter((seg) => {
+    if (seg.type.startsWith("slash_")) {
+      if (seenSlashTypes.has(seg.type)) return false;
+      seenSlashTypes.add(seg.type);
+    }
+    return true;
+  });
+
+  return deduped;
 }
 
 /* ── Inline Table Component ──────────────────────────────── */
@@ -598,6 +723,21 @@ export function RichMessageContent({
         }
         if (seg.type === "slash_tools") {
           return <SlashToolsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_goals") {
+          return <SlashGoalsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_painpoints") {
+          return <SlashPainpointsView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_cadence") {
+          return <SlashCadenceView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_organization") {
+          return <SlashOrganizationView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_data") {
+          return <SlashDataView key={i} data={seg.data} />;
         }
         if (seg.type === "text") {
           return (

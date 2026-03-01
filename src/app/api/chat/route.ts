@@ -11,6 +11,7 @@ import { extractAndStoreMemoriesInBackground } from "@/lib/agentic/memory-extrac
 import { getGraphContext } from "@/lib/agentic/graph-query";
 import { getIdentityResolutionSummary } from "@/lib/identity/resolver";
 import { interceptToolCall } from "@/lib/data-agent/tool-interceptor";
+import { buildOnboardingPrompt } from "@/lib/onboarding/onboarding-prompt";
 import { getSegmentSummary } from "@/lib/segmentation/behavioral-engine";
 import { getEmailSummary } from "@/lib/email/email-generator";
 import { getCampaignSummary } from "@/lib/email/campaign-engine";
@@ -23,6 +24,7 @@ interface ChatRequest {
   chatFileContents: { name: string; content: string }[];
   activeSegment?: { id: string; name: string; segment_type: string; member_count: number; description: string | null } | null;
   conversationId?: string; // persistent session ID for multi-turn Data Agent context
+  sessionType?: "regular" | "onboarding";
 }
 
 /* ── Truncation helpers ────────────────────────────────── */
@@ -126,7 +128,13 @@ function buildSystemPrompt(data: {
 
   const userName = (userProfile?.display_name as string) || email;
 
-  let prompt = `You are an intelligent AI agent operating ${userName}'s business workspace. You are NOT a software feature — you are a reasoning agent that understands context, remembers preferences, and takes smart action.
+  const userTimezone = (userProfile?.timezone as string) || "America/New_York";
+  const now = new Date();
+  const currentDateTime = now.toLocaleString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone: userTimezone });
+
+  let prompt = `Current date and time: ${currentDateTime} (User timezone: ${userTimezone})
+
+You are an intelligent AI agent operating ${userName}'s business workspace. You are NOT a software feature — you are a reasoning agent that understands context, remembers preferences, and takes smart action.
 
 ## Your Identity
 - You THINK before acting. You interpret what the user means, not just what they literally said.
@@ -168,6 +176,7 @@ You can take actions in the user's workspace using tools:
 - **E-Commerce Analytics:** Run deep analytics on Shopify data — revenue trends, AOV over time, customer LTV rankings, repeat purchase rates, top products by revenue/quantity, customer cohort analysis, and RFM segmentation
 - **Rich Inline Content:** Render data tables and charts directly in chat responses for visual, actionable insights
 - **Data Agent (analyze_data):** Answer ANY data question across ALL domains — ecommerce, CRM, campaigns, segments, behavioral profiles — with natural language. Supports multi-turn follow-ups, cross-domain queries, and learns business terminology from conversations.
+- **Outreach.io Integration:** Search prospects, view/complete tasks, search sequences, get performance metrics, create new prospects, and enroll prospects in sequences — all synced from the user's Outreach account.
 
 ## Data Agent — Primary Data Tool
 **IMPORTANT:** For ALL data questions, analytics queries, and business intelligence requests, use the **analyze_data** tool as your FIRST choice. It handles:
@@ -219,6 +228,22 @@ You can create, update, and archive all CRM records through natural language:
 - restore_record brings them back
 - NEVER permanently delete CRM records — only archive
 
+## Outreach.io Sales Engagement
+If the user has Outreach connected, you can interact with their Outreach data:
+
+**Read tools (locally synced data):**
+- search_outreach_prospects — find prospects by name, email, company, stage, or tags
+- get_outreach_tasks — view tasks by status (pending/complete), due date, or prospect
+- search_outreach_sequences — find sequences by name, enabled status
+- get_outreach_performance — view sequence performance metrics (open/click/reply rates, prospect counts) with aggregates
+
+**Write tools (calls Outreach API):**
+- complete_outreach_task — mark a task as done (updates both Outreach and local)
+- enroll_in_outreach_sequence — enroll a prospect in a sequence (ALWAYS confirm with the user first — this triggers real automated emails)
+- create_outreach_prospect — create a new prospect in Outreach + sync to local tables + create CRM contact
+
+**Important:** Outreach write actions are real — completing tasks, enrolling in sequences, and creating prospects all call the live Outreach API. Always confirm destructive or impactful actions with the user before executing.
+
 ## Document Management & Knowledge Base
 You can create, update, search, and archive documents in the organization's knowledge library:
 
@@ -227,10 +252,12 @@ You can create, update, search, and archive documents in the organization's know
 - Link to relevant entities: company_name, contact_name, deal_title, product_name
 - Example: user says "save notes about Acme's requirements" → create_library_item with company_name="Acme"
 
-**Searching documents:**
-- search_library — semantic + keyword hybrid search across all library items and files
-- Use this PROACTIVELY when the user asks a question that might be answered by saved documents
-- When citing a document, reference it by title: "According to your 'Q1 Sales Playbook'..." or "Based on the 'Acme Requirements' note..."
+**Searching documents (IMPORTANT — check knowledge base first):**
+- search_library — semantic + keyword hybrid search across all library items, files, and indexed Google Drive documents
+- **ALWAYS search the knowledge base FIRST** when the user asks about a business, product, client, or topic that could be covered by saved documents or indexed files. Do NOT assume a question is only about CRM/ecom data — the user may have indexed relevant files from Google Drive.
+- When the user mentions a company, product, or topic by name, call search_library with that name BEFORE using CRM or ecom tools
+- When citing a document, reference it by title: "According to your 'Q1 Sales Playbook'..." or "Based on the indexed 'Farmersmarket.com' document..."
+- Indexed Google Drive files (Docs, Sheets, PDFs, etc.) are searchable here — treat them as first-class knowledge sources
 
 **Updating & archiving:**
 - update_library_item — update content, title, category, or tags
@@ -249,6 +276,11 @@ When the user sends a message that is exactly a slash command, IMMEDIATELY call 
 - "/products" → call get_products_view (product catalog)
 - "/dashboard" → call get_dashboard_view (aggregated overview)
 - "/tools" → call get_tools_view (tech stack)
+- "/goals" → call get_goals_view (org goals with sub-goals)
+- "/obstacles" → call get_painpoints_view (org obstacles & blockers)
+- "/cadence" → call get_cadence_view (sales cadences)
+- "/organization" → call get_organization_view (organization profile & team)
+- "/data" → call get_data_view (data connections & imports)
 
 After the view renders, add a brief 1-2 sentence commentary about the data shown (e.g., pipeline health, notable trends). Do NOT reproduce the data in text form — the view already shows it visually.
 
@@ -375,14 +407,45 @@ When the user names specific people or says "create a campaign for them/these cu
 - If the user references a segment → pass segment_id
 NEVER call create_campaign without customer_ids or segment_id when the user is referring to specific people — omitting them targets ALL customers in the database.
 
-## AI Campaign Builder
-There is ONE campaign tool: **create_campaign**. It handles everything — single emails, multi-email sequences, and AI-driven sub-group strategies. You never need to pick between tools.
+## AI Campaign Builder — Multi-Channel Orchestration
+There is ONE campaign tool: **create_campaign**. It handles everything — single emails, multi-email sequences, AI-driven sub-group strategies, and multi-channel orchestration. You never need to pick between tools.
 
 **How create_campaign works (the tool auto-routes based on parameters):**
 - **num_emails=1** (default) + small audience → Quick path: creates campaign, generates emails immediately
 - **num_emails=2+** + small audience → Sequence path: creates campaign with N-step schedule, user reviews in UI before generating
 - **Large audience (15+) or num_emails=2+** → AI Grouping path: Claude analyzes audience, creates 2-6 sub-groups with tailored sequences, user reviews in UI
 - You can override the auto-routing with the strategy parameter: "single_group" or "ai_grouping"
+
+**Multi-Channel Step Types:**
+Each step in a campaign sequence can use a different channel and action type:
+- **auto_email** (default) — AI sends the email automatically through the selected channel
+- **manual_email** — Creates a task for the rep to review and send the email
+- **phone_call** — Creates a call task for the rep (e.g., "Call Sarah at Acme")
+- **linkedin_view** / **linkedin_connect** / **linkedin_message** — Creates LinkedIn outreach tasks
+- **custom_task** — Creates a custom task with instructions
+
+Non-email step types (phone_call, linkedin_*, custom_task) always create tasks in the rep's task queue regardless of execution mode.
+
+**Delivery Channels:**
+- **klaviyo** (default) — Sends via Klaviyo event API
+- **gmail** — Sends through the user's own Gmail account via OAuth (appears from their personal email)
+- **outreach** — Enrolls prospects in an Outreach sequence (requires sequence_id in config)
+- mailchimp, sendgrid, salesloft — future channels
+
+**Execution Modes:**
+- **automatic** (default) — Emails are sent immediately when the campaign is triggered
+- **manual** — Creates tasks for each email instead of sending. Reps review and execute each one individually. Great for high-touch sales outreach where personalization matters.
+
+**Task Management:**
+- Use **manage_campaign_tasks** (action="list") to show pending/completed tasks
+- Use **manage_campaign_tasks** (action="complete") to mark a task done with optional notes
+- Completed tasks automatically log to CRM activities and the knowledge graph
+
+**Send Validation & Failed Sends:**
+Before any campaign sends, the system validates all variants:
+- Catches missing/invalid emails, empty subjects, empty bodies, unresolved {{variables}}
+- Invalid variants are marked as failed with specific reasons
+- Use **get_failed_sends** to see what went wrong and help the user fix issues
 
 **Campaign Builder — Key Principle:**
 Campaigns do NOT require a pre-built segment. The AI can work directly off the full customer list and create its own sub-groups internally. Segments are an OPTIONAL filter — use them when the user has already identified a specific audience, or when they say "create a campaign from this segment."
@@ -396,11 +459,11 @@ Examples (pick 2-3 relevant ones, do NOT use a generic checklist):
 - "Single email or a multi-email drip sequence over several days?"
 - "How many emails in the sequence and over how many days?"
 - "Same approach for everyone, or different strategies per customer type?"
+- "Which channel — Gmail (personal), Klaviyo (brand), or Outreach (sequence)?"
+- "Fully automatic or manual mode where you review each send?"
+- "Any non-email steps? Phone calls, LinkedIn outreach, custom tasks?"
 - "Should I include a discount or incentive? If so, what percentage?"
 - "What's the primary goal — re-engagement, upsell, loyalty reward, announcement?"
-- "Casual/friendly tone or more professional?"
-- "Any specific products or categories to highlight?"
-- "Want me to reference their past purchases, or keep it general?"
 If the user already gave enough detail (e.g., "create a 15% off win-back for lapsed customers, casual tone"), skip pre-flight and execute immediately. If they say "just do it" or "skip questions," proceed directly without clarifying.
 
 **Passing sequence details:**
@@ -412,10 +475,39 @@ When the user specifies a number of emails (e.g., "3 emails over 2 weeks"), pass
 - "Write a win-back email for the at-risk segment" / "Create a promotional email" → generate_email (generates subject, preview, HTML body, plain text — all matching brand style)
 - "Show my generated emails" / "List email drafts" → list_generated_emails
 - "Show me that email" / "Get the full email content" → get_generated_email
+- "Show me failed sends" / "What went wrong?" → get_failed_sends (shows validation failures + provider errors)
+- "Show my tasks" / "What do I need to do?" → manage_campaign_tasks (action="list")
+- "Mark that task done" → manage_campaign_tasks (action="complete")
+
+**Activity Tracking:**
+Every campaign send and task completion is automatically logged:
+- Creates CRM activity records linked to the contact
+- Creates "received" edges in the knowledge graph (person → campaign)
+- When users ask "what outreach have we done with Sarah?" the graph shows the full timeline
 
 **Email workflow:** Users first upload brand assets (templates, examples, style guides) so the AI learns their tone and style. Then when generating emails, the AI references those assets + the target segment's behavioral profile (purchase intervals, product affinities, communication style) to produce personalized, on-brand content. Emails are saved as drafts for review before sending.
 
 When users paste or describe email content, proactively save it as a brand asset using save_brand_asset. When they ask to generate emails, always reference the brand assets and segment context.
+
+## Connected Data Sources (Gmail, Calendar, Drive)
+
+**Gmail** — You can search the user's ENTIRE inbox in real-time via the Gmail API. No sync needed for search.
+- search_emails: Searches Gmail directly (supports name, email, subject, keywords, date range)
+- read_email: Reads full email body (tries local DB, falls back to live Gmail fetch)
+- send_email: Sends email from the user's Gmail account
+- get_inbox_summary: Quick stats on the user's inbox
+
+**Google Calendar** — Synced events with timezone-aware formatting.
+- search_calendar: Search events by keyword, attendee, date range
+- get_upcoming_meetings: Show what's next on the user's calendar
+- create_calendar_event: Schedule new events
+
+**Google Drive** — You can search, read, AND index files on demand.
+- search_drive: Find files by name, type, or folder
+- read_drive_file: **Read the full content of any file** — Google Docs, Sheets, text files, markdown. Use this when the user asks about a specific document's content (e.g., "what's in my strategy doc?", "summarize the Q4 report").
+- index_drive_files: **Index files into the knowledge base** for permanent searchability. After reading a file, proactively offer: "Would you like me to index this into the knowledge base so we can reference it anytime?"
+
+**Key behavior:** When a user asks about a specific file, DON'T just return metadata. Use read_drive_file to actually read it, then summarize or answer their question. If it's a file they'll reference often, offer to index it.
 
 **CRITICAL — Data Narration Rules:**
 When a tool result starts with \`[DATA SUMMARY — use ONLY these facts]\`, you MUST use ONLY the names, numbers, and facts from that summary in your response. Do NOT invent, guess, or hallucinate any names or numbers. The summary contains the exact data — wrap it in friendly, conversational language and add brief insights. Charts and tables are auto-rendered for the user — do NOT recreate them. Just narrate the facts and add analysis.
@@ -1077,52 +1169,82 @@ export async function POST(req: Request) {
     orgMembersByRole[r] = (orgMembersByRole[r] ?? 0) + 1;
   }
 
-  /* 6. Build system prompt */
-  const systemPrompt = buildSystemPrompt({
-    email: user.email ?? "User",
-    userProfile: userProfile ?? null,
-    organization: organization ?? null,
-    teams: teams ?? [],
-    teamRoles: teamRoles ?? [],
-    teamKpis: teamKpis ?? [],
-    teamTools: teamTools ?? [],
-    goalSummary,
-    painPointSummary,
-    librarySummary,
-    stackTools: stackTools ?? [],
-    projects: projects ?? [],
-    dashboards: dashboardsData ?? [],
-    catalogSummary,
-    catalogSubcategories,
-    chatFileContents: chatFileContents ?? [],
-    currentPage: currentPage ?? "/",
-    retrievedContext,
-    crmSummary,
-    orgRole: orgCtx.role,
-    orgMemberCount: orgMembersData?.length ?? 0,
-    orgMembersByRole,
-    orgDepartmentNames: (orgDeptsData ?? []).map((d) => d.name as string),
-    pendingInviteCount: orgPendingInviteCount ?? 0,
-    ecomSummary: {
-      customerCount: ecomCustomerCount ?? 0,
-      orderCount: ecomOrderCount ?? 0,
-      productCount: ecomProductCount ?? 0,
-      shopifyConnected: (ecomConnector ?? []).some((c: Record<string, unknown>) => c.status === "connected"),
-      lastSyncAt: (ecomConnector ?? []).length > 0 ? ((ecomConnector as Record<string, unknown>[])[0].last_sync_at as string | null) : null,
-    },
-    identityStats,
-    segmentSummary,
-    emailSummary,
-    campaignSummary,
-    activeSegment: activeSegment ?? null,
-    memorySummary,
-    graphContext: graphContextStr,
-  });
+  /* 6. Build system prompt — onboarding uses a focused guided prompt */
+  const userTimezone = (userProfile?.timezone as string) || "America/New_York";
+  const isOnboarding = body.sessionType === "onboarding";
+
+  const systemPrompt = isOnboarding
+    ? buildOnboardingPrompt({
+        userName: (userProfile?.display_name as string) || null,
+        email: user.email ?? "User",
+        orgName: (organization?.name as string) || null,
+        website: (organization?.website as string) || null,
+        jobTitle: (userProfile?.job_title as string) || null,
+        hasResponsibilities: !!(userProfile?.key_responsibilities as string),
+        hasOrgDescription: !!(organization?.description as string),
+        orgRole: orgCtx.role,
+        messageCount: messages.length,
+      })
+    : buildSystemPrompt({
+        email: user.email ?? "User",
+        userProfile: userProfile ?? null,
+        organization: organization ?? null,
+        teams: teams ?? [],
+        teamRoles: teamRoles ?? [],
+        teamKpis: teamKpis ?? [],
+        teamTools: teamTools ?? [],
+        goalSummary,
+        painPointSummary,
+        librarySummary,
+        stackTools: stackTools ?? [],
+        projects: projects ?? [],
+        dashboards: dashboardsData ?? [],
+        catalogSummary,
+        catalogSubcategories,
+        chatFileContents: chatFileContents ?? [],
+        currentPage: currentPage ?? "/",
+        retrievedContext,
+        crmSummary,
+        orgRole: orgCtx.role,
+        orgMemberCount: orgMembersData?.length ?? 0,
+        orgMembersByRole,
+        orgDepartmentNames: (orgDeptsData ?? []).map((d) => d.name as string),
+        pendingInviteCount: orgPendingInviteCount ?? 0,
+        ecomSummary: {
+          customerCount: ecomCustomerCount ?? 0,
+          orderCount: ecomOrderCount ?? 0,
+          productCount: ecomProductCount ?? 0,
+          shopifyConnected: (ecomConnector ?? []).some((c: Record<string, unknown>) => c.status === "connected"),
+          lastSyncAt: (ecomConnector ?? []).length > 0 ? ((ecomConnector as Record<string, unknown>[])[0].last_sync_at as string | null) : null,
+        },
+        identityStats,
+        segmentSummary,
+        emailSummary,
+        campaignSummary,
+        activeSegment: activeSegment ?? null,
+        memorySummary,
+        graphContext: graphContextStr,
+      });
 
   /* 7. Call Claude with streaming + tool use */
   console.log(`[chat] System prompt built: ${systemPrompt.length} chars`);
   const anthropic = new Anthropic();
-  const tools = getToolDefinitions();
+  const allTools = getToolDefinitions();
+
+  // During onboarding, only expose the tools the onboarding prompt can use
+  const ONBOARDING_TOOLS = new Set([
+    "analyze_company_website",
+    "complete_onboarding",
+    "update_organization",
+    "update_user_profile",
+    "create_library_item",
+    "get_organization_view",
+    "get_knowledge_view",
+    "get_data_view",
+  ]);
+  const tools = isOnboarding
+    ? allTools.filter((t) => ONBOARDING_TOOLS.has(t.name))
+    : allTools;
   const encoder = new TextEncoder();
   console.log(`[chat] Starting stream for: "${lastUserMessage.slice(0, 80)}"`);
 
@@ -1258,7 +1380,9 @@ export async function POST(req: Request) {
                     user.id,
                     orgId,
                     orgCtx.role,
-                    sessionId
+                    sessionId,
+                    "ai",
+                    userTimezone,
                   ),
                   TOOL_TIMEOUT_OVERRIDES[effectiveTool] ?? TOOL_TIMEOUT,
                   `tool:${effectiveTool}`
@@ -1307,7 +1431,8 @@ export async function POST(req: Request) {
                   user.id,
                   "tool_result",
                   sessionId,
-                  { content: resultMessage, tool_name: toolBlock.name }
+                  { content: resultMessage, tool_name: toolBlock.name },
+                  orgId,
                 ).catch((err) => console.error("[chat] Tool result embed failed:", err));
 
                 // 2. Summarize with Haiku — fast, cheap, intelligent compression
@@ -1375,7 +1500,7 @@ export async function POST(req: Request) {
 
               // Extract inline viz markers BEFORE they go to Claude
               // These get streamed directly to the user — Claude narrates, code renders
-              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE|SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS)):[\s\S]*?-->/g;
+              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE|SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA)):[\s\S]*?-->/g;
               const vizMarkers: string[] = [];
               let vizMatch;
               while ((vizMatch = vizMarkerRegex.exec(resultMessage)) !== null) {
@@ -1407,6 +1532,11 @@ export async function POST(req: Request) {
                 .replace(/<!--SLASH_PRODUCTS:[\s\S]*?-->/g, "\n[A product catalog view has been rendered for the user. Add a brief 1-2 sentence commentary about the catalog.]\n")
                 .replace(/<!--SLASH_DASHBOARD:[\s\S]*?-->/g, "\n[A dashboard overview with metrics and highlights has been rendered for the user. Add a brief 2-3 sentence summary of the overall business health and any notable items.]\n")
                 .replace(/<!--SLASH_TOOLS:[\s\S]*?-->/g, "\n[A tech stack view has been rendered for the user. Add a brief 1-2 sentence commentary about their tool stack.]\n")
+                .replace(/<!--SLASH_GOALS:[\s\S]*?-->/g, "\n[A goals view with sub-goals and progress has been rendered for the user. Add a brief 1-2 sentence commentary about goal progress and priorities.]\n")
+                .replace(/<!--SLASH_PAINPOINTS:[\s\S]*?-->/g, "\n[A pain points view with severity and status has been rendered for the user. Add a brief 1-2 sentence commentary about key issues and priorities.]\n")
+                .replace(/<!--SLASH_CADENCE:[\s\S]*?-->/g, "\n[A sales cadences view has been rendered for the user. Add a brief 1-2 sentence commentary about the outreach sequences.]\n")
+                .replace(/<!--SLASH_ORGANIZATION:[\s\S]*?-->/g, "\n[An organization profile view has been rendered for the user. Add a brief 1-2 sentence commentary about their company profile.]\n")
+                .replace(/<!--SLASH_DATA:[\s\S]*?-->/g, "\n[A data connections view has been rendered for the user showing their connected data sources. Add a brief commentary about their data setup and suggest connecting sources if none are connected.]\n")
                 .trim();
 
               // Prepend the narrative summary so Claude leads with accurate facts

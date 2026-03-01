@@ -17,6 +17,7 @@
     "@supabase/supabase-js": "^2.95.3",
     "lightningcss": "^1.31.1",
     "lightningcss-darwin-arm64": "^1.31.1",
+    "mammoth": "^1.11.0",
     "next": "16.1.6",
     "openai": "^6.21.0",
     "pdf-parse": "^2.4.5",

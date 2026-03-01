@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useLayout } from "@/context/LayoutContext";
+import { useChatSessionContext } from "@/context/ChatSessionContext";
 import { createClient } from "@/lib/supabase/client";
 import GlobalSearch from "./GlobalSearch";
 
@@ -12,7 +13,6 @@ import GlobalSearch from "./GlobalSearch";
 
 const mainNav = [
   { label: "Home",       href: "/",           icon: "home" },
-  { label: "Data",       href: "/data",        icon: "database" },
   { label: "Settings",   href: "/settings",    icon: "gear" },
 ];
 
@@ -119,6 +119,20 @@ export default function Sidebar() {
   const router = useRouter();
   const { user } = useAuth();
   const { sidebarCollapsed, toggleSidebar } = useLayout();
+  const chatSessions = useChatSessionContext();
+
+  /* ── Session context menu state ── */
+  const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  // Close session menu when clicking outside
+  useEffect(() => {
+    if (!sessionMenuId) return;
+    const handler = () => setSessionMenuId(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [sessionMenuId]);
 
   /* ── Load teams, org name, and projects dynamically ── */
   const [sidebarTeams, setSidebarTeams] = useState<{ slug: string; name: string }[]>([]);
@@ -298,6 +312,123 @@ export default function Sidebar() {
             ))}
         </div>
       </nav>
+
+      {/* ─── Conversations ─── */}
+      {!sidebarCollapsed && (
+        <div className="sidebar-sessions">
+          <div className="sidebar-sessions-header">
+            <span className="sidebar-sessions-title">Conversations</span>
+            <button
+              className="sidebar-sessions-new"
+              onClick={async () => {
+                await chatSessions.createSession();
+                if (pathname !== "/") router.push("/");
+              }}
+              title="New conversation"
+            >
+              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M7 1v12M1 7h12" />
+              </svg>
+            </button>
+          </div>
+          <div className="sidebar-sessions-list">
+            {chatSessions.groupedSessions.map((group) => (
+              <div key={group.group} className="sidebar-sessions-group">
+                <div className="sidebar-sessions-group-label">{group.group}</div>
+                {group.sessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`sidebar-session-item ${s.id === chatSessions.activeSessionId ? "active" : ""}`}
+                    onClick={() => {
+                      chatSessions.loadSession(s.id);
+                      if (pathname !== "/") router.push("/");
+                    }}
+                  >
+                    {renamingId === s.id ? (
+                      <input
+                        className="sidebar-session-rename-input"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => {
+                          if (renameValue.trim()) chatSessions.renameSession(s.id, renameValue.trim());
+                          setRenamingId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            if (renameValue.trim()) chatSessions.renameSession(s.id, renameValue.trim());
+                            setRenamingId(null);
+                          }
+                          if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        {s.is_pinned && <span className="sidebar-session-pin">📌</span>}
+                        <span className="sidebar-session-title">{s.title}</span>
+                        <button
+                          className="sidebar-session-menu-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSessionMenuId(sessionMenuId === s.id ? null : s.id);
+                          }}
+                        >
+                          ···
+                        </button>
+                      </>
+                    )}
+
+                    {sessionMenuId === s.id && (
+                      <div className="sidebar-session-menu" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => {
+                            setRenameValue(s.title);
+                            setRenamingId(s.id);
+                            setSessionMenuId(null);
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button onClick={() => { chatSessions.togglePin(s.id); setSessionMenuId(null); }}>
+                          {s.is_pinned ? "Unpin" : "Pin"}
+                        </button>
+                        <button
+                          className="sidebar-session-menu-delete"
+                          onClick={async () => {
+                            setSessionMenuId(null);
+                            await chatSessions.deleteSession(s.id);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {chatSessions.sessions.length === 0 && !chatSessions.loading && (
+              <div className="sidebar-sessions-empty">No conversations yet</div>
+            )}
+          </div>
+        </div>
+      )}
+      {sidebarCollapsed && (
+        <button
+          className="sidebar-sessions-collapsed-btn"
+          onClick={async () => {
+            await chatSessions.createSession();
+            if (pathname !== "/") router.push("/");
+          }}
+          title="New conversation"
+        >
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <path d="M2 3h12M2 7h8M2 11h10" />
+            <path d="M12 9v4M10 11h4" />
+          </svg>
+        </button>
+      )}
 
       {/* ─── User + sign out ─── */}
       <div className="sidebar-footer">

@@ -7,6 +7,17 @@ import { pushSegmentToList } from "@/lib/klaviyo/sync-service";
 import { emitToolEvent } from "@/lib/agentic/event-emitter";
 import { syncRecordToGraphInBackground, syncRecordToGraph, createEdge } from "@/lib/agentic/graph-sync";
 import { analyzeData } from "@/lib/data-agent/agent";
+import { analyzeCompanyWebsite } from "@/lib/onboarding/website-analyzer";
+import { sendEmail as gmailSendEmail, searchGmailLive } from "@/lib/gmail/sync-service";
+import { readFileContent as driveReadFile, indexFiles as driveIndexFiles, unindexFiles as driveUnindexFiles } from "@/lib/google-drive/sync-service";
+import { createCalendarEvent } from "@/lib/google-calendar/sync-service";
+import { type GoogleConnectorConfig, ensureFreshGoogleToken } from "@/lib/google/oauth";
+import { type OutreachConfig, refreshOutreachToken } from "@/lib/outreach/sync-service";
+import {
+  createOutreachProspect,
+  completeOutreachTask,
+  enrollInOutreachSequence,
+} from "@/lib/outreach/write-service";
 import {
   discoverSegments,
   createSegment as createSegmentFn,
@@ -29,7 +40,7 @@ import {
   getCampaignStatus,
   planCampaignStrategy,
 } from "@/lib/email/campaign-engine";
-import type { CampaignType, CampaignEmailType, DeliveryChannel, StrategySequenceStep } from "@/lib/types/database";
+import type { CampaignType, CampaignEmailType, DeliveryChannel, StrategySequenceStep, ExecutionMode, StepType } from "@/lib/types/database";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -47,7 +58,8 @@ export async function executeTool(
   userId: string,
   orgId: string,
   userRole: OrgRole = "viewer",
-  sessionId?: string
+  sessionId?: string,
+  userTimezone: string = "America/New_York",
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
@@ -93,6 +105,8 @@ export async function executeTool(
         return await handleDeletePainPoint(input, supabase);
       case "update_organization":
         return await handleUpdateOrganization(input, supabase, userId, orgId);
+      case "update_user_profile":
+        return await handleUpdateUserProfile(input, supabase, userId);
       case "search_tool_catalog":
         return await handleSearchToolCatalog(input, supabase);
       case "add_stack_tool":
@@ -208,9 +222,57 @@ export async function executeTool(
       case "create_sequence":            // legacy alias
         return await handleCreateCampaign(input, supabase, orgId, userId);
       case "send_campaign":
-        return await handleSendCampaign(input, supabase, orgId);
+        return await handleSendCampaign(input, supabase, orgId, userId);
       case "get_campaign_status":
         return await handleGetCampaignStatus(input, supabase, orgId);
+      case "manage_campaign_tasks":
+        return await handleManageCampaignTasks(input, supabase, orgId, userId);
+      case "get_failed_sends":
+        return await handleGetFailedSends(input, supabase, orgId);
+
+      /* Gmail tools */
+      case "search_emails":
+        return await handleSearchEmails(input, supabase, orgId, userId);
+      case "read_email":
+        return await handleReadEmail(input, supabase, orgId, userId);
+      case "send_email":
+        return await handleSendEmail(input, supabase, userId, orgId);
+      case "get_inbox_summary":
+        return await handleGetInboxSummary(supabase, orgId, userId);
+
+      /* Google Calendar tools */
+      case "search_calendar":
+        return await handleSearchCalendar(input, supabase, orgId, userTimezone);
+      case "get_upcoming_meetings":
+        return await handleGetUpcomingMeetings(input, supabase, orgId, userId, userTimezone);
+      case "create_calendar_event":
+        return await handleCreateCalendarEvent(input, supabase, userId, orgId);
+
+      /* Google Drive tools */
+      case "search_drive":
+        return await handleSearchDrive(input, supabase, orgId);
+      case "read_drive_file":
+        return await handleReadDriveFile(input, supabase, userId, orgId);
+      case "index_drive_files":
+        return await handleIndexDriveFiles(input, supabase, userId, orgId);
+      case "unindex_drive_files":
+        return await handleUnindexDriveFiles(input, supabase, orgId);
+
+      /* Outreach tools */
+      case "search_outreach_prospects":
+        return await handleSearchOutreachProspects(input, supabase, orgId);
+      case "get_outreach_tasks":
+        return await handleGetOutreachTasks(input, supabase, orgId, userId);
+      case "search_outreach_sequences":
+        return await handleSearchOutreachSequences(input, supabase, orgId);
+      case "get_outreach_performance":
+        return await handleGetOutreachPerformance(input, supabase, orgId);
+      case "complete_outreach_task":
+        return await handleCompleteOutreachTask(input, supabase, userId, orgId);
+      case "enroll_in_outreach_sequence":
+        return await handleEnrollInOutreachSequence(input, supabase, userId, orgId);
+      case "create_outreach_prospect":
+        return await handleCreateOutreachProspect(input, supabase, userId, orgId);
 
       /* Data Agent */
       case "analyze_data":
@@ -239,6 +301,23 @@ export async function executeTool(
         return await handleGetDashboardView(supabase, orgId, userId);
       case "get_tools_view":
         return await handleGetToolsView(supabase, orgId, userId);
+      case "get_goals_view":
+        return await handleGetGoalsView(supabase, userId, orgId);
+      case "get_painpoints_view":
+        return await handleGetPainpointsView(supabase, userId, orgId);
+      case "get_cadence_view":
+        return await handleGetCadenceView(supabase, userId, orgId);
+      case "get_organization_view":
+        return await handleGetOrganizationView(supabase, userId, orgId);
+      case "get_data_view":
+        return await handleGetDataView(supabase, orgId);
+
+      /* ── Onboarding ── */
+      case "analyze_company_website":
+        return await handleAnalyzeCompanyWebsite(input);
+
+      case "complete_onboarding":
+        return await handleCompleteOnboarding(supabase, userId, orgId);
 
       default:
         return { success: false, message: `Unknown tool: ${toolName}` };
@@ -265,9 +344,10 @@ export async function executeToolWithGraph(
   userId: string,
   orgId: string,
   userRole: OrgRole = "viewer",
-  sessionId?: string
+  sessionId?: string,
+  userTimezone: string = "America/New_York",
 ): Promise<ToolResult> {
-  const result = await executeTool(toolName, input, supabase, userId, orgId, userRole, sessionId);
+  const result = await executeTool(toolName, input, supabase, userId, orgId, userRole, sessionId, userTimezone);
 
   // Fire-and-forget: emit event + sync graph
   const entityInfo = inferEntityFromTool(toolName, input, result);
@@ -698,7 +778,7 @@ async function handleCreateGoal(
   if (error) return { success: false, message: `Failed to create goal: ${error.message}` };
 
   // Embed the new goal (fire-and-forget)
-  embedInBackground(supabase, userId, "goals", data.id, data);
+  embedInBackground(supabase, userId, "goals", data.id, data, orgId);
 
   return { success: true, message: `Created goal "${data.name}" with status "${data.status}"` };
 }
@@ -741,7 +821,7 @@ async function handleAddSubGoals(
 
   // Embed each sub-goal (fire-and-forget)
   for (const sub of insertedSubs ?? []) {
-    embedInBackground(supabase, userId, "sub_goals", sub.id, sub);
+    embedInBackground(supabase, userId, "sub_goals", sub.id, sub, orgId);
   }
 
   return { success: true, message: `Added ${subGoals.length} sub-goal(s) to "${goalName}": ${subGoals.map((s) => s.name).join(", ")}` };
@@ -784,7 +864,7 @@ async function handleUpdateGoalStatus(
 
     // Re-embed the sub-goal with updated status (fire-and-forget)
     const { data: updatedSub } = await supabase.from("sub_goals").select("*").eq("id", subGoal.id).single();
-    if (updatedSub) reembedInBackground(supabase, updatedSub.user_id ?? "", "sub_goals", subGoal.id, updatedSub);
+    if (updatedSub) reembedInBackground(supabase, updatedSub.user_id ?? "", "sub_goals", subGoal.id, updatedSub, updatedSub.org_id as string);
 
     return { success: true, message: `Updated sub-goal "${subGoalName}" to "${status}"` };
   } else {
@@ -801,7 +881,7 @@ async function handleUpdateGoalStatus(
 
     // Re-embed the goal with updated status (fire-and-forget)
     const { data: updatedGoal } = await supabase.from("goals").select("*").eq("id", goalId).single();
-    if (updatedGoal) reembedInBackground(supabase, updatedGoal.user_id, "goals", goalId, updatedGoal);
+    if (updatedGoal) reembedInBackground(supabase, updatedGoal.user_id, "goals", goalId, updatedGoal, updatedGoal.org_id as string);
 
     return { success: true, message: `Updated goal "${goalName}" to "${status}"` };
   }
@@ -863,7 +943,7 @@ async function handleCreatePainPoint(
   if (error) return { success: false, message: `Failed to create pain point: ${error.message}` };
 
   // Embed the new pain point (fire-and-forget)
-  embedInBackground(supabase, userId, "pain_points", data.id, data);
+  embedInBackground(supabase, userId, "pain_points", data.id, data, orgId);
 
   const linked = linkedGoalName ? ` (linked to "${linkedGoalName}")` : "";
   return { success: true, message: `Created pain point "${data.name}" [${data.severity}]${linked}` };
@@ -896,7 +976,7 @@ async function handleUpdatePainPointStatus(
 
   // Re-embed the pain point with updated fields (fire-and-forget)
   const { data: updatedPP } = await supabase.from("pain_points").select("*").eq("id", ppId).single();
-  if (updatedPP) reembedInBackground(supabase, updatedPP.user_id, "pain_points", ppId, updatedPP);
+  if (updatedPP) reembedInBackground(supabase, updatedPP.user_id, "pain_points", ppId, updatedPP, updatedPP.org_id as string);
 
   const fields = Object.entries(updates).map(([k, v]) => `${k}: ${v}`).join(", ");
   return { success: true, message: `Updated pain point "${ppName}" — ${fields}` };
@@ -957,7 +1037,7 @@ async function handleCreateLibraryItem(
   if (error) return { success: false, message: `Failed to create library item: ${error.message}` };
 
   // Embed the new library item (fire-and-forget)
-  embedInBackground(supabase, userId, "library_items", data.id, data);
+  embedInBackground(supabase, userId, "library_items", data.id, data, orgId);
 
   // Link document to entities via graph edges (if any entity params provided)
   const hasEntityLinks = input.company_name || input.contact_name || input.deal_title || input.product_name;
@@ -1115,7 +1195,7 @@ async function handleUpdateLibraryItem(
 
   if (error) throw error;
 
-  reembedInBackground(supabase, userId, "library_items", item.id, data as Record<string, unknown>);
+  reembedInBackground(supabase, userId, "library_items", item.id, data as Record<string, unknown>, (data as Record<string, unknown>).org_id as string);
 
   return { success: true, message: `Updated library item "${(data as Record<string, unknown>).title}" (${(data as Record<string, unknown>).category})` };
 }
@@ -1227,7 +1307,7 @@ async function handleRestoreLibraryItem(
   if (error) throw error;
 
   // Re-embed so it appears in searches again
-  embedInBackground(supabase, userId, "library_items", item.id, item as Record<string, unknown>);
+  embedInBackground(supabase, userId, "library_items", item.id, item as Record<string, unknown>, (item as Record<string, unknown>).org_id as string);
 
   return { success: true, message: `Restored library item: "${item.title}". It is now visible again.` };
 }
@@ -1456,6 +1536,39 @@ async function handleUpdateOrganization(
   const updatedFields = Object.keys(updates).filter((k) => k !== "updated_at").join(", ");
   const orgName = data.name ? ` for "${data.name}"` : "";
   return { success: true, message: `Updated organization${orgName}: ${updatedFields}` };
+}
+
+async function handleUpdateUserProfile(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ToolResult> {
+  const fields = ["display_name", "job_title", "department", "key_responsibilities", "focus_areas", "areas_of_expertise", "bio"];
+  const updates: Record<string, unknown> = {};
+  for (const f of fields) {
+    if (input[f] !== undefined && input[f] !== null) {
+      updates[f] = input[f];
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: "No fields provided to update" };
+  }
+
+  updates.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .update(updates)
+    .eq("user_id", userId)
+    .select()
+    .single();
+
+  if (error) return { success: false, message: `Failed to update user profile: ${error.message}` };
+
+  const updatedFields = Object.keys(updates).filter((k) => k !== "updated_at").join(", ");
+  const name = data.display_name ? ` for ${data.display_name}` : "";
+  return { success: true, message: `Updated user profile${name}: ${updatedFields}` };
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2049,7 +2162,7 @@ async function resolveCompanyId(
     .select("id")
     .single();
   if (newCo?.id) {
-    embedInBackground(supabase, userId, "crm_companies", newCo.id, { name: companyName });
+    embedInBackground(supabase, userId, "crm_companies", newCo.id, { name: companyName }, orgId);
     return newCo.id;
   }
   return null;
@@ -2143,7 +2256,7 @@ async function handleCreateContact(
 
   if (error) throw error;
 
-  embedInBackground(supabase, userId, "crm_contacts", data.id, data);
+  embedInBackground(supabase, userId, "crm_contacts", data.id, data, orgId);
 
   const name = `${data.first_name} ${data.last_name}`.trim();
   return { success: true, message: `Created contact: ${name} (${data.status})${companyId ? ` at ${input.company_name}` : ""}` };
@@ -2190,7 +2303,7 @@ async function handleUpdateContact(
 
   if (error) throw error;
 
-  reembedInBackground(supabase, data.user_id, "crm_contacts", contactId, data);
+  reembedInBackground(supabase, data.user_id, "crm_contacts", contactId, data, data.org_id as string);
 
   return { success: true, message: `Updated contact: ${data.first_name} ${data.last_name}`.trim() };
 }
@@ -2229,7 +2342,7 @@ async function handleCreateCompany(
 
   if (error) throw error;
 
-  embedInBackground(supabase, userId, "crm_companies", data.id, data);
+  embedInBackground(supabase, userId, "crm_companies", data.id, data, orgId);
 
   return { success: true, message: `Created company: ${data.name}${data.industry ? ` (${data.industry})` : ""}` };
 }
@@ -2293,7 +2406,7 @@ async function handleCreateDeal(
     notes: closeReason || "",
   });
 
-  embedInBackground(supabase, userId, "crm_deals", data.id, data);
+  embedInBackground(supabase, userId, "crm_deals", data.id, data, orgId);
 
   const valStr = data.value ? ` ($${Number(data.value).toLocaleString()})` : "";
   return { success: true, message: `Created deal: ${data.title}${valStr} — Stage: ${data.stage}` };
@@ -2363,7 +2476,7 @@ async function handleUpdateDealStage(
     });
   }
 
-  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data);
+  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data, data.org_id as string);
 
   let msg = `Updated deal "${data.title}" → ${newStage} (${data.probability}% probability)`;
   if (closeReason) msg += ` — Reason: ${closeReason}`;
@@ -2419,7 +2532,7 @@ async function handleLogActivity(
 
   if (error) throw error;
 
-  embedInBackground(supabase, userId, "crm_activities", data.id, data);
+  embedInBackground(supabase, userId, "crm_activities", data.id, data, orgId);
 
   let msg = `Logged ${actType}: ${subject}`;
   if (input.contact_name) msg += ` (with ${input.contact_name})`;
@@ -2482,7 +2595,7 @@ async function handleUpdateCompany(
 
   if (error) throw error;
 
-  reembedInBackground(supabase, data.user_id, "crm_companies", companyId, data);
+  reembedInBackground(supabase, data.user_id, "crm_companies", companyId, data, data.org_id as string);
 
   return { success: true, message: `Updated company: ${data.name}` };
 }
@@ -2579,7 +2692,7 @@ async function handleUpdateDeal(
     });
   }
 
-  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data);
+  reembedInBackground(supabase, data.user_id, "crm_deals", dealId, data, data.org_id as string);
 
   const parts: string[] = [`Updated deal: "${data.title}"`];
   if (newStage && oldStage !== newStage) parts.push(`${oldStage} → ${newStage}`);
@@ -2640,7 +2753,7 @@ async function handleUpdateActivity(
 
   if (error) throw error;
 
-  reembedInBackground(supabase, data.user_id, "crm_activities", activity.id, data);
+  reembedInBackground(supabase, data.user_id, "crm_activities", activity.id, data, data.org_id as string);
 
   const parts: string[] = [`Updated ${data.type}: "${data.subject}"`];
   if (input.completed === true) parts.push("[completed]");
@@ -2773,7 +2886,7 @@ async function handleRestoreRecord(
 
   if (restored) {
     const uid = (restored as Record<string, unknown>).user_id as string;
-    if (uid) reembedInBackground(supabase, uid, mapping.table, recordId, restored as Record<string, unknown>);
+    if (uid) reembedInBackground(supabase, uid, mapping.table, recordId, restored as Record<string, unknown>, (restored as Record<string, unknown>).org_id as string);
   }
 
   return { success: true, message: `Restored ${recordType}: "${recordName}". It is now visible again.` };
@@ -5720,6 +5833,7 @@ async function handleQuickCampaign(
   const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
 
   // 1. Create the campaign record
+  const executionMode = (input.execution_mode as ExecutionMode) || "automatic";
   const campaign = await createCampaign(supabase, orgId, userId, {
     name,
     campaignType,
@@ -5729,6 +5843,7 @@ async function handleQuickCampaign(
     prompt,
     templateId: input.template_id as string | undefined,
     deliveryChannel,
+    executionMode,
   });
 
   // 2. Load customer IDs for the strategy group
@@ -5861,6 +5976,7 @@ async function handleSequenceCampaign(
   const campaignType = (input.campaign_type as CampaignType) || "per_customer";
   const emailType = (input.email_type as CampaignEmailType) || "custom";
   const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
+  const executionMode = (input.execution_mode as ExecutionMode) || "automatic";
 
   // 1. Create campaign record
   const campaign = await createCampaign(supabase, orgId, userId, {
@@ -5872,6 +5988,7 @@ async function handleSequenceCampaign(
     prompt,
     templateId: input.template_id as string | undefined,
     deliveryChannel,
+    executionMode,
   });
 
   // 2. Load customer IDs
@@ -6068,7 +6185,8 @@ async function tryResolveCustomerNamesFromPrompt(
 async function handleSendCampaign(
   input: Record<string, unknown>,
   supabase: SupabaseClient,
-  orgId: string
+  orgId: string,
+  userId: string
 ): Promise<ToolResult> {
   try {
     const campaignId = input.campaign_id as string;
@@ -6101,7 +6219,7 @@ async function handleSendCampaign(
     }
 
     // Actually send
-    const result = await sendCampaign(supabase, orgId, campaignId);
+    const result = await sendCampaign(supabase, orgId, userId, campaignId);
 
     let message = `**Campaign Sent: ${status.name}** ✅\n\n`;
     message += `- **Sent:** ${result.sent} emails through ${status.deliveryChannel}\n`;
@@ -6161,6 +6279,191 @@ async function handleGetCampaignStatus(
     return {
       success: false,
       message: `Failed to get campaign status: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+/* ── Campaign Tasks & Failed Sends ─────────────────────── */
+
+async function handleManageCampaignTasks(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    const action = input.action as string;
+    const campaignId = input.campaign_id as string;
+
+    if (!action || !campaignId) {
+      return { success: false, message: "action and campaign_id are required." };
+    }
+
+    if (action === "list") {
+      const statusFilter = (input.status_filter as string) || "pending";
+
+      let query = supabase
+        .from("campaign_tasks")
+        .select("*")
+        .eq("campaign_id", campaignId)
+        .eq("org_id", orgId)
+        .order("step_number", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (statusFilter !== "all") {
+        query = query.eq("status", statusFilter);
+      }
+
+      const { data: tasks, error } = await query.limit(100);
+
+      if (error) {
+        return { success: false, message: `Failed to load tasks: ${error.message}` };
+      }
+
+      if (!tasks || tasks.length === 0) {
+        return {
+          success: true,
+          message: `No ${statusFilter === "all" ? "" : statusFilter + " "}tasks found for this campaign.`,
+        };
+      }
+
+      const formatted = (tasks as Array<Record<string, unknown>>).map((t, i) => ({
+        "#": i + 1,
+        id: t.id,
+        title: t.title,
+        step_type: t.step_type,
+        step: t.step_number,
+        customer: t.customer_name || t.customer_email,
+        status: t.status,
+        due: t.due_at || "—",
+      }));
+
+      let message = `**Campaign Tasks** (${tasks.length} ${statusFilter === "all" ? "total" : statusFilter})\n\n`;
+      message += JSON.stringify(formatted, null, 2);
+
+      return { success: true, message };
+    }
+
+    if (action === "complete") {
+      const taskId = input.task_id as string;
+      if (!taskId) {
+        return { success: false, message: "task_id is required when action='complete'." };
+      }
+
+      const notes = (input.notes as string) || null;
+
+      // Load the task first
+      const { data: task, error: loadErr } = await supabase
+        .from("campaign_tasks")
+        .select("*")
+        .eq("id", taskId)
+        .eq("org_id", orgId)
+        .single();
+
+      if (loadErr || !task) {
+        return { success: false, message: "Task not found." };
+      }
+
+      // Update task
+      await supabase
+        .from("campaign_tasks")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          completed_by: userId,
+          notes,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", taskId);
+
+      // Log activity + graph (fire and forget)
+      const { logCampaignTaskComplete } = await import("@/lib/email/campaign-activity-logger");
+      const { data: camp } = await supabase
+        .from("email_campaigns")
+        .select("name")
+        .eq("id", task.campaign_id as string)
+        .single();
+
+      logCampaignTaskComplete(
+        supabase,
+        orgId,
+        userId,
+        {
+          id: task.id as string,
+          campaign_id: task.campaign_id as string,
+          ecom_customer_id: (task.ecom_customer_id as string) || null,
+          customer_email: (task.customer_email as string) || "",
+          customer_name: (task.customer_name as string) || null,
+          title: task.title as string,
+          step_type: (task.step_type as StepType) || "custom_task",
+          notes: notes || null,
+        },
+        (camp?.name as string) || "Campaign",
+      ).catch(() => {});
+
+      return {
+        success: true,
+        message: `Task completed: **${task.title}**${notes ? `\nNotes: ${notes}` : ""}`,
+      };
+    }
+
+    return { success: false, message: `Unknown action: ${action}. Use 'list' or 'complete'.` };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to manage tasks: ${err instanceof Error ? err.message : "Unknown error"}`,
+    };
+  }
+}
+
+async function handleGetFailedSends(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const campaignId = input.campaign_id as string;
+    if (!campaignId) {
+      return { success: false, message: "campaign_id is required." };
+    }
+
+    const { data: variants, error } = await supabase
+      .from("email_customer_variants")
+      .select("id, customer_email, customer_name, delivery_metrics, updated_at")
+      .eq("campaign_id", campaignId)
+      .eq("org_id", orgId)
+      .eq("status", "failed")
+      .order("updated_at", { ascending: false })
+      .limit(100);
+
+    if (error) {
+      return { success: false, message: `Failed to load: ${error.message}` };
+    }
+
+    if (!variants || variants.length === 0) {
+      return { success: true, message: "No failed sends found for this campaign." };
+    }
+
+    const formatted = (variants as Array<Record<string, unknown>>).map((v) => {
+      const metrics = v.delivery_metrics as Record<string, unknown> | null;
+      return {
+        id: v.id,
+        customer: v.customer_name || v.customer_email,
+        email: v.customer_email,
+        reasons: metrics?.validation_failures || metrics?.error || "Unknown",
+        failure_type: metrics?.failure_type || "unknown",
+        failed_at: metrics?.failed_at || v.updated_at,
+      };
+    });
+
+    let message = `**Failed Sends** (${variants.length} variants)\n\n`;
+    message += JSON.stringify(formatted, null, 2);
+
+    return { success: true, message };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to get failed sends: ${err instanceof Error ? err.message : "Unknown error"}`,
     };
   }
 }
@@ -7062,5 +7365,1586 @@ async function handleGetToolsView(
     return { success: true, message: `<!--SLASH_TOOLS:${JSON.stringify(payload)}-->` };
   } catch (err) {
     return { success: false, message: `Tools view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── /goals view ──────────────────────────────────────────── */
+
+async function handleGetGoalsView(
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: goals, error } = await supabase
+      .from("goals")
+      .select("id, name, description, status, owner, teams, start_date, end_date, metric, metric_target, created_at")
+      .or(`org_id.eq.${orgId},user_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Fetch sub-goals for all goals
+    const goalIds = (goals ?? []).map((g) => g.id);
+    const { data: subGoals } = goalIds.length > 0
+      ? await supabase
+          .from("sub_goals")
+          .select("id, goal_id, name, status")
+          .in("goal_id", goalIds)
+      : { data: [] };
+
+    const subGoalsByGoal: Record<string, Array<{ id: string; name: string; status: string }>> = {};
+    for (const sg of subGoals ?? []) {
+      if (!subGoalsByGoal[sg.goal_id]) subGoalsByGoal[sg.goal_id] = [];
+      subGoalsByGoal[sg.goal_id].push({ id: sg.id, name: sg.name, status: sg.status });
+    }
+
+    const rows = (goals ?? []).map((g) => ({
+      id: g.id,
+      name: g.name ?? "",
+      description: g.description ?? "",
+      status: g.status ?? "Backlog",
+      owner: g.owner ?? "",
+      teams: g.teams ?? [],
+      start_date: g.start_date ?? null,
+      end_date: g.end_date ?? null,
+      metric: g.metric ?? "",
+      metric_target: g.metric_target ?? "",
+      sub_goals: subGoalsByGoal[g.id] ?? [],
+    }));
+
+    // Status counts
+    const statusCounts: Record<string, number> = {};
+    for (const g of rows) {
+      statusCounts[g.status] = (statusCounts[g.status] || 0) + 1;
+    }
+
+    const payload = {
+      total: rows.length,
+      total_sub_goals: (subGoals ?? []).length,
+      status_counts: statusCounts,
+      goals: rows,
+    };
+
+    return { success: true, message: `<!--SLASH_GOALS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Goals view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── /painpoints view ─────────────────────────────────────── */
+
+async function handleGetPainpointsView(
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: painPoints, error } = await supabase
+      .from("pain_points")
+      .select("id, name, description, severity, status, teams, owner, impact_metric, linked_goal_id, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Resolve linked goal names
+    const goalIds = (painPoints ?? []).map((p) => p.linked_goal_id).filter(Boolean);
+    const { data: linkedGoals } = goalIds.length > 0
+      ? await supabase.from("goals").select("id, name").in("id", goalIds)
+      : { data: [] };
+
+    const goalNameMap: Record<string, string> = {};
+    for (const g of linkedGoals ?? []) {
+      goalNameMap[g.id] = g.name;
+    }
+
+    const rows = (painPoints ?? []).map((p) => ({
+      id: p.id,
+      name: p.name ?? "",
+      description: p.description ?? "",
+      severity: p.severity ?? "Medium",
+      status: p.status ?? "Backlog",
+      teams: p.teams ?? [],
+      owner: p.owner ?? "",
+      impact_metric: p.impact_metric ?? "",
+      linked_goal: p.linked_goal_id ? (goalNameMap[p.linked_goal_id] ?? null) : null,
+    }));
+
+    // Severity counts
+    const severityCounts: Record<string, number> = {};
+    for (const p of rows) {
+      severityCounts[p.severity] = (severityCounts[p.severity] || 0) + 1;
+    }
+
+    // Status counts
+    const statusCounts: Record<string, number> = {};
+    for (const p of rows) {
+      statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
+    }
+
+    const payload = {
+      total: rows.length,
+      severity_counts: severityCounts,
+      status_counts: statusCounts,
+      pain_points: rows,
+    };
+
+    return { success: true, message: `<!--SLASH_PAINPOINTS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Pain points view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── /cadence view ────────────────────────────────────────── */
+
+async function handleGetCadenceView(
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const { data: cadences, error } = await supabase
+      .from("sales_cadences")
+      .select("id, name, description, status, target_persona, total_steps, total_days, channels, steps, created_at")
+      .or(`org_id.eq.${orgId},user_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      // Table may not exist yet — return empty state
+      if (error.code === "42P01" || error.message?.includes("does not exist")) {
+        return {
+          success: true,
+          message: `<!--SLASH_CADENCE:${JSON.stringify({
+            total: 0,
+            status_counts: {},
+            channel_counts: {},
+            cadences: [],
+          })}-->`,
+        };
+      }
+      throw error;
+    }
+
+    const rows = (cadences ?? []).map((c) => ({
+      id: c.id,
+      name: c.name ?? "",
+      description: c.description ?? "",
+      status: c.status ?? "Draft",
+      target_persona: c.target_persona ?? "",
+      total_steps: c.total_steps ?? 0,
+      total_days: c.total_days ?? 0,
+      channels: c.channels ?? [],
+      steps: c.steps ?? [],
+    }));
+
+    // Status counts
+    const statusCounts: Record<string, number> = {};
+    for (const c of rows) {
+      statusCounts[c.status] = (statusCounts[c.status] || 0) + 1;
+    }
+
+    // Channel counts
+    const channelCounts: Record<string, number> = {};
+    for (const c of rows) {
+      for (const ch of c.channels) {
+        channelCounts[ch] = (channelCounts[ch] || 0) + 1;
+      }
+    }
+
+    const payload = {
+      total: rows.length,
+      status_counts: statusCounts,
+      channel_counts: channelCounts,
+      cadences: rows,
+    };
+
+    return { success: true, message: `<!--SLASH_CADENCE:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Cadence view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── /organization view ───────────────────────────────── */
+
+async function handleGetOrganizationView(
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch org profile, org record, and members in parallel
+    const [
+      { data: orgProfile },
+      { data: org },
+      { data: members },
+    ] = await Promise.all([
+      supabase.from("org_profiles").select("*").eq("org_id", orgId).single(),
+      supabase.from("orgs").select("id, name, created_at").eq("id", orgId).single(),
+      supabase
+        .from("org_members")
+        .select("user_id, role, joined_at")
+        .eq("org_id", orgId)
+        .order("joined_at", { ascending: true }),
+    ]);
+
+    // Fetch user profiles for members
+    const memberIds = (members ?? []).map((m) => m.user_id);
+    const { data: userProfiles } = memberIds.length > 0
+      ? await supabase
+          .from("user_profiles")
+          .select("user_id, display_name, job_title, department")
+          .in("user_id", memberIds)
+      : { data: [] };
+
+    const profileMap: Record<string, { display_name: string | null; job_title: string | null; department: string | null }> = {};
+    for (const p of userProfiles ?? []) {
+      profileMap[p.user_id] = { display_name: p.display_name, job_title: p.job_title, department: p.department };
+    }
+
+    const memberRows = (members ?? []).map((m) => ({
+      role: m.role ?? "member",
+      display_name: profileMap[m.user_id]?.display_name ?? null,
+      job_title: profileMap[m.user_id]?.job_title ?? null,
+      department: profileMap[m.user_id]?.department ?? null,
+      joined_at: m.joined_at ?? null,
+    }));
+
+    const payload = {
+      name: orgProfile?.name ?? org?.name ?? "",
+      description: orgProfile?.description ?? "",
+      industry: orgProfile?.industry ?? "",
+      website: orgProfile?.website ?? "",
+      stage: orgProfile?.stage ?? "",
+      target_market: orgProfile?.target_market ?? "",
+      differentiators: orgProfile?.differentiators ?? "",
+      notes: orgProfile?.notes ?? "",
+      created_at: org?.created_at ?? null,
+      member_count: memberRows.length,
+      members: memberRows,
+    };
+
+    return { success: true, message: `<!--SLASH_ORGANIZATION:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Organization view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: DATA CONNECTIONS
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetDataView(
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch connectors and recent imports in parallel
+    const [
+      { data: connectors },
+      { data: imports },
+    ] = await Promise.all([
+      supabase
+        .from("data_connectors")
+        .select("id, connector_type, name, status, last_sync_at, created_at")
+        .eq("org_id", orgId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("data_imports")
+        .select("id, import_type, source, status, row_count, created_at")
+        .eq("org_id", orgId)
+        .order("created_at", { ascending: false })
+        .limit(5),
+    ]);
+
+    const connectorRows = (connectors ?? []).map((c) => ({
+      id: c.id,
+      type: c.connector_type,
+      name: c.name ?? c.connector_type,
+      status: c.status ?? "disconnected",
+      last_sync: c.last_sync_at ?? null,
+      created_at: c.created_at,
+    }));
+
+    const importRows = (imports ?? []).map((i) => ({
+      id: i.id,
+      type: i.import_type,
+      source: i.source ?? "upload",
+      status: i.status ?? "unknown",
+      row_count: i.row_count ?? 0,
+      created_at: i.created_at,
+    }));
+
+    const payload = {
+      total_connectors: connectorRows.length,
+      active_connectors: connectorRows.filter((c) => c.status === "active").length,
+      connectors: connectorRows,
+      recent_imports: importRows,
+      available_types: ["shopify", "hubspot", "klaviyo", "salesforce", "csv"],
+    };
+
+    return { success: true, message: `<!--SLASH_DATA:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Data view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── Onboarding: Analyze Company Website ──────────────── */
+
+async function handleAnalyzeCompanyWebsite(
+  input: Record<string, unknown>
+): Promise<{ success: boolean; message: string }> {
+  const url = input.url as string;
+  if (!url) {
+    return { success: false, message: "No URL provided. Please provide your company website URL." };
+  }
+
+  const result = await analyzeCompanyWebsite(url);
+
+  if (!result.success) {
+    return { success: false, message: result.error };
+  }
+
+  // Return the structured analysis as readable text for the AI to present
+  const a = result.analysis;
+  const lines = [
+    `**Company**: ${a.company_name}`,
+    `**Industry**: ${a.industry}`,
+    `**Business Model**: ${a.business_model}`,
+    `**Description**: ${a.description}`,
+    `**Products/Services**: ${a.products_services.join(", ") || "Not detected"}`,
+    `**Target Audience**: ${a.target_audience}`,
+    `**Value Proposition**: ${a.value_proposition}`,
+    a.competitors.length > 0 ? `**Competitors**: ${a.competitors.join(", ")}` : null,
+    `**Stage**: ${a.stage}`,
+    "",
+    `**Summary**: ${a.raw_summary}`,
+  ].filter(Boolean);
+
+  return {
+    success: true,
+    message: `Website analysis complete:\n\n${lines.join("\n")}`,
+  };
+}
+
+/* ── Onboarding: Complete ─────────────────────────────── */
+
+async function handleCompleteOnboarding(
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string
+): Promise<{ success: boolean; message: string }> {
+  const { error } = await supabase
+    .from("org_members")
+    .update({ onboarding_completed: true })
+    .eq("user_id", userId)
+    .eq("org_id", orgId);
+
+  if (error) {
+    return { success: false, message: `Failed to complete onboarding: ${error.message}` };
+  }
+
+  return {
+    success: true,
+    message: "Onboarding marked as complete. The user now has full platform access.",
+  };
+}
+
+/* ── Gmail Tool Handlers ──────────────────────────────── */
+
+async function handleSearchEmails(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  const from = input.from as string | undefined;
+  const to = input.to as string | undefined;
+  const subject = input.subject as string | undefined;
+  const after = input.after as string | undefined;
+  const before = input.before as string | undefined;
+  const limit = Math.min((input.limit as number) || 20, 50);
+
+  // Load Gmail connector for live API search
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("id, config")
+    .eq("user_id", userId)
+    .eq("connector_type", "gmail")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return {
+      success: false,
+      message: "Gmail is not connected. The user needs to connect their Gmail account in Data → Connectors first.",
+    };
+  }
+
+  const config = connector.config as unknown as GoogleConnectorConfig;
+  const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+
+  // Build Gmail search query from structured parameters
+  // Gmail search syntax: https://support.google.com/mail/answer/7190
+  const gmailQueryParts: string[] = [];
+  if (from) gmailQueryParts.push(`from:${from}`);
+  if (to) gmailQueryParts.push(`to:${to}`);
+  if (subject) gmailQueryParts.push(`subject:${subject}`);
+  if (after) gmailQueryParts.push(`after:${after}`);
+  if (before) gmailQueryParts.push(`before:${before}`);
+  if (query) gmailQueryParts.push(query);
+
+  const gmailQuery = gmailQueryParts.join(" ") || "newer_than:7d";
+
+  try {
+    const results = await searchGmailLive(freshConfig, gmailQuery, limit);
+
+    if (results.length === 0) {
+      return { success: true, message: "No emails found matching your search criteria." };
+    }
+
+    const rows = results.map((m) => ({
+      gmail_id: m.id,
+      from: m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email,
+      to: m.to_emails.join(", "),
+      subject: m.subject || "(no subject)",
+      date: m.internal_date ? new Date(m.internal_date).toLocaleDateString() : "unknown",
+      snippet: m.snippet.slice(0, 120),
+      read: m.is_read,
+      starred: m.is_starred,
+      attachments: m.has_attachments,
+    }));
+
+    return {
+      success: true,
+      message: `Found ${rows.length} email(s):\n\n${JSON.stringify(rows, null, 2)}`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[search_emails] Live Gmail search error:", msg);
+    return { success: false, message: `Gmail search failed: ${msg}` };
+  }
+}
+
+async function handleReadEmail(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+): Promise<ToolResult> {
+  const messageId = input.message_id as string;
+  if (!messageId) {
+    return { success: false, message: "message_id is required" };
+  }
+
+  // Try DB first (fast path for synced messages)
+  const { data } = await supabase
+    .from("gmail_messages")
+    .select("id, from_email, from_name, to_emails, cc_emails, subject, body_text, labels, is_read, is_starred, has_attachments, internal_date, thread_id")
+    .or(`id.eq.${messageId},external_id.eq.${messageId}`)
+    .eq("org_id", orgId)
+    .limit(1)
+    .maybeSingle();
+
+  if (data) {
+    const email = {
+      from: data.from_name ? `${data.from_name} <${data.from_email}>` : data.from_email,
+      to: (data.to_emails || []).join(", "),
+      cc: (data.cc_emails || []).join(", ") || undefined,
+      subject: data.subject || "(no subject)",
+      date: data.internal_date ? new Date(data.internal_date).toLocaleString() : "unknown",
+      thread_id: data.thread_id,
+      labels: data.labels,
+      starred: data.is_starred,
+      attachments: data.has_attachments,
+      body: (data.body_text || "").slice(0, 10000),
+    };
+    return { success: true, message: JSON.stringify(email, null, 2) };
+  }
+
+  // Fallback: fetch directly from Gmail API (for messages not in local DB)
+  try {
+    const { data: connector } = await supabase
+      .from("data_connectors")
+      .select("id, config")
+      .eq("user_id", userId)
+      .eq("connector_type", "gmail")
+      .eq("status", "connected")
+      .single();
+
+    if (!connector) {
+      return { success: false, message: "Gmail is not connected." };
+    }
+
+    const config = connector.config as unknown as GoogleConnectorConfig;
+    const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+
+    const results = await searchGmailLive(freshConfig, `rfc822msgid:${messageId}`, 1);
+    if (results.length === 0) {
+      // Try direct fetch by Gmail message ID
+      const { googleApiFetch } = await import("@/lib/google/oauth");
+      const msgRes = await googleApiFetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
+        freshConfig.access_token,
+      );
+      const msg = await msgRes.json();
+      if (!msg.id) {
+        return { success: false, message: "Email not found." };
+      }
+
+      // Parse the raw message
+      const headers = msg.payload?.headers || [];
+      const getH = (name: string) => headers.find((h: { name: string; value: string }) => h.name.toLowerCase() === name.toLowerCase())?.value || null;
+      const fromHeader = getH("From");
+
+      const email = {
+        from: fromHeader,
+        to: getH("To"),
+        cc: getH("Cc") || undefined,
+        subject: getH("Subject") || "(no subject)",
+        date: msg.internalDate ? new Date(parseInt(msg.internalDate, 10)).toLocaleString() : "unknown",
+        thread_id: msg.threadId,
+        labels: msg.labelIds || [],
+        snippet: msg.snippet,
+        body: "(Full body available via Gmail)",
+      };
+      return { success: true, message: JSON.stringify(email, null, 2) };
+    }
+
+    const m = results[0];
+    const email = {
+      from: m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email,
+      to: m.to_emails.join(", "),
+      cc: m.cc_emails.join(", ") || undefined,
+      subject: m.subject || "(no subject)",
+      date: new Date(m.internal_date).toLocaleString(),
+      thread_id: m.thread_id,
+      labels: m.labels,
+      starred: m.is_starred,
+      attachments: m.has_attachments,
+      body: m.body_text.slice(0, 10000),
+    };
+    return { success: true, message: JSON.stringify(email, null, 2) };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, message: `Failed to read email: ${msg}` };
+  }
+}
+
+async function handleSendEmail(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const to = input.to as string;
+  const subject = input.subject as string;
+  const body = input.body as string;
+  const cc = input.cc as string | undefined;
+
+  if (!to || !subject || !body) {
+    return { success: false, message: "Missing required fields: to, subject, body" };
+  }
+
+  // Load Gmail connector
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("id, config")
+    .eq("user_id", userId)
+    .eq("connector_type", "gmail")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return {
+      success: false,
+      message: "Gmail is not connected. The user needs to connect their Gmail account in Data → Connectors first.",
+    };
+  }
+
+  const config = connector.config as unknown as GoogleConnectorConfig;
+
+  try {
+    const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+    const result = await gmailSendEmail(freshConfig, to, subject, body, cc);
+
+    if (!result.success) {
+      return { success: false, message: `Failed to send email: ${result.error}` };
+    }
+
+    return {
+      success: true,
+      message: `Email sent successfully to ${to}. Subject: "${subject}". Message ID: ${result.messageId}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error sending email: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+async function handleGetInboxSummary(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+): Promise<ToolResult> {
+  // Get unread count
+  const { count: unreadCount } = await supabase
+    .from("gmail_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .eq("is_read", false);
+
+  // Get total count
+  const { count: totalCount } = await supabase
+    .from("gmail_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("user_id", userId);
+
+  // Get recent emails (last 10)
+  const { data: recent } = await supabase
+    .from("gmail_messages")
+    .select("id, from_email, from_name, subject, snippet, is_read, is_starred, internal_date")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .order("internal_date", { ascending: false })
+    .limit(10);
+
+  // Get top senders
+  const { data: allMessages } = await supabase
+    .from("gmail_messages")
+    .select("from_email, from_name")
+    .eq("org_id", orgId)
+    .eq("user_id", userId);
+
+  const senderCounts = new Map<string, { name: string | null; count: number }>();
+  for (const m of allMessages || []) {
+    if (m.from_email) {
+      const existing = senderCounts.get(m.from_email);
+      if (existing) {
+        existing.count++;
+        if (!existing.name && m.from_name) existing.name = m.from_name;
+      } else {
+        senderCounts.set(m.from_email, { name: m.from_name, count: 1 });
+      }
+    }
+  }
+
+  const topSenders = Array.from(senderCounts.entries())
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 5)
+    .map(([email, info]) => ({
+      email,
+      name: info.name,
+      messageCount: info.count,
+    }));
+
+  const recentList = (recent || []).map((m) => ({
+    id: m.id,
+    from: m.from_name ? `${m.from_name} <${m.from_email}>` : m.from_email,
+    subject: m.subject || "(no subject)",
+    snippet: (m.snippet || "").slice(0, 100),
+    date: m.internal_date ? new Date(m.internal_date).toLocaleDateString() : "unknown",
+    unread: !m.is_read,
+    starred: m.is_starred,
+  }));
+
+  const summary = {
+    total_messages: totalCount || 0,
+    unread_count: unreadCount || 0,
+    recent_emails: recentList,
+    top_senders: topSenders,
+  };
+
+  return {
+    success: true,
+    message: `Inbox summary:\n\n${JSON.stringify(summary, null, 2)}`,
+  };
+}
+
+/* ── Google Calendar Tool Handlers ────────────────────── */
+
+async function handleSearchCalendar(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userTimezone: string = "America/New_York",
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  const attendee = input.attendee as string | undefined;
+  const after = input.after as string | undefined;
+  const before = input.before as string | undefined;
+  const limit = Math.min((input.limit as number) || 20, 50);
+
+  let q = supabase
+    .from("calendar_events")
+    .select("id, external_id, summary, description, location, start_time, end_time, all_day, status, organizer_email, attendees, html_link")
+    .eq("org_id", orgId)
+    .order("start_time", { ascending: false })
+    .limit(limit);
+
+  if (query) {
+    q = q.or(
+      `summary.ilike.%${query}%,description.ilike.%${query}%,location.ilike.%${query}%`,
+    );
+  }
+  if (after) {
+    q = q.gte("start_time", after);
+  }
+  if (before) {
+    q = q.lte("start_time", before);
+  }
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Calendar search error: ${error.message}` };
+  }
+
+  // Filter by attendee in-memory (JSONB array search)
+  let filtered = data || [];
+  if (attendee) {
+    filtered = filtered.filter((e) => {
+      const attendees = typeof e.attendees === "string" ? JSON.parse(e.attendees) : e.attendees || [];
+      return attendees.some(
+        (a: { email?: string }) => a.email?.toLowerCase().includes(attendee.toLowerCase()),
+      );
+    });
+  }
+
+  if (filtered.length === 0) {
+    return { success: true, message: "No calendar events found matching your search criteria." };
+  }
+
+  // Format times in user's timezone (server stores UTC)
+  const fmtTime = (iso: string | null, allDay: boolean) => {
+    if (!iso) return "unknown";
+    if (allDay) return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: userTimezone });
+    return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone: userTimezone });
+  };
+
+  const rows = filtered.map((e) => {
+    const attendees = typeof e.attendees === "string" ? JSON.parse(e.attendees) : e.attendees || [];
+    return {
+      id: e.id,
+      summary: e.summary || "(no title)",
+      start: fmtTime(e.start_time, e.all_day),
+      end: fmtTime(e.end_time, e.all_day),
+      all_day: e.all_day,
+      location: e.location,
+      status: e.status,
+      organizer: e.organizer_email,
+      attendees: attendees.map((a: { email?: string; name?: string; response_status?: string }) => ({
+        email: a.email,
+        name: a.name,
+        response: a.response_status,
+      })),
+    };
+  });
+
+  return {
+    success: true,
+    message: `Found ${rows.length} calendar event(s):\n\n${JSON.stringify(rows, null, 2)}`,
+  };
+}
+
+async function handleGetUpcomingMeetings(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+  userTimezone: string = "America/New_York",
+): Promise<ToolResult> {
+  const count = Math.min((input.count as number) || 10, 50);
+  const after = (input.after as string) || new Date().toISOString();
+  const before = input.before as string | undefined;
+
+  let q = supabase
+    .from("calendar_events")
+    .select("id, summary, description, location, start_time, end_time, all_day, status, organizer_email, attendees, html_link")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .gte("start_time", after)
+    .neq("status", "cancelled")
+    .order("start_time", { ascending: true })
+    .limit(count);
+
+  if (before) {
+    q = q.lte("start_time", before);
+  }
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Failed to fetch upcoming meetings: ${error.message}` };
+  }
+
+  if (!data || data.length === 0) {
+    return { success: true, message: "No upcoming meetings found." };
+  }
+
+  const fmtTime = (iso: string | null, allDay: boolean) => {
+    if (!iso) return "unknown";
+    if (allDay) return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: userTimezone });
+    return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", timeZone: userTimezone });
+  };
+
+  const meetings = data.map((e) => {
+    const attendees = typeof e.attendees === "string" ? JSON.parse(e.attendees) : e.attendees || [];
+    return {
+      id: e.id,
+      summary: e.summary || "(no title)",
+      start: fmtTime(e.start_time, e.all_day),
+      end: fmtTime(e.end_time, e.all_day),
+      all_day: e.all_day,
+      location: e.location,
+      organizer: e.organizer_email,
+      attendee_count: attendees.length,
+      attendees: attendees.slice(0, 10).map((a: { email?: string; name?: string; response_status?: string }) => ({
+        email: a.email,
+        name: a.name,
+        response: a.response_status,
+      })),
+    };
+  });
+
+  return {
+    success: true,
+    message: `Next ${meetings.length} upcoming meeting(s):\n\n${JSON.stringify(meetings, null, 2)}`,
+  };
+}
+
+async function handleCreateCalendarEvent(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const summary = input.summary as string;
+  const startTime = input.start_time as string;
+  const endTime = input.end_time as string;
+  const description = input.description as string | undefined;
+  const location = input.location as string | undefined;
+  const allDay = (input.all_day as boolean) || false;
+  const attendees = (input.attendees as string[]) || [];
+
+  if (!summary || !startTime || !endTime) {
+    return { success: false, message: "Missing required fields: summary, start_time, end_time" };
+  }
+
+  // Load Google Calendar connector
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("connector_type", "google_calendar")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return { success: false, message: "Google Calendar is not connected. Please connect it from the Data page first." };
+  }
+
+  const config = connector.config as unknown as GoogleConnectorConfig;
+  const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+
+  const result = await createCalendarEvent(freshConfig, {
+    summary,
+    startTime,
+    endTime,
+    description,
+    location,
+    allDay,
+    attendees,
+  });
+
+  const attendeeNote = attendees.length > 0
+    ? ` Invited ${attendees.length} attendee(s): ${attendees.join(", ")}.`
+    : "";
+
+  return {
+    success: true,
+    message: `Calendar event created: "${summary}" on ${allDay ? startTime.split("T")[0] : startTime}.${attendeeNote} Link: ${result.htmlLink}`,
+  };
+}
+
+/* ── Google Drive Tool Handlers ───────────────────────── */
+
+async function handleSearchDrive(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  const mimeType = input.mime_type as string | undefined;
+  const folder = input.folder as string | undefined;
+  const indexedOnly = input.indexed_only as boolean | undefined;
+  const limit = Math.min((input.limit as number) || 20, 50);
+
+  let q = supabase
+    .from("drive_files")
+    .select("id, external_id, name, mime_type, size_bytes, parent_folder_name, modified_time, is_indexed, web_view_link")
+    .eq("org_id", orgId)
+    .order("modified_time", { ascending: false })
+    .limit(limit);
+
+  if (query) {
+    q = q.ilike("name", `%${query}%`);
+  }
+  if (mimeType) {
+    q = q.eq("mime_type", mimeType);
+  }
+  if (folder) {
+    q = q.ilike("parent_folder_name", `%${folder}%`);
+  }
+  if (indexedOnly) {
+    q = q.eq("is_indexed", true);
+  }
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Drive search error: ${error.message}` };
+  }
+
+  if (!data || data.length === 0) {
+    return { success: true, message: "No Drive files found matching your search criteria." };
+  }
+
+  const rows = data.map((f) => ({
+    file_id: f.external_id,
+    name: f.name,
+    type: f.mime_type?.split("/").pop() || "file",
+    folder: f.parent_folder_name,
+    modified: f.modified_time ? new Date(f.modified_time).toLocaleDateString() : "unknown",
+    indexed: f.is_indexed,
+    link: f.web_view_link,
+  }));
+
+  return {
+    success: true,
+    message: `Found ${rows.length} Drive file(s):\n\n${JSON.stringify(rows, null, 2)}`,
+  };
+}
+
+async function handleReadDriveFile(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const fileId = input.file_id as string;
+  if (!fileId) {
+    return { success: false, message: "file_id is required" };
+  }
+
+  // Get file metadata from our DB
+  const { data: driveFile } = await supabase
+    .from("drive_files")
+    .select("name, mime_type, external_id")
+    .eq("org_id", orgId)
+    .eq("external_id", fileId)
+    .single();
+
+  if (!driveFile) {
+    return { success: false, message: "File not found in synced Drive files. Try syncing first." };
+  }
+
+  // Load Drive connector
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("id, config")
+    .eq("user_id", userId)
+    .eq("connector_type", "google_drive")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return {
+      success: false,
+      message: "Google Drive is not connected. The user needs to connect their Google Drive in Data → Connectors first.",
+    };
+  }
+
+  const config = connector.config as unknown as GoogleConnectorConfig;
+
+  try {
+    const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+    const content = await driveReadFile(freshConfig, fileId, driveFile.mime_type);
+
+    return {
+      success: true,
+      message: `Content of "${driveFile.name}":\n\n${content.slice(0, 30000)}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error reading "${driveFile?.name || fileId}": ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+async function handleIndexDriveFiles(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const fileIds = input.file_ids as string[];
+  const forceReindex = input.force_reindex === true;
+
+  if (!fileIds || fileIds.length === 0) {
+    return { success: false, message: "file_ids array is required" };
+  }
+
+  if (fileIds.length > 50) {
+    return { success: false, message: "Maximum 50 files can be indexed at once" };
+  }
+
+  // Load Drive connector
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("id, config")
+    .eq("user_id", userId)
+    .eq("connector_type", "google_drive")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return {
+      success: false,
+      message: "Google Drive is not connected. The user needs to connect their Google Drive in Data → Connectors first.",
+    };
+  }
+
+  const config = connector.config as unknown as GoogleConnectorConfig;
+
+  try {
+    const freshConfig = await ensureFreshGoogleToken(config, supabase, connector.id);
+    const result = await driveIndexFiles(freshConfig, supabase, userId, orgId, fileIds, { forceReindex });
+
+    const details = result.fileStatuses
+      ?.map((s: { fileName: string; status: string; reason?: string }) =>
+        s.status === "error"
+          ? `- ${s.fileName}: ${s.reason}`
+          : s.status === "indexed"
+            ? `- ${s.fileName}: ${s.reason || "indexed"}`
+            : `- ${s.fileName}: skipped (${s.reason || "already indexed"})`
+      )
+      .join("\n") || "";
+
+    const counts = [
+      result.created > 0 ? `${result.created} indexed` : "",
+      result.updated > 0 ? `${result.updated} re-indexed` : "",
+      result.skipped > 0 ? `${result.skipped} skipped` : "",
+      result.errors > 0 ? `${result.errors} errors` : "",
+    ].filter(Boolean).join(", ");
+
+    return {
+      success: true,
+      message: `Indexing complete: ${counts}.\n\n${details}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error indexing files: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+async function handleUnindexDriveFiles(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<ToolResult> {
+  const fileIds = input.file_ids as string[];
+  if (!fileIds || fileIds.length === 0) {
+    return { success: false, message: "file_ids array is required" };
+  }
+
+  if (fileIds.length > 50) {
+    return { success: false, message: "Maximum 50 files can be un-indexed at once" };
+  }
+
+  try {
+    const result = await driveUnindexFiles(supabase, orgId, fileIds);
+
+    const details = result.fileStatuses
+      ?.map((s: { fileName: string; status: string; reason?: string }) =>
+        s.status === "removed"
+          ? `- ${s.fileName}: removed from index`
+          : s.status === "error"
+            ? `- ${s.fileName}: ${s.reason}`
+            : `- ${s.fileName}: skipped (${s.reason || "not indexed"})`
+      )
+      .join("\n") || "";
+
+    return {
+      success: true,
+      message: `Un-indexing complete: ${result.updated} removed, ${result.skipped} skipped, ${result.errors} errors.\n\n${details}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error un-indexing files: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+/* ── Outreach Handlers ─────────────────────────────────── */
+
+async function handleSearchOutreachProspects(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  const stage = input.stage as string | undefined;
+  const tags = input.tags as string[] | undefined;
+  const limit = Math.min((input.limit as number) || 25, 100);
+
+  let q = supabase
+    .from("outreach_prospects")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("synced_at", { ascending: false })
+    .limit(limit);
+
+  if (query) {
+    q = q.or(
+      `first_name.ilike.%${query}%,last_name.ilike.%${query}%,email.ilike.%${query}%,company_name.ilike.%${query}%`,
+    );
+  }
+  if (stage) {
+    q = q.eq("stage", stage);
+  }
+  if (tags && tags.length > 0) {
+    q = q.overlaps("tags", tags);
+  }
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Error searching prospects: ${error.message}` };
+  }
+
+  if (!data || data.length === 0) {
+    return { success: true, message: "No Outreach prospects found matching your criteria." };
+  }
+
+  const formatted = data.map((p) => ({
+    external_id: p.external_id,
+    name: [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unknown",
+    email: p.email,
+    company: p.company_name,
+    title: p.title,
+    stage: p.stage,
+    tags: p.tags,
+    engaged_at: p.engaged_at,
+    contacted_at: p.contacted_at,
+    replied_at: p.replied_at,
+  }));
+
+  return {
+    success: true,
+    message: `Found ${data.length} Outreach prospect(s).\n\n${JSON.stringify(formatted, null, 2)}`,
+  };
+}
+
+async function handleGetOutreachTasks(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string,
+): Promise<ToolResult> {
+  const status = (input.status as string) || "pending";
+  const dueBefore = input.due_before as string | undefined;
+  const dueAfter = input.due_after as string | undefined;
+  const prospectEmail = input.prospect_email as string | undefined;
+  const limit = Math.min((input.limit as number) || 25, 100);
+
+  let q = supabase
+    .from("outreach_tasks")
+    .select("*")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .order("due_at", { ascending: true })
+    .limit(limit);
+
+  if (status !== "all") {
+    q = q.eq("status", status);
+  }
+  if (dueBefore) {
+    q = q.lte("due_at", dueBefore);
+  }
+  if (dueAfter) {
+    q = q.gte("due_at", dueAfter);
+  }
+
+  const { data: tasks, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Error fetching tasks: ${error.message}` };
+  }
+
+  if (!tasks || tasks.length === 0) {
+    return { success: true, message: "No Outreach tasks found matching your criteria." };
+  }
+
+  // If filtering by prospect email, we need to resolve the prospect_external_id
+  let filteredTasks = tasks;
+  if (prospectEmail) {
+    const { data: prospect } = await supabase
+      .from("outreach_prospects")
+      .select("external_id")
+      .eq("org_id", orgId)
+      .eq("email", prospectEmail.toLowerCase())
+      .maybeSingle();
+
+    if (prospect) {
+      filteredTasks = tasks.filter(
+        (t) => t.prospect_external_id === prospect.external_id,
+      );
+    } else {
+      return { success: true, message: `No Outreach prospect found with email ${prospectEmail}.` };
+    }
+  }
+
+  // Enrich tasks with prospect info
+  const prospectIds = [...new Set(filteredTasks.map((t) => t.prospect_external_id).filter(Boolean))];
+  const { data: prospects } = prospectIds.length > 0
+    ? await supabase
+        .from("outreach_prospects")
+        .select("external_id, first_name, last_name, email")
+        .eq("org_id", orgId)
+        .in("external_id", prospectIds)
+    : { data: [] };
+
+  const prospectMap = new Map(
+    (prospects || []).map((p) => [p.external_id, p]),
+  );
+
+  const formatted = filteredTasks.map((t) => {
+    const p = prospectMap.get(t.prospect_external_id);
+    return {
+      external_id: t.external_id,
+      subject: t.subject,
+      task_type: t.task_type,
+      status: t.status,
+      due_at: t.due_at,
+      completed_at: t.completed_at,
+      prospect: p
+        ? {
+            name: [p.first_name, p.last_name].filter(Boolean).join(" "),
+            email: p.email,
+          }
+        : null,
+      sequence_external_id: t.sequence_external_id,
+    };
+  });
+
+  return {
+    success: true,
+    message: `Found ${filteredTasks.length} Outreach task(s).\n\n${JSON.stringify(formatted, null, 2)}`,
+  };
+}
+
+async function handleSearchOutreachSequences(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  const enabled = input.enabled as boolean | undefined;
+  const sortBy = (input.sort_by as string) || "name";
+  const limit = Math.min((input.limit as number) || 25, 100);
+
+  let q = supabase
+    .from("outreach_sequences")
+    .select("*")
+    .eq("org_id", orgId)
+    .limit(limit);
+
+  if (query) {
+    q = q.ilike("name", `%${query}%`);
+  }
+  if (enabled !== undefined) {
+    q = q.eq("enabled", enabled);
+  }
+
+  // Sort
+  const sortMap: Record<string, string> = {
+    name: "name",
+    prospect_count: "prospect_count",
+    open_rate: "open_rate",
+    reply_rate: "reply_rate",
+  };
+  const sortCol = sortMap[sortBy] || "name";
+  q = q.order(sortCol, { ascending: sortBy === "name" });
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Error searching sequences: ${error.message}` };
+  }
+
+  if (!data || data.length === 0) {
+    return { success: true, message: "No Outreach sequences found matching your criteria." };
+  }
+
+  const formatted = data.map((s) => ({
+    external_id: s.external_id,
+    name: s.name,
+    description: s.description,
+    enabled: s.enabled,
+    sequence_type: s.sequence_type,
+    step_count: s.step_count,
+    prospect_count: s.prospect_count,
+    open_rate: s.open_rate ? `${(s.open_rate * 100).toFixed(1)}%` : null,
+    click_rate: s.click_rate ? `${(s.click_rate * 100).toFixed(1)}%` : null,
+    reply_rate: s.reply_rate ? `${(s.reply_rate * 100).toFixed(1)}%` : null,
+  }));
+
+  return {
+    success: true,
+    message: `Found ${data.length} Outreach sequence(s).\n\n${JSON.stringify(formatted, null, 2)}`,
+  };
+}
+
+async function handleGetOutreachPerformance(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<ToolResult> {
+  const sequenceName = input.sequence_name as string | undefined;
+  const sortBy = (input.sort_by as string) || "reply_rate";
+  const enabledOnly = input.enabled_only !== false; // default true
+  const limit = Math.min((input.limit as number) || 20, 50);
+
+  let q = supabase
+    .from("outreach_sequences")
+    .select("*")
+    .eq("org_id", orgId)
+    .limit(limit);
+
+  if (sequenceName) {
+    q = q.ilike("name", `%${sequenceName}%`);
+  }
+  if (enabledOnly) {
+    q = q.eq("enabled", true);
+  }
+
+  // Sort by the chosen metric, descending
+  const sortMap: Record<string, string> = {
+    open_rate: "open_rate",
+    click_rate: "click_rate",
+    reply_rate: "reply_rate",
+    prospect_count: "prospect_count",
+  };
+  const sortCol = sortMap[sortBy] || "reply_rate";
+  q = q.order(sortCol, { ascending: false, nullsFirst: false });
+
+  const { data, error } = await q;
+
+  if (error) {
+    return { success: false, message: `Error fetching performance data: ${error.message}` };
+  }
+
+  if (!data || data.length === 0) {
+    return { success: true, message: "No Outreach sequences found. Ensure Outreach is connected and synced." };
+  }
+
+  // Compute aggregate stats
+  const withRates = data.filter((s) => s.open_rate != null || s.reply_rate != null);
+  const totalProspects = data.reduce((sum, s) => sum + (s.prospect_count || 0), 0);
+  const avgOpen = withRates.length > 0
+    ? withRates.reduce((sum, s) => sum + (s.open_rate || 0), 0) / withRates.length
+    : null;
+  const avgClick = withRates.length > 0
+    ? withRates.reduce((sum, s) => sum + (s.click_rate || 0), 0) / withRates.length
+    : null;
+  const avgReply = withRates.length > 0
+    ? withRates.reduce((sum, s) => sum + (s.reply_rate || 0), 0) / withRates.length
+    : null;
+
+  const formatted = data.map((s) => ({
+    name: s.name,
+    external_id: s.external_id,
+    enabled: s.enabled,
+    step_count: s.step_count,
+    prospect_count: s.prospect_count,
+    open_rate: s.open_rate != null ? `${(s.open_rate * 100).toFixed(1)}%` : "N/A",
+    click_rate: s.click_rate != null ? `${(s.click_rate * 100).toFixed(1)}%` : "N/A",
+    reply_rate: s.reply_rate != null ? `${(s.reply_rate * 100).toFixed(1)}%` : "N/A",
+  }));
+
+  return {
+    success: true,
+    message: `Outreach performance across ${data.length} sequence(s). Total prospects: ${totalProspects}. Avg open: ${avgOpen != null ? `${(avgOpen * 100).toFixed(1)}%` : "N/A"}, Avg click: ${avgClick != null ? `${(avgClick * 100).toFixed(1)}%` : "N/A"}, Avg reply: ${avgReply != null ? `${(avgReply * 100).toFixed(1)}%` : "N/A"}.\n\n${JSON.stringify(formatted, null, 2)}`,
+  };
+}
+
+async function getOutreachConnectorConfig(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<{ config: OutreachConfig; connectorId: string } | ToolResult> {
+  const { data: connector } = await supabase
+    .from("data_connectors")
+    .select("id, config")
+    .eq("user_id", userId)
+    .eq("connector_type", "outreach")
+    .eq("status", "connected")
+    .single();
+
+  if (!connector) {
+    return {
+      success: false,
+      message:
+        "Outreach is not connected. The user needs to connect their Outreach account in Data → Connectors first.",
+    };
+  }
+
+  const config = connector.config as unknown as OutreachConfig;
+  const freshConfig = await refreshOutreachToken(config, supabase, connector.id);
+
+  return { config: freshConfig, connectorId: connector.id };
+}
+
+async function handleCompleteOutreachTask(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const taskExternalId = input.task_external_id as string;
+  if (!taskExternalId) {
+    return { success: false, message: "Missing required field: task_external_id" };
+  }
+
+  const connResult = await getOutreachConnectorConfig(supabase, userId);
+  if ("success" in connResult) return connResult;
+
+  try {
+    const result = await completeOutreachTask(
+      connResult.config,
+      supabase,
+      orgId,
+      taskExternalId,
+    );
+
+    return {
+      success: true,
+      message: `Task ${result.taskId} marked as complete in Outreach.`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error completing task: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+async function handleEnrollInOutreachSequence(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const prospectExternalId = input.prospect_external_id as string;
+  const sequenceExternalId = input.sequence_external_id as string;
+
+  if (!prospectExternalId || !sequenceExternalId) {
+    return {
+      success: false,
+      message: "Missing required fields: prospect_external_id and sequence_external_id",
+    };
+  }
+
+  const connResult = await getOutreachConnectorConfig(supabase, userId);
+  if ("success" in connResult) return connResult;
+
+  // Resolve names for confirmation
+  const { data: prospect } = await supabase
+    .from("outreach_prospects")
+    .select("first_name, last_name, email")
+    .eq("org_id", orgId)
+    .eq("external_id", prospectExternalId)
+    .maybeSingle();
+
+  const { data: sequence } = await supabase
+    .from("outreach_sequences")
+    .select("name")
+    .eq("org_id", orgId)
+    .eq("external_id", sequenceExternalId)
+    .maybeSingle();
+
+  try {
+    const result = await enrollInOutreachSequence(
+      connResult.config,
+      prospectExternalId,
+      sequenceExternalId,
+    );
+
+    const prospectName = prospect
+      ? [prospect.first_name, prospect.last_name].filter(Boolean).join(" ") || prospect.email
+      : prospectExternalId;
+    const seqName = sequence?.name || sequenceExternalId;
+
+    return {
+      success: true,
+      message: `Enrolled ${prospectName} in sequence "${seqName}". Sequence state ID: ${result.sequenceStateId}. Outreach will handle the automated outreach steps.`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error enrolling in sequence: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+}
+
+async function handleCreateOutreachProspect(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  userId: string,
+  orgId: string,
+): Promise<ToolResult> {
+  const email = input.email as string;
+  if (!email) {
+    return { success: false, message: "Missing required field: email" };
+  }
+
+  const connResult = await getOutreachConnectorConfig(supabase, userId);
+  if ("success" in connResult) return connResult;
+
+  try {
+    const result = await createOutreachProspect(
+      connResult.config,
+      supabase,
+      userId,
+      orgId,
+      {
+        email,
+        firstName: input.first_name as string | undefined,
+        lastName: input.last_name as string | undefined,
+        title: input.title as string | undefined,
+        company: input.company as string | undefined,
+        phone: input.phone as string | undefined,
+        tags: input.tags as string[] | undefined,
+      },
+    );
+
+    return {
+      success: true,
+      message: `Created prospect in Outreach (ID: ${result.outreachId}) for ${email}. ${result.crmContactId ? "Also linked to CRM contact." : "CRM contact created."}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: `Error creating prospect: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
   }
 }
