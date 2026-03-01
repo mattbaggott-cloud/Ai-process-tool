@@ -74,6 +74,14 @@ export const CHAT_SLASH_COMMANDS: SlashCommand[] = [
     icon: "projects",
     keywords: "canvas workflow brainstorm workspace boards",
   },
+  /* ── Data ──────────────────────────────────────────── */
+  {
+    command: "/data",
+    label: "Data",
+    description: "View data connections & imports",
+    icon: "data",
+    keywords: "connectors shopify hubspot salesforce import sync integrations csv",
+  },
   /* ── Knowledge ──────────────────────────────────────── */
   {
     command: "/knowledge",
@@ -97,6 +105,37 @@ export const CHAT_SLASH_COMMANDS: SlashCommand[] = [
     description: "View your tech stack",
     icon: "tools",
     keywords: "stack software integrations apps saas technology",
+  },
+  /* ── Goals & Pain Points ─────────────────────────── */
+  {
+    command: "/goals",
+    label: "Goals",
+    description: "View org goals & sub-goals",
+    icon: "goals",
+    keywords: "objectives okr targets milestones progress metrics",
+  },
+  {
+    command: "/obstacles",
+    label: "Obstacles",
+    description: "View org obstacles & blockers",
+    icon: "painpoints",
+    keywords: "issues problems blockers challenges risks obstacles pain points",
+  },
+  /* ── Sales ───────────────────────────────────────── */
+  {
+    command: "/cadence",
+    label: "Cadence",
+    description: "View sales cadences",
+    icon: "cadence",
+    keywords: "sequence outreach steps channels email call linkedin sales",
+  },
+  /* ── Organization ──────────────────────────────── */
+  {
+    command: "/organization",
+    label: "Organization",
+    description: "View organization profile & settings",
+    icon: "organization",
+    keywords: "org company profile settings team info about",
   },
 ];
 

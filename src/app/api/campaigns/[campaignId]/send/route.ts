@@ -23,7 +23,8 @@ export async function POST(
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const { orgId } = orgCtx;
+  const { orgId, user } = orgCtx;
+  const userId = user.id;
   const { campaignId } = await params;
   const body = (await request.json()) as { confirmed?: boolean };
 
@@ -84,7 +85,7 @@ export async function POST(
   }
 
   try {
-    const result = await sendCampaign(supabase, orgId, campaignId);
+    const result = await sendCampaign(supabase, orgId, userId, campaignId);
     return NextResponse.json({
       success: true,
       sent: result.sent,

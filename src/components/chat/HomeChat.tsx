@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useFiles, ACCEPTED_EXTENSIONS } from "@/context/FileContext";
 import { useLayout } from "@/context/LayoutContext";
-import { useOrg } from "@/context/OrgContext";
+import { useChatSessionContext } from "@/context/ChatSessionContext";
 import { RichMessageContent, hasInlineBlocks } from "@/components/chat/ChatMessageRenderer";
 import { useSlashMenu } from "@/hooks/useSlashMenu";
 import ChatSlashMenu from "@/components/chat/ChatSlashMenu";
@@ -14,16 +14,6 @@ import ChatSlashMenu from "@/components/chat/ChatSlashMenu";
 interface Message {
   role: "user" | "assistant";
   content: string;
-}
-
-const STORAGE_KEY_PREFIX = "sv-home-chat";
-
-function getStorageKey(orgId: string | null) {
-  return `${STORAGE_KEY_PREFIX}-${orgId || "default"}`;
-}
-
-function getConversationKey(orgId: string | null) {
-  return `${STORAGE_KEY_PREFIX}-convId-${orgId || "default"}`;
 }
 
 /* ── Suggestion Chips ──────────────────────────────────── */
@@ -88,33 +78,28 @@ function SuggestionIcon({ type }: { type: string }) {
 
 export default function HomeChat() {
   const { setHideRightPanel } = useLayout();
-  const { orgId } = useOrg();
   const pathname = usePathname();
+  const session = useChatSessionContext();
 
-  /* ── Load persisted messages from localStorage ── */
-  const [messages, setMessages] = useState<Message[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const stored = localStorage.getItem(getStorageKey(orgId));
-      if (stored) {
-        const parsed = JSON.parse(stored) as Message[];
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  /* ── Alias session state ── */
+  const messages = session.activeMessages;
+  const conversationId = session.conversationId;
+
+  const setMessages = useCallback(
+    (updater: Message[] | ((prev: Message[]) => Message[])) => {
+      if (typeof updater === "function") {
+        session.setActiveMessages((prev) => {
+          const next = updater(prev);
+          session.saveMessages(next);
+          return next;
+        });
+      } else {
+        session.setActiveMessages(updater);
+        session.saveMessages(updater);
       }
-    } catch { /* ignore */ }
-    return [];
-  });
-
-  /* ── Persisted conversationId for Data Agent session continuity ── */
-  const [conversationId, setConversationId] = useState(() => {
-    if (typeof window === "undefined") return crypto.randomUUID();
-    try {
-      const stored = localStorage.getItem(getConversationKey(orgId));
-      if (stored) return stored;
-    } catch { /* ignore */ }
-    const id = crypto.randomUUID();
-    try { localStorage.setItem(getConversationKey(orgId), id); } catch { /* ignore */ }
-    return id;
-  });
+    },
+    [session]
+  );
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -124,6 +109,14 @@ export default function HomeChat() {
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wasHiddenWhileStreaming = useRef(false);
+  const streamedContentRef = useRef("");
+
+  /* ── Auto-create a session on first mount if none active ── */
+  useEffect(() => {
+    if (!session.loading && !session.activeSessionId) {
+      session.createSession();
+    }
+  }, [session.loading, session.activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Hide right panel on mount, restore on unmount ── */
   useEffect(() => {
@@ -135,13 +128,6 @@ export default function HomeChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  /* ── Persist messages to localStorage whenever they change ── */
-  useEffect(() => {
-    try {
-      localStorage.setItem(getStorageKey(orgId), JSON.stringify(messages));
-    } catch { /* quota or SSR */ }
-  }, [messages, orgId]);
 
   /* ── Track tab visibility for streaming resilience ── */
   useEffect(() => {
@@ -155,15 +141,9 @@ export default function HomeChat() {
   }, [sending]);
 
   /* ── New Chat ── */
-  const handleNewChat = useCallback(() => {
-    setMessages([]);
-    const newId = crypto.randomUUID();
-    setConversationId(newId);
-    try {
-      localStorage.setItem(getConversationKey(orgId), newId);
-      localStorage.removeItem(getStorageKey(orgId));
-    } catch { /* ignore */ }
-  }, [orgId]);
+  const handleNewChat = useCallback(async () => {
+    await session.createSession();
+  }, [session]);
 
   /* ── File upload handler ── */
   const handleChatFileInput = useCallback(
@@ -228,6 +208,7 @@ export default function HomeChat() {
             chatFileContents,
             activeSegment,
             conversationId,
+            sessionType: session.activeSessionType,
           }),
         });
 
@@ -241,6 +222,7 @@ export default function HomeChat() {
           return;
         }
 
+        streamedContentRef.current = "";
         setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
         const reader = res.body!.getReader();
@@ -262,13 +244,14 @@ export default function HomeChat() {
 
           if (chunk) {
             if (chunk.trim()) setProgressStatus(null);
+            streamedContentRef.current += chunk;
+            const snapshot = streamedContentRef.current;
             setMessages((prev) => {
               const updated = [...prev];
-              const last = updated[updated.length - 1];
-              updated[updated.length - 1] = {
-                ...last,
-                content: last.content + chunk,
-              };
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+                updated[lastIdx] = { ...updated[lastIdx], content: snapshot };
+              }
               return updated;
             });
           }
@@ -423,6 +406,90 @@ export default function HomeChat() {
 
   /* ── Determine if we're in "welcome" state ── */
   const hasUserMessages = messages.some((m) => m.role === "user");
+  const isOnboarding = session.activeSessionType === "onboarding";
+
+  /* ── Auto-start onboarding: send "hi" to trigger the AI greeting ── */
+  const handleStartOnboarding = useCallback(() => {
+    if (sending) return;
+    const userMessage: Message = { role: "user", content: "hi" };
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
+    setSending(true);
+
+    const abortCtrl = new AbortController();
+    const abortTimer = setTimeout(() => abortCtrl.abort(), 300_000);
+
+    (async () => {
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortCtrl.signal,
+          body: JSON.stringify({
+            messages: updatedMessages,
+            currentPage: pathname,
+            chatFileContents: [],
+            activeSegment: null,
+            conversationId,
+            sessionType: session.activeSessionType,
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: `Error: ${errText}` },
+          ]);
+          setSending(false);
+          return;
+        }
+
+        streamedContentRef.current = "";
+        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          let chunk = decoder.decode(value, { stream: true });
+          chunk = chunk.replace(/<!--HEARTBEAT-->/g, "");
+
+          const progressRegex = /<!--PROGRESS:(.*?)-->/g;
+          let progressMatch;
+          while ((progressMatch = progressRegex.exec(chunk)) !== null) {
+            setProgressStatus(progressMatch[1]);
+          }
+          chunk = chunk.replace(progressRegex, "");
+
+          if (chunk) {
+            if (chunk.trim()) setProgressStatus(null);
+            streamedContentRef.current += chunk;
+            const snapshot = streamedContentRef.current;
+            setMessages((prev) => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+                updated[lastIdx] = { ...updated[lastIdx], content: snapshot };
+              }
+              return updated;
+            });
+          }
+        }
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "Something went wrong starting setup. Please try again." },
+        ]);
+      } finally {
+        clearTimeout(abortTimer);
+        setSending(false);
+        setProgressStatus(null);
+      }
+    })();
+  }, [sending, messages, pathname, conversationId, session.activeSessionType, setMessages]);
 
   return (
     <div className="home-chat">
@@ -442,8 +509,47 @@ export default function HomeChat() {
 
       {/* ─── Messages Area ─── */}
       <div className="home-chat-messages">
-        {!hasUserMessages ? (
-          /* ── Welcome State ── */
+        {!hasUserMessages && isOnboarding ? (
+          /* ── Onboarding Welcome ── */
+          <div className="home-chat-welcome onboarding-welcome">
+            <div className="onboarding-card">
+              <div className="onboarding-card-glow" />
+              <div className="onboarding-card-content">
+                <div className="onboarding-logo-mark">
+                  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <path d="M14 3L24 9.5V18.5L14 25L4 18.5V9.5L14 3Z" fill="white" opacity="0.9" />
+                    <path d="M14 10V18M10 14H18" stroke="rgba(99,76,209,0.8)" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <h1 className="onboarding-welcome-title">Welcome to SocialVerve</h1>
+                <p className="onboarding-welcome-subtitle">
+                  Let&apos;s personalize your workspace — it only takes a couple of minutes.
+                </p>
+                <button
+                  className="onboarding-start-btn"
+                  onClick={handleStartOnboarding}
+                  disabled={sending}
+                >
+                  {sending ? (
+                    <>
+                      <div className="ai-progress-sparkle" />
+                      <span>Getting ready...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Get Started</span>
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 8h10M9 4l4 4-4 4" />
+                      </svg>
+                    </>
+                  )}
+                </button>
+                <p className="onboarding-time-hint">Takes about 2 minutes</p>
+              </div>
+            </div>
+          </div>
+        ) : !hasUserMessages ? (
+          /* ── Regular Welcome State ── */
           <div className="home-chat-welcome">
             <div className="home-chat-welcome-avatar">
               <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">

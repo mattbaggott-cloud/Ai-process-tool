@@ -14,6 +14,11 @@ import type {
   SlashProductsData,
   SlashDashboardData,
   SlashToolsData,
+  SlashGoalsData,
+  SlashPainpointsData,
+  SlashCadenceData,
+  SlashOrganizationData,
+  SlashDataData,
 } from "@/components/chat/ChatMessageRenderer";
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -263,17 +268,21 @@ export function SlashAccountsView({ data }: { data: SlashAccountsData }) {
 export function SlashKnowledgeView({ data }: { data: SlashKnowledgeData }) {
   const router = useRouter();
 
+  const items = data?.items ?? [];
+  const byCategory = data?.by_category ?? {};
+  const totalItems = data?.total_items ?? items.length;
+
   // Group items by category
   const grouped = useMemo(() => {
-    const map = new Map<string, typeof data.items>();
-    for (const item of data.items) {
+    const map = new Map<string, typeof items>();
+    for (const item of items) {
       const cat = item.category || "Uncategorized";
       const group = map.get(cat) || [];
       group.push(item);
       map.set(cat, group);
     }
     return map;
-  }, [data.items]);
+  }, [items]);
 
   const handleItemClick = useCallback(() => {
     router.push("/library");
@@ -282,9 +291,9 @@ export function SlashKnowledgeView({ data }: { data: SlashKnowledgeData }) {
   return (
     <div className="slash-view slash-knowledge-view">
       <div className="slash-view-header">
-        <h3 className="slash-view-title">Knowledge Base ({data.total_items})</h3>
+        <h3 className="slash-view-title">Knowledge Base ({totalItems})</h3>
         <div className="slash-knowledge-categories">
-          {Object.entries(data.by_category).map(([cat, count]) => (
+          {Object.entries(byCategory).map(([cat, count]) => (
             <span key={cat} className="slash-category-badge">
               {cat}: {count}
             </span>
@@ -292,7 +301,7 @@ export function SlashKnowledgeView({ data }: { data: SlashKnowledgeData }) {
         </div>
       </div>
 
-      {data.items.length > 0 ? (
+      {items.length > 0 ? (
         <>
           {[...grouped.entries()].map(([category, items]) => (
             <div key={category} className="slash-knowledge-group">
@@ -843,6 +852,628 @@ export function SlashToolsView({ data }: { data: SlashToolsData }) {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   /goals VIEW
+   ═══════════════════════════════════════════════════════════ */
+
+const GOAL_STATUS_COLORS: Record<string, string> = {
+  Backlog: "#6b7280",
+  "Not Started": "#6b7280",
+  "In Progress": "#3b82f6",
+  "On Track": "#10b981",
+  "At Risk": "#f59e0b",
+  Completed: "#10b981",
+  Done: "#10b981",
+  Blocked: "#ef4444",
+};
+
+export function SlashGoalsView({ data }: { data: SlashGoalsData }) {
+  const router = useRouter();
+
+  if (data.goals.length === 0) {
+    return (
+      <div className="slash-view">
+        <div className="slash-view-header">
+          <span className="slash-view-title">Goals (0)</span>
+        </div>
+        <div className="slash-empty">No goals yet. Ask the AI to help define your organization&#39;s goals.</div>
+      </div>
+    );
+  }
+
+  const statusEntries = Object.entries(data.status_counts).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="slash-view">
+      <div className="slash-view-header">
+        <span className="slash-view-title">Goals ({data.total})</span>
+        {data.total_sub_goals > 0 && (
+          <span className="slash-view-subtitle">{data.total_sub_goals} sub-goals</span>
+        )}
+      </div>
+
+      {/* Status bar */}
+      <div className="slash-goals-status-bar">
+        {statusEntries.map(([status, count]) => (
+          <span key={status} className="slash-goals-status-pill" style={{ color: GOAL_STATUS_COLORS[status] || "#6b7280" }}>
+            <span className="slash-goals-status-dot" style={{ background: GOAL_STATUS_COLORS[status] || "#6b7280" }} />
+            {status}: {count}
+          </span>
+        ))}
+      </div>
+
+      {/* Goal cards */}
+      <div className="slash-goals-list">
+        {data.goals.map((goal) => {
+          const completedSubs = goal.sub_goals.filter((sg) => sg.status === "Completed" || sg.status === "Done").length;
+          const totalSubs = goal.sub_goals.length;
+          const progressPct = totalSubs > 0 ? Math.round((completedSubs / totalSubs) * 100) : null;
+
+          return (
+            <div
+              key={goal.id}
+              className="slash-goals-card"
+              onClick={() => router.push("/organization/goals")}
+            >
+              <div className="slash-goals-card-top">
+                <span className="slash-goals-card-name">{goal.name}</span>
+                <span className="slash-goals-card-status" style={{ color: GOAL_STATUS_COLORS[goal.status] || "#6b7280" }}>
+                  {goal.status}
+                </span>
+              </div>
+
+              {goal.description && (
+                <div className="slash-goals-card-desc">{goal.description}</div>
+              )}
+
+              <div className="slash-goals-card-meta">
+                {goal.owner && <span className="slash-goals-meta-item">Owner: {goal.owner}</span>}
+                {goal.metric && (
+                  <span className="slash-goals-meta-item">
+                    {goal.metric}{goal.metric_target ? ` → ${goal.metric_target}` : ""}
+                  </span>
+                )}
+                {goal.start_date && goal.end_date && (
+                  <span className="slash-goals-meta-item">
+                    {new Date(goal.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    {" – "}
+                    {new Date(goal.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                )}
+              </div>
+
+              {goal.teams.length > 0 && (
+                <div className="slash-goals-card-teams">
+                  {goal.teams.map((t) => <span key={t} className="slash-goals-team-tag">{t}</span>)}
+                </div>
+              )}
+
+              {/* Sub-goals with progress */}
+              {totalSubs > 0 && (
+                <div className="slash-goals-subs">
+                  <div className="slash-goals-subs-header">
+                    <span>Sub-goals ({completedSubs}/{totalSubs})</span>
+                    {progressPct !== null && (
+                      <div className="slash-goals-progress">
+                        <div className="slash-goals-progress-bar" style={{ width: `${progressPct}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="slash-goals-subs-list">
+                    {goal.sub_goals.map((sg) => (
+                      <div key={sg.id} className="slash-goals-sub-item">
+                        <span className={`slash-goals-sub-check ${sg.status === "Completed" || sg.status === "Done" ? "done" : ""}`}>
+                          {sg.status === "Completed" || sg.status === "Done" ? "✓" : "○"}
+                        </span>
+                        <span className="slash-goals-sub-name">{sg.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   /painpoints VIEW
+   ═══════════════════════════════════════════════════════════ */
+
+const SEVERITY_COLORS: Record<string, string> = {
+  Critical: "#dc2626",
+  High: "#ef4444",
+  Medium: "#f59e0b",
+  Low: "#6b7280",
+};
+
+const PAINPOINT_STATUS_COLORS: Record<string, string> = {
+  Backlog: "#6b7280",
+  "In Progress": "#3b82f6",
+  Mitigated: "#10b981",
+  Resolved: "#10b981",
+  Accepted: "#8b5cf6",
+};
+
+export function SlashPainpointsView({ data }: { data: SlashPainpointsData }) {
+  const router = useRouter();
+
+  if (data.pain_points.length === 0) {
+    return (
+      <div className="slash-view">
+        <div className="slash-view-header">
+          <span className="slash-view-title">Pain Points (0)</span>
+        </div>
+        <div className="slash-empty">No pain points tracked yet. Ask the AI to help identify organizational challenges.</div>
+      </div>
+    );
+  }
+
+  const severityEntries = Object.entries(data.severity_counts).sort((a, b) => {
+    const order = ["Critical", "High", "Medium", "Low"];
+    return order.indexOf(a[0]) - order.indexOf(b[0]);
+  });
+
+  return (
+    <div className="slash-view">
+      <div className="slash-view-header">
+        <span className="slash-view-title">Pain Points ({data.total})</span>
+      </div>
+
+      {/* Severity bar */}
+      <div className="slash-pp-severity-bar">
+        {severityEntries.map(([severity, count]) => (
+          <span key={severity} className="slash-pp-severity-pill" style={{ color: SEVERITY_COLORS[severity] || "#6b7280" }}>
+            <span className="slash-pp-severity-dot" style={{ background: SEVERITY_COLORS[severity] || "#6b7280" }} />
+            {severity}: {count}
+          </span>
+        ))}
+      </div>
+
+      {/* Pain point cards */}
+      <div className="slash-pp-list">
+        {data.pain_points.map((pp) => (
+          <div
+            key={pp.id}
+            className="slash-pp-card"
+            onClick={() => router.push("/organization/goals")}
+          >
+            <div className="slash-pp-card-top">
+              <div className="slash-pp-card-title-row">
+                <span className="slash-pp-severity-badge" style={{ background: SEVERITY_COLORS[pp.severity] || "#6b7280" }}>
+                  {pp.severity}
+                </span>
+                <span className="slash-pp-card-name">{pp.name}</span>
+              </div>
+              <span className="slash-pp-card-status" style={{ color: PAINPOINT_STATUS_COLORS[pp.status] || "#6b7280" }}>
+                {pp.status}
+              </span>
+            </div>
+
+            {pp.description && (
+              <div className="slash-pp-card-desc">{pp.description}</div>
+            )}
+
+            <div className="slash-pp-card-meta">
+              {pp.owner && <span className="slash-pp-meta-item">Owner: {pp.owner}</span>}
+              {pp.impact_metric && <span className="slash-pp-meta-item">Impact: {pp.impact_metric}</span>}
+              {pp.linked_goal && <span className="slash-pp-meta-item">Goal: {pp.linked_goal}</span>}
+            </div>
+
+            {pp.teams.length > 0 && (
+              <div className="slash-pp-card-teams">
+                {pp.teams.map((t) => <span key={t} className="slash-pp-team-tag">{t}</span>)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   /cadence VIEW
+   ═══════════════════════════════════════════════════════════ */
+
+const CHANNEL_COLORS: Record<string, string> = {
+  Email: "#3b82f6",
+  Call: "#10b981",
+  LinkedIn: "#0a66c2",
+  SMS: "#8b5cf6",
+  "Direct Mail": "#f59e0b",
+  Other: "#6b7280",
+};
+
+const CHANNEL_ICONS: Record<string, string> = {
+  Email: "✉",
+  Call: "📞",
+  LinkedIn: "💼",
+  SMS: "💬",
+  "Direct Mail": "📦",
+};
+
+const CADENCE_STATUS_COLORS: Record<string, string> = {
+  Draft: "#6b7280",
+  Active: "#10b981",
+  Paused: "#f59e0b",
+  Archived: "#9ca3af",
+};
+
+export function SlashCadenceView({ data }: { data: SlashCadenceData }) {
+  if (data.cadences.length === 0) {
+    return (
+      <div className="slash-view">
+        <div className="slash-view-header">
+          <span className="slash-view-title">Sales Cadences (0)</span>
+        </div>
+        <div className="slash-empty">No cadences yet. Ask the AI to help build a multi-step outreach sequence for your target persona.</div>
+      </div>
+    );
+  }
+
+  const statusEntries = Object.entries(data.status_counts).sort((a, b) => b[1] - a[1]);
+  const channelEntries = Object.entries(data.channel_counts).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="slash-view">
+      <div className="slash-view-header">
+        <span className="slash-view-title">Sales Cadences ({data.total})</span>
+      </div>
+
+      {/* Status bar */}
+      <div className="slash-cadence-status-bar">
+        {statusEntries.map(([status, count]) => (
+          <span key={status} className="slash-cadence-status-pill" style={{ color: CADENCE_STATUS_COLORS[status] || "#6b7280" }}>
+            <span className="slash-cadence-status-dot" style={{ background: CADENCE_STATUS_COLORS[status] || "#6b7280" }} />
+            {status}: {count}
+          </span>
+        ))}
+      </div>
+
+      {/* Channel chips */}
+      {channelEntries.length > 0 && (
+        <div className="slash-cadence-channels">
+          {channelEntries.map(([ch, count]) => (
+            <span key={ch} className="slash-cadence-channel-chip" style={{ borderColor: CHANNEL_COLORS[ch] || "#6b7280", color: CHANNEL_COLORS[ch] || "#6b7280" }}>
+              {CHANNEL_ICONS[ch] || "📌"} {ch} ({count})
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Cadence cards */}
+      <div className="slash-cadence-list">
+        {data.cadences.map((cadence) => (
+          <div key={cadence.id} className="slash-cadence-card">
+            <div className="slash-cadence-card-top">
+              <span className="slash-cadence-card-name">{cadence.name}</span>
+              <span className="slash-cadence-card-status" style={{ color: CADENCE_STATUS_COLORS[cadence.status] || "#6b7280" }}>
+                {cadence.status}
+              </span>
+            </div>
+
+            {cadence.description && (
+              <div className="slash-cadence-card-desc">{cadence.description}</div>
+            )}
+
+            <div className="slash-cadence-card-meta">
+              {cadence.target_persona && <span className="slash-cadence-meta-item">Persona: {cadence.target_persona}</span>}
+              <span className="slash-cadence-meta-item">{cadence.total_steps} steps over {cadence.total_days} days</span>
+              <div className="slash-cadence-meta-channels">
+                {cadence.channels.map((ch) => (
+                  <span key={ch} className="slash-cadence-mini-channel" style={{ color: CHANNEL_COLORS[ch] || "#6b7280" }}>
+                    {CHANNEL_ICONS[ch] || "•"} {ch}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Step timeline */}
+            {cadence.steps.length > 0 && (
+              <div className="slash-cadence-steps">
+                {cadence.steps.map((step, idx) => (
+                  <div key={idx} className="slash-cadence-step">
+                    <div className="slash-cadence-step-day">
+                      <span className="slash-cadence-step-dot" style={{ background: CHANNEL_COLORS[step.channel] || "#6b7280" }} />
+                      Day {step.day}
+                    </div>
+                    <div className="slash-cadence-step-detail">
+                      <span className="slash-cadence-step-channel" style={{ color: CHANNEL_COLORS[step.channel] || "#6b7280" }}>
+                        {CHANNEL_ICONS[step.channel] || "•"} {step.channel}
+                      </span>
+                      <span className="slash-cadence-step-action">{step.action}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════
+   /organization — Organization profile & team
+   ══════════════════════════════════════════════════════════════ */
+
+const ROLE_COLORS: Record<string, string> = {
+  owner: "#7c3aed",
+  admin: "#2563eb",
+  member: "#6b7280",
+  viewer: "#9ca3af",
+};
+
+export function SlashOrganizationView({ data }: { data: SlashOrganizationData }) {
+  const router = useRouter();
+  const hasInfo = data.name || data.description || data.industry;
+
+  return (
+    <div className="slash-view">
+      <div className="slash-view-header">
+        <span className="slash-view-title">{data.name || "Organization"}</span>
+        {data.member_count > 0 && (
+          <span className="slash-view-subtitle">{data.member_count} member{data.member_count !== 1 ? "s" : ""}</span>
+        )}
+      </div>
+
+      <div className="slash-org-card" onClick={() => router.push("/organization")}>
+        {/* Company info */}
+        {hasInfo && (
+          <div className="slash-org-info">
+            {data.description && (
+              <div className="slash-org-field">
+                <div className="slash-org-label">About</div>
+                <div className="slash-org-value">{data.description}</div>
+              </div>
+            )}
+            <div className="slash-org-grid">
+              {data.industry && (
+                <div className="slash-org-field">
+                  <div className="slash-org-label">Industry</div>
+                  <div className="slash-org-value">{data.industry}</div>
+                </div>
+              )}
+              {data.stage && (
+                <div className="slash-org-field">
+                  <div className="slash-org-label">Stage</div>
+                  <div className="slash-org-value">{data.stage}</div>
+                </div>
+              )}
+              {data.website && (
+                <div className="slash-org-field">
+                  <div className="slash-org-label">Website</div>
+                  <div className="slash-org-value slash-org-link">{data.website}</div>
+                </div>
+              )}
+              {data.target_market && (
+                <div className="slash-org-field">
+                  <div className="slash-org-label">Target Market</div>
+                  <div className="slash-org-value">{data.target_market}</div>
+                </div>
+              )}
+            </div>
+            {data.differentiators && (
+              <div className="slash-org-field">
+                <div className="slash-org-label">Differentiators</div>
+                <div className="slash-org-value">{data.differentiators}</div>
+              </div>
+            )}
+            {data.notes && (
+              <div className="slash-org-field">
+                <div className="slash-org-label">Notes</div>
+                <div className="slash-org-value">{data.notes}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!hasInfo && (
+          <div className="slash-empty">No organization info set yet. Tell the AI about your company to get started.</div>
+        )}
+
+        {/* Team members */}
+        {data.members.length > 0 && (
+          <div className="slash-org-members">
+            <div className="slash-org-members-title">Team</div>
+            <div className="slash-org-members-list">
+              {data.members.map((m, i) => (
+                <div key={i} className="slash-org-member-row">
+                  <div className="slash-org-member-avatar">
+                    {(m.display_name ?? "?")[0].toUpperCase()}
+                  </div>
+                  <div className="slash-org-member-info">
+                    <span className="slash-org-member-name">{m.display_name ?? "Unnamed"}</span>
+                    {m.job_title && <span className="slash-org-member-title">{m.job_title}</span>}
+                  </div>
+                  <span
+                    className="slash-org-member-role"
+                    style={{ color: ROLE_COLORS[m.role] ?? "#6b7280" }}
+                  >
+                    {m.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="slash-org-card-hint">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+          Click to open full organization settings
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DATA VIEW — Data connections & imports
+   ═══════════════════════════════════════════════════════════ */
+
+function ConnectorIcon({ type, size = 18 }: { type: string; size?: number }) {
+  switch (type) {
+    case "shopify":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <path d="M6 8l1-4h10l1 4" stroke="#95BF47" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5 8h14l-1.5 12H6.5L5 8z" stroke="#95BF47" strokeWidth="2" strokeLinejoin="round" fill="#95BF47" fillOpacity="0.15" />
+          <path d="M9 8V6a3 3 0 0 1 6 0v2" stroke="#95BF47" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
+    case "hubspot":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="3.5" stroke="#FF7A59" strokeWidth="2" />
+          <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5.64 5.64l2.83 2.83M15.54 15.54l2.83 2.83M5.64 18.36l2.83-2.83M15.54 8.46l2.83-2.83" stroke="#FF7A59" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
+    case "klaviyo":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="5" width="18" height="14" rx="2" stroke="#2BBD7E" strokeWidth="2" fill="#2BBD7E" fillOpacity="0.1" />
+          <path d="M3 7l9 5.5L21 7" stroke="#2BBD7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "salesforce":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <path d="M4.5 14.5A3.5 3.5 0 0 1 4 7.5a4.5 4.5 0 0 1 8.5-1.5A3.5 3.5 0 0 1 19 8a3 3 0 0 1 1 5.82A3.5 3.5 0 0 1 16.5 18h-9A3.5 3.5 0 0 1 4.5 14.5z" stroke="#00A1E0" strokeWidth="2" fill="#00A1E0" fillOpacity="0.15" />
+        </svg>
+      );
+    case "csv":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="#6B7280" strokeWidth="2" fill="#6B7280" fillOpacity="0.08" />
+          <path d="M14 2v6h6" stroke="#6B7280" strokeWidth="2" strokeLinejoin="round" />
+          <path d="M8 14h8M8 18h5" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="#9CA3AF" strokeWidth="2" />
+          <path d="M8 12h8" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
+  }
+}
+
+const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  active: { bg: "#dcfce7", text: "#166534", label: "Connected" },
+  disconnected: { bg: "#f3f4f6", text: "#6b7280", label: "Disconnected" },
+  error: { bg: "#fee2e2", text: "#991b1b", label: "Error" },
+  syncing: { bg: "#dbeafe", text: "#1e40af", label: "Syncing" },
+};
+
+export function SlashDataView({ data }: { data: SlashDataData }) {
+  const router = useRouter();
+  const connectors = data?.connectors ?? [];
+  const recentImports = data?.recent_imports ?? [];
+  const availableTypes = data?.available_types ?? ["shopify", "hubspot", "klaviyo", "salesforce", "csv"];
+  const activeCount = data?.active_connectors ?? 0;
+
+  return (
+    <div
+      className="slash-view slash-data-view"
+      onClick={() => router.push("/data")}
+      style={{ cursor: "pointer" }}
+      title="Click to manage data connections"
+    >
+      <div className="slash-view-header">
+        <h3 className="slash-view-title">Data Connections</h3>
+        {activeCount > 0 && (
+          <span className="slash-data-active-count">{activeCount} active</span>
+        )}
+      </div>
+
+      <div className="slash-data-body">
+        {connectors.length > 0 ? (
+          <div className="slash-data-connectors">
+            {connectors.map((c) => {
+              const status = STATUS_STYLES[c.status] ?? STATUS_STYLES.disconnected;
+              return (
+                <div key={c.id} className="slash-data-connector">
+                  <span className="slash-data-connector-icon">
+                    <ConnectorIcon type={c.type} size={24} />
+                  </span>
+                  <div className="slash-data-connector-info">
+                    <div className="slash-data-connector-name">{c.name}</div>
+                    {c.last_sync && (
+                      <div className="slash-data-connector-sync">
+                        Last synced {formatRelativeDate(c.last_sync)}
+                      </div>
+                    )}
+                  </div>
+                  <span
+                    className="slash-data-status-badge"
+                    style={{ background: status.bg, color: status.text }}
+                  >
+                    {status.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="slash-data-empty">
+            <div className="slash-data-empty-icon">
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--color-gray-300)" }}>
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+              </svg>
+            </div>
+            <div className="slash-data-empty-title">No data sources connected yet</div>
+            <div className="slash-data-empty-desc">
+              Connect your tools to unlock analytics, segmentation, and AI-powered insights.
+            </div>
+            <div className="slash-data-available">
+              {availableTypes.map((t) => (
+                <span key={t} className="slash-data-available-badge">
+                  <ConnectorIcon type={t} size={16} />
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {recentImports.length > 0 && (
+          <div className="slash-data-imports">
+            <div className="slash-data-imports-title">Recent Imports</div>
+            {recentImports.map((imp) => (
+              <div key={imp.id} className="slash-data-import-row">
+                <span>{imp.source}</span>
+                <span className="slash-data-import-count">{imp.row_count.toLocaleString()} rows</span>
+                <span className="slash-data-import-status">{imp.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="slash-data-footer">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
+        </svg>
+        Manage connections
       </div>
     </div>
   );

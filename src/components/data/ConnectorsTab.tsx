@@ -7,6 +7,10 @@ import HubSpotConnectorCard from "./HubSpotConnectorCard";
 import HubSpotFieldMappingModal from "./HubSpotFieldMappingModal";
 import ShopifyConnectorCard from "./ShopifyConnectorCard";
 import KlaviyoConnectorCard from "./KlaviyoConnectorCard";
+import GmailConnectorCard from "./GmailConnectorCard";
+import GoogleCalendarConnectorCard from "./GoogleCalendarConnectorCard";
+import GoogleDriveConnectorCard from "./GoogleDriveConnectorCard";
+import OutreachConnectorCard from "./OutreachConnectorCard";
 
 /* ── Static connector registry ──────────────────────────── */
 
@@ -112,8 +116,8 @@ const CONNECTORS: ConnectorDef[] = [
   {
     type: "gmail",
     name: "Gmail",
-    description: "Sync email conversations and auto-log communications to contacts",
-    status: "coming_soon",
+    description: "Sync emails, extract contacts, and send messages via Gmail",
+    status: "available",
     category: "email",
     icon: (
       <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -141,7 +145,7 @@ const CONNECTORS: ConnectorDef[] = [
     type: "google_calendar",
     name: "Google Calendar",
     description: "Sync meetings and events, auto-log activities to CRM records",
-    status: "coming_soon",
+    status: "available",
     category: "email",
     icon: (
       <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -207,8 +211,8 @@ const CONNECTORS: ConnectorDef[] = [
   {
     type: "google_drive",
     name: "Google Drive",
-    description: "Import documents, PDFs, and files from Google Drive",
-    status: "coming_soon",
+    description: "Import documents from Google Drive and index them for AI search",
+    status: "available",
     category: "storage",
     icon: (
       <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -320,6 +324,19 @@ const CONNECTORS: ConnectorDef[] = [
     ),
   },
   {
+    type: "outreach",
+    name: "Outreach",
+    description: "Sync prospects, sequences, and tasks from Outreach.io",
+    status: "available",
+    category: "marketing",
+    icon: (
+      <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 6v6l4 2" />
+      </svg>
+    ),
+  },
+  {
     type: "attentive",
     name: "Attentive",
     description: "Sync SMS subscriber lists, campaigns, and engagement metrics",
@@ -421,18 +438,26 @@ export default function ConnectorsTab({ onNavigate }: Props) {
   const [hubspotConnector, setHubspotConnector] = useState<DataConnector | null>(null);
   const [shopifyConnector, setShopifyConnector] = useState<DataConnector | null>(null);
   const [klaviyoConnector, setKlaviyoConnector] = useState<DataConnector | null>(null);
+  const [gmailConnector, setGmailConnector] = useState<DataConnector | null>(null);
+  const [gcalConnector, setGcalConnector] = useState<DataConnector | null>(null);
+  const [gdriveConnector, setGdriveConnector] = useState<DataConnector | null>(null);
+  const [outreachConnector, setOutreachConnector] = useState<DataConnector | null>(null);
   const [showFieldMapping, setShowFieldMapping] = useState(false);
 
   const loadConnectors = useCallback(async () => {
     const { data } = await supabase
       .from("data_connectors")
       .select("*")
-      .in("connector_type", ["hubspot", "shopify", "klaviyo"]);
+      .in("connector_type", ["hubspot", "shopify", "klaviyo", "gmail", "google_calendar", "google_drive", "outreach"]);
 
     const connectors = (data || []) as DataConnector[];
     setHubspotConnector(connectors.find((c) => c.connector_type === "hubspot") || null);
     setShopifyConnector(connectors.find((c) => c.connector_type === "shopify") || null);
     setKlaviyoConnector(connectors.find((c) => c.connector_type === "klaviyo") || null);
+    setGmailConnector(connectors.find((c) => c.connector_type === "gmail") || null);
+    setGcalConnector(connectors.find((c) => c.connector_type === "google_calendar") || null);
+    setGdriveConnector(connectors.find((c) => c.connector_type === "google_drive") || null);
+    setOutreachConnector(connectors.find((c) => c.connector_type === "outreach") || null);
   }, [supabase]);
 
   useEffect(() => {
@@ -490,10 +515,42 @@ export default function ConnectorsTab({ onNavigate }: Props) {
                 />
               )}
 
+              {/* Render Gmail in the Email & Calendar section */}
+              {cat === "email" && (
+                <GmailConnectorCard
+                  connector={gmailConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
+
+              {/* Render Google Calendar in the Email & Calendar section */}
+              {cat === "email" && (
+                <GoogleCalendarConnectorCard
+                  connector={gcalConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
+
               {/* Render Klaviyo in the Marketing section */}
               {cat === "marketing" && (
                 <KlaviyoConnectorCard
                   connector={klaviyoConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
+
+              {/* Render Outreach in the Marketing section */}
+              {cat === "marketing" && (
+                <OutreachConnectorCard
+                  connector={outreachConnector}
+                  onRefresh={loadConnectors}
+                />
+              )}
+
+              {/* Render Google Drive in the Cloud Storage section */}
+              {cat === "storage" && (
+                <GoogleDriveConnectorCard
+                  connector={gdriveConnector}
                   onRefresh={loadConnectors}
                 />
               )}

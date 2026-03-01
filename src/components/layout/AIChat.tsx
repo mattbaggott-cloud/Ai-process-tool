@@ -36,6 +36,7 @@ export default function AIChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wasHiddenWhileStreaming = useRef(false);
   const lastRequestBody = useRef<string | null>(null);
+  const streamedContentRef = useRef("");
 
   /* Auto-scroll to bottom when messages change */
   useEffect(() => {
@@ -136,6 +137,7 @@ export default function AIChat() {
         }
 
         /* Add empty assistant message that we'll stream into */
+        streamedContentRef.current = "";
         setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
         const reader = res.body!.getReader();
@@ -162,13 +164,15 @@ export default function AIChat() {
           if (chunk) {
             // Once real content arrives, clear progress status
             if (chunk.trim()) setProgressStatus(null);
+            // Use ref as single source of truth to prevent React batching duplicates
+            streamedContentRef.current += chunk;
+            const snapshot = streamedContentRef.current;
             setMessages((prev) => {
               const updated = [...prev];
-              const last = updated[updated.length - 1];
-              updated[updated.length - 1] = {
-                ...last,
-                content: last.content + chunk,
-              };
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+                updated[lastIdx] = { ...updated[lastIdx], content: snapshot };
+              }
               return updated;
             });
           }

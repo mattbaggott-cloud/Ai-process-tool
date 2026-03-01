@@ -16,7 +16,8 @@ export async function embedDocument(
   userId: string,
   sourceTable: string,
   sourceId: string,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  orgId?: string,
 ): Promise<{ chunkCount: number }> {
   try {
     const chunks = chunkDocument(sourceTable, sourceId, record);
@@ -28,6 +29,7 @@ export async function embedDocument(
     // Build rows for upsert
     const rows = chunks.map((chunk, i) => ({
       user_id: userId,
+      org_id: orgId ?? null,
       source_table: sourceTable,
       source_id: sourceId,
       source_field: "content",
@@ -90,10 +92,11 @@ export async function reembedDocument(
   userId: string,
   sourceTable: string,
   sourceId: string,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  orgId?: string,
 ): Promise<{ chunkCount: number }> {
   await deleteDocumentChunks(supabase, sourceTable, sourceId);
-  return embedDocument(supabase, userId, sourceTable, sourceId, record);
+  return embedDocument(supabase, userId, sourceTable, sourceId, record, orgId);
 }
 
 /**
@@ -105,10 +108,11 @@ export function embedInBackground(
   userId: string,
   sourceTable: string,
   sourceId: string,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  orgId?: string,
 ): void {
   Promise.resolve()
-    .then(() => embedDocument(supabase, userId, sourceTable, sourceId, record))
+    .then(() => embedDocument(supabase, userId, sourceTable, sourceId, record, orgId))
     .catch((err) => console.error("Background embed failed:", err));
 }
 
@@ -120,10 +124,11 @@ export function reembedInBackground(
   userId: string,
   sourceTable: string,
   sourceId: string,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  orgId?: string,
 ): void {
   Promise.resolve()
-    .then(() => reembedDocument(supabase, userId, sourceTable, sourceId, record))
+    .then(() => reembedDocument(supabase, userId, sourceTable, sourceId, record, orgId))
     .catch((err) => console.error("Background reembed failed:", err));
 }
 

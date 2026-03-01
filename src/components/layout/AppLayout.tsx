@@ -6,6 +6,7 @@ import ErrorBoundary from "./ErrorBoundary";
 import { FileProvider } from "@/context/FileContext";
 import { OrgProvider } from "@/context/OrgContext";
 import { LayoutProvider, useLayout } from "@/context/LayoutContext";
+import { ChatSessionProvider } from "@/context/ChatSessionContext";
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { hideRightPanel, sidebarCollapsed, chatOpen, toggleChat } = useLayout();
@@ -57,11 +58,13 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <OrgProvider>
-      <FileProvider>
-        <LayoutProvider>
-          <AppLayoutInner>{children}</AppLayoutInner>
-        </LayoutProvider>
-      </FileProvider>
+      <ChatSessionProvider>
+        <FileProvider>
+          <LayoutProvider>
+            <AppLayoutInner>{children}</AppLayoutInner>
+          </LayoutProvider>
+        </FileProvider>
+      </ChatSessionProvider>
     </OrgProvider>
   );
 }

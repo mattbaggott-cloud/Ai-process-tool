@@ -484,6 +484,25 @@ export function getToolDefinitions(): Tool[] {
       },
     },
 
+    {
+      name: "update_user_profile",
+      description:
+        "Update the current user's profile. Use when the user shares their name, title, department, responsibilities, expertise, or bio. This is a partial update — only specified fields are changed.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          display_name: { type: "string", description: "User's display name" },
+          job_title: { type: "string", description: "Job title (e.g. 'VP Marketing')" },
+          department: { type: "string", description: "Department or team (e.g. 'Marketing', 'Engineering')" },
+          key_responsibilities: { type: "string", description: "Key responsibilities or what they do day-to-day" },
+          focus_areas: { type: "string", description: "Current focus areas or priorities" },
+          areas_of_expertise: { type: "string", description: "Areas of expertise (e.g. 'demand gen, content strategy')" },
+          bio: { type: "string", description: "Short bio or about section" },
+        },
+        required: [],
+      },
+    },
+
     /* ── Stack & Catalog tools ────────────────────────────── */
     {
       name: "search_tool_catalog",
@@ -1908,8 +1927,18 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
           },
           delivery_channel: {
             type: "string",
-            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft"],
-            description: "Email delivery provider (default: klaviyo)",
+            enum: ["klaviyo", "mailchimp", "sendgrid", "salesloft", "gmail", "outreach"],
+            description: "Delivery provider. 'gmail' sends through user's own Gmail, 'outreach' enrolls prospects in an Outreach sequence, 'klaviyo' (default) sends via Klaviyo events.",
+          },
+          execution_mode: {
+            type: "string",
+            enum: ["automatic", "manual"],
+            description: "Execution mode. 'automatic' (default) = sends immediately. 'manual' = creates tasks for reps to review and execute each email individually.",
+          },
+          step_type: {
+            type: "string",
+            enum: ["auto_email", "manual_email", "phone_call", "linkedin_view", "linkedin_connect", "linkedin_message", "custom_task"],
+            description: "Step type for the campaign. 'auto_email' (default) = AI sends email. Non-email types (phone_call, linkedin_*, custom_task) create tasks for reps instead of sending.",
           },
         },
         required: ["name", "prompt"],
@@ -1918,7 +1947,7 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
     {
       name: "send_campaign",
       description:
-        "Send an email campaign through the connected delivery provider. First call with confirmed=false to get a summary of what will be sent. Then call with confirmed=true to actually send. Only approved or edited variants will be sent — rejected or draft variants are skipped. Each email is sent individually through the provider (Klaviyo, etc.).",
+        "Send an email campaign through the connected delivery provider. Validates all variants first (catches empty subjects, missing emails, unresolved variables). If execution_mode='manual', creates tasks instead of sending. Non-email steps (phone_call, linkedin_*, custom_task) always create tasks. First call with confirmed=false for summary, then confirmed=true to send.",
       input_schema: {
         type: "object" as const,
         properties: {
@@ -1949,6 +1978,528 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
         required: ["campaign_id"],
       },
     },
+    {
+      name: "manage_campaign_tasks",
+      description:
+        "List or complete campaign tasks. Tasks are created for manual execution mode campaigns and non-email step types (phone calls, LinkedIn outreach, custom tasks). Reps use this to see their pending work and mark tasks done.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          action: {
+            type: "string",
+            enum: ["list", "complete"],
+            description: "'list' = show tasks for a campaign, 'complete' = mark a task as done",
+          },
+          campaign_id: {
+            type: "string",
+            description: "Campaign ID to manage tasks for",
+          },
+          task_id: {
+            type: "string",
+            description: "Task ID to complete (required when action='complete')",
+          },
+          status_filter: {
+            type: "string",
+            enum: ["pending", "in_progress", "completed", "all"],
+            description: "Filter tasks by status (default: 'pending')",
+          },
+          notes: {
+            type: "string",
+            description: "Optional notes when completing a task (e.g. 'Left voicemail, will follow up Thursday')",
+          },
+        },
+        required: ["action", "campaign_id"],
+      },
+    },
+    {
+      name: "get_failed_sends",
+      description:
+        "Show failed variants for a campaign with specific failure reasons (missing email, empty subject, empty body, unresolved variables, provider errors, bounces). Use this to diagnose and fix send issues.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          campaign_id: {
+            type: "string",
+            description: "Campaign ID to check failed sends for",
+          },
+        },
+        required: ["campaign_id"],
+      },
+    },
+    /* ── Gmail tools ───────────────────────────────────── */
+    {
+      name: "search_emails",
+      description:
+        "Search the user's ENTIRE Gmail inbox in real-time via the Gmail API. Searches all emails ever sent or received — not limited to synced messages. Supports sender name/email, recipient, subject, keywords, date ranges, and Gmail search operators. Use when the user asks about emails, messages, or communications — e.g. 'show me emails from Rosemary' or 'find emails about the proposal'.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "General search keywords — searches across all email fields (body, subject, sender, etc.). Supports Gmail search operators like 'has:attachment', 'is:starred', 'label:important'.",
+          },
+          from: {
+            type: "string",
+            description: "Filter by sender — accepts email address or name (e.g. 'john@acme.com' or 'Rosemary Flanagan')",
+          },
+          to: {
+            type: "string",
+            description: "Filter by recipient email address or name",
+          },
+          subject: {
+            type: "string",
+            description: "Filter by subject line keywords",
+          },
+          after: {
+            type: "string",
+            description: "Only emails after this date (YYYY-MM-DD format, e.g. '2025-01-01')",
+          },
+          before: {
+            type: "string",
+            description: "Only emails before this date (YYYY-MM-DD format)",
+          },
+          limit: {
+            type: "number",
+            description: "Max results to return (default 20, max 50)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "read_email",
+      description:
+        "Read the full body text of a specific email by its Gmail ID (returned as gmail_id from search_emails). Fetches directly from Gmail API if not in local database.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          message_id: {
+            type: "string",
+            description: "The Gmail message ID (gmail_id from search_emails results)",
+          },
+        },
+        required: ["message_id"],
+      },
+    },
+    {
+      name: "send_email",
+      description:
+        "Send an email via the user's connected Gmail account. IMPORTANT: Always confirm with the user before sending — show them the recipient, subject, and body first. Requires Gmail to be connected.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          to: {
+            type: "string",
+            description: "Recipient email address",
+          },
+          subject: {
+            type: "string",
+            description: "Email subject line",
+          },
+          body: {
+            type: "string",
+            description: "Email body text (plain text)",
+          },
+          cc: {
+            type: "string",
+            description: "Optional CC email address",
+          },
+        },
+        required: ["to", "subject", "body"],
+      },
+    },
+    {
+      name: "get_inbox_summary",
+      description:
+        "Get a summary of the user's Gmail inbox — unread count, recent emails, and key senders. Use when the user asks about their inbox, unread messages, or wants an email overview.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+
+    /* ── Google Calendar tools ─────────────────────────── */
+    {
+      name: "search_calendar",
+      description:
+        "Search synced Google Calendar events by date range, attendee, keyword, or location. Returns matching events with summary, time, attendees, and location. Use when the user asks about meetings, calendar events, or scheduling.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query — matches against summary, description, and location",
+          },
+          attendee: {
+            type: "string",
+            description: "Filter by attendee email address",
+          },
+          after: {
+            type: "string",
+            description: "Only events starting after this date (ISO 8601)",
+          },
+          before: {
+            type: "string",
+            description: "Only events starting before this date (ISO 8601)",
+          },
+          limit: {
+            type: "number",
+            description: "Max results to return (default 20, max 50)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_upcoming_meetings",
+      description:
+        "Get upcoming meetings/events from the user's synced Google Calendar. Returns event details including attendees, time, and location. Use when the user asks about upcoming meetings, what's on their schedule, or their calendar for today/this week/next week.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          count: {
+            type: "number",
+            description: "Number of upcoming meetings to return (default 10, max 50)",
+          },
+          after: {
+            type: "string",
+            description: "Only events starting after this date/time (ISO 8601). Defaults to now.",
+          },
+          before: {
+            type: "string",
+            description: "Only events starting before this date/time (ISO 8601). Use to scope to a specific range like 'this week' or 'today'.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "create_calendar_event",
+      description:
+        "Create a new event on the user's Google Calendar. Use when the user asks to schedule a meeting, add an event, or block time. Always confirm details with the user before creating the event.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          summary: {
+            type: "string",
+            description: "Event title/summary",
+          },
+          start_time: {
+            type: "string",
+            description: "Event start time in ISO 8601 format (e.g. 2025-03-15T14:00:00-08:00). For all-day events use YYYY-MM-DD.",
+          },
+          end_time: {
+            type: "string",
+            description: "Event end time in ISO 8601 format. For all-day events use the day AFTER the last day (e.g. 2025-03-16 for a single day).",
+          },
+          description: {
+            type: "string",
+            description: "Event description/notes (optional)",
+          },
+          location: {
+            type: "string",
+            description: "Event location (optional)",
+          },
+          all_day: {
+            type: "boolean",
+            description: "Whether this is an all-day event (default false)",
+          },
+          attendees: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of attendee email addresses to invite (optional)",
+          },
+        },
+        required: ["summary", "start_time", "end_time"],
+      },
+    },
+
+    /* ── Google Drive tools ──────────────────────────────── */
+    {
+      name: "search_drive",
+      description:
+        "Search synced Google Drive files by name, type, folder, or date. Returns file metadata (not content). Use when the user asks about their documents, files, or what's in their Drive.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query — matches against file name",
+          },
+          mime_type: {
+            type: "string",
+            description: "Filter by MIME type (e.g. 'application/vnd.google-apps.document' for Google Docs)",
+          },
+          folder: {
+            type: "string",
+            description: "Filter by parent folder name",
+          },
+          indexed_only: {
+            type: "boolean",
+            description: "Only return files that have been indexed into the knowledge base",
+          },
+          limit: {
+            type: "number",
+            description: "Max results to return (default 20, max 50)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "read_drive_file",
+      description:
+        "Fetch and return the full text content of a specific Google Drive file on demand. Works for Google Docs, Sheets, text files, and markdown. Use when the user says 'read my doc', 'summarize the Q4 report', or 'what does the strategy doc say'. Requires Google Drive to be connected.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          file_id: {
+            type: "string",
+            description: "The drive_files external_id (Google Drive file ID) to read",
+          },
+        },
+        required: ["file_id"],
+      },
+    },
+    {
+      name: "index_drive_files",
+      description:
+        "Index specific Google Drive files into the knowledge base. Fetches content, creates library items, triggers embedding, and adds to the knowledge graph. Supports re-indexing already-indexed files to refresh content. Use when the user says 'add my strategy doc to the knowledge base', 'index these files', or 're-index those files'.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          file_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of Google Drive file IDs (external_id) to index",
+          },
+          force_reindex: {
+            type: "boolean",
+            description: "Set true to re-index files that are already indexed (refreshes content from Drive)",
+          },
+        },
+        required: ["file_ids"],
+      },
+    },
+    {
+      name: "unindex_drive_files",
+      description:
+        "Remove specific Google Drive files from the knowledge base. Deletes library items, embeddings, and graph nodes. Use when the user says 'remove that file from the index' or 'unindex those files'.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          file_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of Google Drive file IDs (external_id) to unindex",
+          },
+        },
+        required: ["file_ids"],
+      },
+    },
+
+    /* ── Outreach tools ────────────────────────────────── */
+    {
+      name: "search_outreach_prospects",
+      description:
+        "Search synced Outreach prospects by name, email, company, stage, or tags. Returns locally-synced data from Outreach.io. Use when the user asks about prospects, leads, or people in their Outreach system.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "Search by name, email, or company (partial match supported)",
+          },
+          stage: {
+            type: "string",
+            description:
+              "Filter by prospect stage (e.g. 'Prospect', 'Qualified', 'Customer')",
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Filter by tags (any match)",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (default 25, max 100)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_outreach_tasks",
+      description:
+        "Get Outreach tasks synced locally. Filter by status (open/complete), due date, or prospect. Use when the user asks about their Outreach tasks, to-dos, or follow-ups.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          status: {
+            type: "string",
+            enum: ["pending", "complete", "all"],
+            description: "Filter by task status (default: 'pending')",
+          },
+          due_before: {
+            type: "string",
+            description:
+              "Only tasks due before this date (ISO 8601, e.g. '2026-03-01')",
+          },
+          due_after: {
+            type: "string",
+            description:
+              "Only tasks due after this date (ISO 8601)",
+          },
+          prospect_email: {
+            type: "string",
+            description: "Filter tasks for a specific prospect by email",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (default 25, max 100)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "search_outreach_sequences",
+      description:
+        "Search synced Outreach sequences by name, enabled status, or performance metrics. Use when the user asks about their Outreach sequences, cadences, or automated outreach.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: "Search by sequence name (partial match)",
+          },
+          enabled: {
+            type: "boolean",
+            description: "Filter by enabled/disabled status",
+          },
+          sort_by: {
+            type: "string",
+            enum: ["name", "prospect_count", "open_rate", "reply_rate"],
+            description: "Sort results by field (default: 'name')",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (default 25, max 100)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "complete_outreach_task",
+      description:
+        "Mark an Outreach task as complete. Calls the Outreach API to update the task status and syncs the change locally. Use when the user says they've finished a task or asks to mark one done.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          task_external_id: {
+            type: "string",
+            description:
+              "The Outreach external ID of the task to complete",
+          },
+        },
+        required: ["task_external_id"],
+      },
+    },
+    {
+      name: "enroll_in_outreach_sequence",
+      description:
+        "Enroll a prospect into an Outreach sequence. This starts the automated outreach cadence for the prospect. ALWAYS confirm with the user before enrolling — this triggers real emails. Use when the user asks to add someone to a sequence or start outreach for a prospect.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          prospect_external_id: {
+            type: "string",
+            description:
+              "The Outreach external ID of the prospect to enroll",
+          },
+          sequence_external_id: {
+            type: "string",
+            description:
+              "The Outreach external ID of the sequence to enroll them in",
+          },
+        },
+        required: ["prospect_external_id", "sequence_external_id"],
+      },
+    },
+    {
+      name: "get_outreach_performance",
+      description:
+        "Get performance metrics for Outreach sequences — open rates, click rates, reply rates, prospect counts. Use when the user asks about sequence performance, campaign metrics, what's working, or engagement analytics from Outreach.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          sequence_name: {
+            type: "string",
+            description:
+              "Filter to a specific sequence by name (partial match)",
+          },
+          sort_by: {
+            type: "string",
+            enum: ["open_rate", "click_rate", "reply_rate", "prospect_count"],
+            description: "Sort sequences by metric (default: 'reply_rate')",
+          },
+          enabled_only: {
+            type: "boolean",
+            description:
+              "Only show enabled sequences (default: true)",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (default 20, max 50)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "create_outreach_prospect",
+      description:
+        "Create a new prospect in Outreach.io. Also syncs to local outreach_prospects table and creates a CRM contact if one doesn't exist for that email. Use when the user asks to add someone to Outreach or create a new prospect.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          email: {
+            type: "string",
+            description: "Prospect email address (required)",
+          },
+          first_name: {
+            type: "string",
+            description: "First name",
+          },
+          last_name: {
+            type: "string",
+            description: "Last name",
+          },
+          title: {
+            type: "string",
+            description: "Job title",
+          },
+          company: {
+            type: "string",
+            description: "Company name",
+          },
+          phone: {
+            type: "string",
+            description: "Phone number",
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Tags to apply to the prospect",
+          },
+        },
+        required: ["email"],
+      },
+    },
+
     /* ── Data Agent ─────────────────────────────────────── */
     {
       name: "analyze_data",
@@ -2070,6 +2621,87 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
       name: "get_tools_view",
       description:
         "Fetch the user's tech stack tools showing name, category, status, teams, and descriptions. Includes stats by status and category breakdown. Call this when the user sends the /tools slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_goals_view",
+      description:
+        "Fetch the organization's goals with sub-goals, status, owner, teams, dates, and metrics. Call this when the user sends the /goals slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_painpoints_view",
+      description:
+        "Fetch the organization's pain points with severity, status, owner, teams, impact metric, and linked goal. Call this when the user sends the /painpoints slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_cadence_view",
+      description:
+        "Fetch sales cadences (multi-step, multi-channel outreach sequences) with steps, channels, timing, and status. Call this when the user sends the /cadence slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+
+    /* ── Organization view ────────────────────────────── */
+    {
+      name: "get_organization_view",
+      description:
+        "Fetch the organization profile with company info, industry, description, website, stage, target market, differentiators, and team members. Call this when the user sends the /organization slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+
+    /* ── Data connections view ────────────────────────── */
+    {
+      name: "get_data_view",
+      description:
+        "Fetch the status of data connections (Shopify, HubSpot, Klaviyo, CSV imports) and recent sync activity. Call this when the user sends the /data slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
+
+    /* ── Onboarding tools ─────────────────────────────── */
+    {
+      name: "analyze_company_website",
+      description:
+        "Fetch and analyze a company website URL to extract structured information about the business — products, positioning, industry, target audience, competitors. Use this during onboarding when the user provides their company URL.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          url: {
+            type: "string",
+            description: "The company website URL to analyze (e.g. 'https://acmecorp.com')",
+          },
+        },
+        required: ["url"],
+      },
+    },
+    {
+      name: "complete_onboarding",
+      description:
+        "Mark the user's onboarding as complete. Call this ONLY after giving the final welcome message with personalized tips. This unlocks the full platform experience for subsequent conversations.",
       input_schema: {
         type: "object" as const,
         properties: {},
