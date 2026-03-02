@@ -1243,6 +1243,15 @@ export type ValidationFailureReason =
   | "bounce_soft";
 export type CampaignEmailType = "promotional" | "win_back" | "nurture" | "announcement" | "welcome" | "follow_up" | "custom";
 
+export type CampaignCategory = "marketing" | "sales";
+
+export interface SendSchedule {
+  timezone?: string;                              // IANA timezone, e.g. "America/New_York"
+  send_days?: number[];                           // 0=Sun..6=Sat. Default [1,2,3,4,5] (Mon-Fri)
+  send_hours?: { start: number; end: number };    // 24hr format. Default { start: 9, end: 17 }
+  blocked_dates?: string[];                       // ISO dates to skip (holidays)
+}
+
 export interface EmailCampaign {
   id: string;
   org_id: string;
@@ -1262,6 +1271,8 @@ export interface EmailCampaign {
   stats: Record<string, unknown>;
   has_strategy: boolean;
   execution_mode: ExecutionMode;
+  campaign_category: CampaignCategory;
+  send_schedule: SendSchedule;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -1322,6 +1333,13 @@ export interface StrategySequenceStep {
   task_instructions?: string;    // instructions for manual/non-email steps
 }
 
+/** Client-side step representation for the campaign builder UI */
+export interface BuilderStep extends StrategySequenceStep {
+  id: string;           // Client-side UUID for drag-drop keys and React keys
+  isNew?: boolean;      // true if just added (not yet saved)
+  isDirty?: boolean;    // true if edited since last save
+}
+
 export interface CampaignStrategyGroup {
   id: string;
   org_id: string;
@@ -1372,6 +1390,58 @@ export interface SendValidationError {
   customer_name: string | null;
   reasons: ValidationFailureReason[];
   details?: Record<string, string>;
+}
+
+/* ── Unified Task Hub types ──────────────────────────── */
+
+export type TaskType = "todo" | "reminder" | "follow_up" | "project_task" | "action_item";
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+export interface Task {
+  id: string;
+  org_id: string;
+  created_by: string;
+  title: string;
+  description: string | null;
+  task_type: TaskType;
+  priority: TaskPriority;
+  project_id: string | null;
+  contact_id: string | null;
+  company_id: string | null;
+  deal_id: string | null;
+  assigned_to: string | null;
+  status: TaskStatus;
+  due_at: string | null;
+  remind_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  notes: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Unified task type that normalizes both `tasks` and `campaign_tasks` */
+export interface UnifiedTask {
+  id: string;
+  source: "task" | "campaign_task";
+  title: string;
+  description: string | null;
+  task_type: string;
+  priority: TaskPriority | null;
+  status: string;
+  assigned_to: string | null;
+  due_at: string | null;
+  completed_at: string | null;
+  tags: string[];
+  // Associations
+  project_name: string | null;
+  campaign_name: string | null;
+  contact_name: string | null;
+  // Metadata
+  created_at: string;
 }
 
 /* ── Workflow Builder types ────────────────────────────── */

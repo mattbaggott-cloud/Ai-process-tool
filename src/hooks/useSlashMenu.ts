@@ -63,9 +63,9 @@ export const CHAT_SLASH_COMMANDS: SlashCommand[] = [
   {
     command: "/campaigns",
     label: "Campaigns",
-    description: "View email campaigns",
+    description: "View campaigns & cadences",
     icon: "campaigns",
-    keywords: "email marketing sequences drip automation",
+    keywords: "email marketing sequences drip automation cadence outreach sales steps channels linkedin",
   },
   {
     command: "/projects",
@@ -121,13 +121,13 @@ export const CHAT_SLASH_COMMANDS: SlashCommand[] = [
     icon: "painpoints",
     keywords: "issues problems blockers challenges risks obstacles pain points",
   },
-  /* ── Sales ───────────────────────────────────────── */
+  /* ── Tasks ───────────────────────────────────────── */
   {
-    command: "/cadence",
-    label: "Cadence",
-    description: "View sales cadences",
-    icon: "cadence",
-    keywords: "sequence outreach steps channels email call linkedin sales",
+    command: "/tasks",
+    label: "Tasks",
+    description: "View tasks, reminders & to-dos",
+    icon: "tasks",
+    keywords: "todo reminders follow-up action items project tasks queue",
   },
   /* ── Organization ──────────────────────────────── */
   {

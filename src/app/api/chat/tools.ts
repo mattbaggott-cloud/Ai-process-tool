@@ -1012,7 +1012,7 @@ Always include a start and end node. Map document sections/steps to process node
     {
       name: "log_activity",
       description:
-        "Log a CRM activity (call, email, meeting, note, or task). Use when the user asks to log, record, or add an activity.",
+        "Log a CRM activity (call, email, meeting, note, or task). Use when the user asks to log, record, or add an activity. IMPORTANT: If the user mentions a specific date (past or future), always set activity_date to that date.",
       input_schema: {
         type: "object" as const,
         properties: {
@@ -1022,10 +1022,11 @@ Always include a start and end node. Map document sections/steps to process node
           contact_name: { type: "string", description: "Contact name to link to" },
           company_name: { type: "string", description: "Company name to link to" },
           deal_title: { type: "string", description: "Deal title to link to" },
+          activity_date: { type: "string", description: "When the activity occurred or will occur (ISO datetime). Use this for past activities ('I had a call on Feb 25') and future activities. Defaults to now if not specified." },
           duration_minutes: { type: "integer", description: "How long the activity lasted in minutes" },
           outcome: { type: "string", description: "Result of the activity (e.g. 'scheduled follow-up', 'verbal commit')" },
-          completed: { type: "boolean", description: "Mark as already completed (sets completed_at to now)" },
-          scheduled_at: { type: "string", description: "When this activity is scheduled for (ISO datetime)" },
+          completed: { type: "boolean", description: "Mark as already completed. For past activities, completed_at will use the activity_date." },
+          scheduled_at: { type: "string", description: "When this activity is scheduled for (ISO datetime). For future tasks/meetings." },
         },
         required: ["type", "subject"],
       },
@@ -1087,9 +1088,10 @@ Always include a start and end node. Map document sections/steps to process node
           contact_name: { type: "string", description: "Narrow search to activities for this contact" },
           subject: { type: "string", description: "New subject line" },
           description: { type: "string", description: "Updated description/details" },
+          activity_date: { type: "string", description: "Correct the date the activity occurred (ISO datetime)" },
           outcome: { type: "string", description: "Result of the activity (e.g. 'scheduled follow-up', 'verbal commit', 'no answer')" },
           duration_minutes: { type: "integer", description: "How long the activity lasted in minutes" },
-          completed: { type: "boolean", description: "Mark as completed (true) or incomplete (false)" },
+          completed: { type: "boolean", description: "Mark as completed (true) or incomplete (false). Uses activity_date for completed_at if provided." },
           scheduled_at: { type: "string", description: "Reschedule: ISO datetime (YYYY-MM-DDTHH:MM:SS)" },
         },
         required: ["activity_subject"],
@@ -1940,6 +1942,27 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
             enum: ["auto_email", "manual_email", "phone_call", "linkedin_view", "linkedin_connect", "linkedin_message", "custom_task"],
             description: "Step type for the campaign. 'auto_email' (default) = AI sends email. Non-email types (phone_call, linkedin_*, custom_task) create tasks for reps instead of sending.",
           },
+          campaign_category: {
+            type: "string",
+            enum: ["marketing", "sales"],
+            description: "Campaign category. 'marketing' (default) for marketing automation campaigns. 'sales' for sales engagement cadences (SDR outreach, prospecting sequences).",
+          },
+          send_schedule: {
+            type: "object",
+            description: "Optional send schedule rules. Controls when campaign steps are allowed to send. If omitted, sends anytime.",
+            properties: {
+              timezone: { type: "string", description: "IANA timezone, e.g. 'America/New_York'. Default: UTC." },
+              send_days: { type: "array", items: { type: "number" }, description: "Days of week allowed. 0=Sun..6=Sat. Default: [1,2,3,4,5] (Mon-Fri)." },
+              send_hours: {
+                type: "object",
+                properties: {
+                  start: { type: "number", description: "Start hour (24hr). Default: 9." },
+                  end: { type: "number", description: "End hour (24hr). Default: 17." },
+                },
+              },
+              blocked_dates: { type: "array", items: { type: "string" }, description: "ISO dates to skip (holidays), e.g. ['2026-12-25']." },
+            },
+          },
         },
         required: ["name", "prompt"],
       },
@@ -1961,6 +1984,63 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
           },
         },
         required: ["campaign_id", "confirmed"],
+      },
+    },
+    {
+      name: "update_campaign_steps",
+      description:
+        "Update the sequence steps for a campaign via chat. Can add, remove, or modify steps. Use when the user asks to add a step, change step timing, reorder, or modify step types/channels in an existing campaign.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          campaign_id: {
+            type: "string",
+            description: "The campaign ID to modify steps for",
+          },
+          group_id: {
+            type: "string",
+            description: "Optional: specific strategy group to modify. If omitted, modifies the first group.",
+          },
+          action: {
+            type: "string",
+            enum: ["add", "remove", "update", "replace_all"],
+            description: "'add' = insert a new step, 'remove' = delete a step, 'update' = modify a step, 'replace_all' = replace all steps with a new set",
+          },
+          step_number: {
+            type: "number",
+            description: "For add/remove/update: the step number to operate on. For add, inserts after this position (0 = insert at beginning).",
+          },
+          step: {
+            type: "object",
+            description: "For add/update: the step data. Fields: step_type, delay_days, email_type, prompt, subject_hint, channel, task_instructions.",
+            properties: {
+              step_type: { type: "string", enum: ["auto_email", "manual_email", "phone_call", "linkedin_view", "linkedin_connect", "linkedin_message", "custom_task"] },
+              delay_days: { type: "number" },
+              email_type: { type: "string" },
+              prompt: { type: "string" },
+              subject_hint: { type: "string" },
+              channel: { type: "string", enum: ["gmail", "outreach", "klaviyo"] },
+              task_instructions: { type: "string" },
+            },
+          },
+          steps: {
+            type: "array",
+            description: "For replace_all: the complete new set of steps.",
+            items: {
+              type: "object",
+              properties: {
+                step_type: { type: "string" },
+                delay_days: { type: "number" },
+                email_type: { type: "string" },
+                prompt: { type: "string" },
+                subject_hint: { type: "string" },
+                channel: { type: "string" },
+                task_instructions: { type: "string" },
+              },
+            },
+          },
+        },
+        required: ["campaign_id", "action"],
       },
     },
     {
@@ -2024,6 +2104,90 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
           },
         },
         required: ["campaign_id"],
+      },
+    },
+    /* ── Unified Task Hub ───────────────────────────────── */
+    {
+      name: "manage_tasks",
+      description:
+        "Create, list, complete, update, or cancel general tasks (to-dos, reminders, follow-ups, project tasks, action items). For campaign-specific tasks use manage_campaign_tasks. This tool handles all general task management.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          action: {
+            type: "string",
+            enum: ["create", "list", "complete", "update", "cancel"],
+            description: "Action to perform on tasks",
+          },
+          // For create:
+          title: {
+            type: "string",
+            description: "Task title (required for create)",
+          },
+          description: {
+            type: "string",
+            description: "Task description or details",
+          },
+          task_type: {
+            type: "string",
+            enum: ["todo", "reminder", "follow_up", "project_task", "action_item"],
+            description: "Type of task (default: todo)",
+          },
+          priority: {
+            type: "string",
+            enum: ["low", "medium", "high", "urgent"],
+            description: "Task priority (default: medium)",
+          },
+          due_at: {
+            type: "string",
+            description: "Due date as ISO string (e.g. '2026-03-15T09:00:00Z')",
+          },
+          remind_at: {
+            type: "string",
+            description: "Reminder date as ISO string",
+          },
+          assigned_to: {
+            type: "string",
+            description: "User ID to assign to (defaults to current user)",
+          },
+          project_id: {
+            type: "string",
+            description: "Link to a project",
+          },
+          contact_id: {
+            type: "string",
+            description: "Link to a CRM contact",
+          },
+          company_id: {
+            type: "string",
+            description: "Link to a CRM company",
+          },
+          deal_id: {
+            type: "string",
+            description: "Link to a CRM deal",
+          },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Tags for the task",
+          },
+          // For complete/update/cancel:
+          task_id: {
+            type: "string",
+            description: "Task ID (required for complete/update/cancel)",
+          },
+          notes: {
+            type: "string",
+            description: "Notes to add when completing/cancelling",
+          },
+          // For list:
+          status_filter: {
+            type: "string",
+            enum: ["pending", "in_progress", "completed", "all"],
+            description: "Filter by status (default: 'pending' for list)",
+          },
+        },
+        required: ["action"],
       },
     },
     /* ── Gmail tools ───────────────────────────────────── */
@@ -2560,7 +2724,7 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
     {
       name: "get_campaigns_view",
       description:
-        "Fetch all email campaigns for the user's organization with status, variant counts, delivery metrics (sent, opened, clicked). Call this when the user sends the /campaigns slash command.",
+        "Fetch all campaigns (both marketing and sales) for the user's organization with category badges, status, step counts, channel icons, task counts, and delivery metrics. Call this when the user sends the /campaigns or /cadence slash command. Unifies marketing campaigns and sales cadences into one view.",
       input_schema: {
         type: "object" as const,
         properties: {},
@@ -2650,7 +2814,7 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
     {
       name: "get_cadence_view",
       description:
-        "Fetch sales cadences (multi-step, multi-channel outreach sequences) with steps, channels, timing, and status. Call this when the user sends the /cadence slash command.",
+        "DEPRECATED — redirects to get_campaigns_view with sales filter. Use get_campaigns_view instead. Kept for backwards compatibility.",
       input_schema: {
         type: "object" as const,
         properties: {},
@@ -2658,6 +2822,17 @@ OR rules: { "type": "or", "children": [ ...rules ] }`,
       },
     },
 
+    /* ── Task Hub view ────────────────────────────────── */
+    {
+      name: "get_tasks_view",
+      description:
+        "Fetch a unified view of all tasks (to-dos, reminders, follow-ups, project tasks, action items) AND campaign tasks. Shows stats, overdue counts, and recent tasks across all sources. Call this when the user sends the /tasks slash command.",
+      input_schema: {
+        type: "object" as const,
+        properties: {},
+        required: [],
+      },
+    },
     /* ── Organization view ────────────────────────────── */
     {
       name: "get_organization_view",

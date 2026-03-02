@@ -24,6 +24,8 @@ import type {
   StrategySequenceStep,
   ExecutionMode,
   StepType,
+  CampaignCategory,
+  SendSchedule,
 } from "@/lib/types/database";
 import { createSendProvider, type EmailSendProvider } from "./send-provider";
 import { validateCampaignVariants } from "./send-validator";
@@ -43,6 +45,8 @@ export interface CreateCampaignInput {
   deliveryChannel?: DeliveryChannel;
   executionMode?: ExecutionMode;
   stepType?: StepType;
+  campaignCategory?: CampaignCategory;
+  sendSchedule?: SendSchedule;
 }
 
 export interface CreateCampaignResult {
@@ -281,6 +285,8 @@ export async function createCampaign(
       delivery_config: deliveryConfig,
       template_id: input.templateId ?? null,
       execution_mode: input.executionMode || "automatic",
+      campaign_category: input.campaignCategory || "marketing",
+      send_schedule: input.sendSchedule || {},
       created_by: userId,
     })
     .select()
