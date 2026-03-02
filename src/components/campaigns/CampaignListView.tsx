@@ -4,62 +4,49 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useOrg } from "@/context/OrgContext";
 import { createClient } from "@/lib/supabase/client";
-import CampaignReviewView from "./CampaignReviewView";
-import CampaignStrategyView from "./CampaignStrategyView";
-import type { EmailCampaign } from "@/lib/types/database";
+import CampaignBuilderView from "./CampaignBuilderView";
+import type { EmailCampaign, CampaignCategory } from "@/lib/types/database";
 
-/* ── Status badge mappings ──────────────────────────────── */
-const statusBadgeClass: Record<string, string> = {
-  draft: "campaign-badge-gray",
-  generating: "campaign-badge-blue",
-  review: "campaign-badge-yellow",
-  approved: "campaign-badge-green",
-  sending: "campaign-badge-blue",
-  sent: "campaign-badge-green",
-  paused: "campaign-badge-amber",
-  cancelled: "campaign-badge-red",
-  failed: "campaign-badge-red",
-  strategy_review: "campaign-badge-yellow",
-};
+import { STATUS_BADGE_CLASS, CHANNEL_META, capitalise } from "./campaign-constants";
 
-const typeBadgeClass: Record<string, string> = {
-  per_customer: "campaign-badge-purple",
-  broadcast: "campaign-badge-blue",
-  sequence: "campaign-badge-teal",
-};
+const statusBadgeClass = STATUS_BADGE_CLASS;
 
-/* ── Helpers ────────────────────────────────────────────── */
+/* ── Helpers ──────────────────────────────────────────────── */
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric",
   });
 }
 
-function capitalise(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
-}
+/* ── Category tabs ────────────────────────────────────────── */
+type CategoryTab = "all" | CampaignCategory;
 
-/* ── Component ──────────────────────────────────────────── */
-type ViewMode = "list" | "review" | "strategy";
+/* ── Sortable columns ─────────────────────────────────────── */
+type SortKey = "name" | "status" | "created_at";
 
+/* ── Component ────────────────────────────────────────────── */
 export default function CampaignListView() {
   const { user } = useAuth();
   const { orgId } = useOrg();
 
-  const [view, setView] = useState<ViewMode>("list");
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [categoryTab, setCategoryTab] = useState<CategoryTab>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("created_at");
+  const [sortAsc, setSortAsc] = useState(false);
+
+  // Builder view
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
 
+  // Send actions
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [sendConfirmId, setSendConfirmId] = useState<string | null>(null);
 
-  /* ── Send campaign from list ─────────────────────────── */
-  const handleListSend = async (e: React.MouseEvent, campaignId: string) => {
+  /* ── Send campaign ──────────────────────────────────────── */
+  const handleListSend = (e: React.MouseEvent, campaignId: string) => {
     e.stopPropagation();
     setSendConfirmId(campaignId);
   };
@@ -86,44 +73,7 @@ export default function CampaignListView() {
     }
   };
 
-  /* ── Pause / Cancel from list ──────────────────────────── */
-  const handleListAction = async (
-    e: React.MouseEvent,
-    campaignId: string,
-    action: "pause" | "cancel"
-  ) => {
-    e.stopPropagation();
-    try {
-      await fetch(`/api/campaigns/${campaignId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      loadCampaigns();
-    } catch { /* silent */ }
-  };
-
-  const handleListResume = async (
-    e: React.MouseEvent,
-    campaignId: string
-  ) => {
-    e.stopPropagation();
-    try {
-      await fetch(`/api/campaigns/${campaignId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "resume" }),
-      });
-      fetch(`/api/campaigns/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId }),
-      });
-      loadCampaigns();
-    } catch { /* silent */ }
-  };
-
-  /* ── Fetch campaigns ──────────────────────────────────── */
+  /* ── Fetch campaigns ────────────────────────────────────── */
   const loadCampaigns = useCallback(async () => {
     if (!user || !orgId) return;
     setLoading(true);
@@ -148,45 +98,67 @@ export default function CampaignListView() {
     loadCampaigns();
   }, [loadCampaigns]);
 
-  /* ── Filter campaigns by search ────────────────────────── */
-  const filtered = campaigns.filter((c) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      c.name.toLowerCase().includes(q) ||
-      (c.email_type || "").toLowerCase().includes(q) ||
-      (c.delivery_channel || "").toLowerCase().includes(q)
-    );
-  });
-
-  /* ── Summary stats ─────────────────────────────────────── */
-  const stats = {
-    total: campaigns.length,
-    review: campaigns.filter((c) => c.status === "review").length,
-    sent: campaigns.filter((c) => c.status === "sent").length,
-    generating: campaigns.filter((c) => c.status === "generating").length,
-  };
-
-  /* ── Auto-refresh when campaigns are generating ─────── */
+  /* ── Auto-refresh when generating ───────────────────────── */
+  const generatingCount = campaigns.filter((c) => c.status === "generating").length;
   useEffect(() => {
-    if (stats.generating === 0) return;
+    if (generatingCount === 0) return;
     const interval = setInterval(loadCampaigns, 5000);
     return () => clearInterval(interval);
-  }, [stats.generating, loadCampaigns]);
+  }, [generatingCount, loadCampaigns]);
 
-  /* ── Open campaign view ──────────────────────────────────── */
-  const openCampaign = (campaign: EmailCampaign) => {
-    setActiveCampaignId(campaign.id);
-    setView("strategy");
+  /* ── Filter + sort ──────────────────────────────────────── */
+  const filtered = campaigns
+    .filter((c) => {
+      // Category tab
+      if (categoryTab !== "all" && c.campaign_category !== categoryTab) return false;
+      // Search
+      if (search) {
+        const q = search.toLowerCase();
+        if (
+          !c.name.toLowerCase().includes(q) &&
+          !(c.email_type || "").toLowerCase().includes(q) &&
+          !(c.delivery_channel || "").toLowerCase().includes(q)
+        ) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") cmp = a.name.localeCompare(b.name);
+      else if (sortKey === "status") cmp = a.status.localeCompare(b.status);
+      else cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return sortAsc ? cmp : -cmp;
+    });
+
+  /* ── Stats ──────────────────────────────────────────────── */
+  const stats = {
+    total: campaigns.length,
+    active: campaigns.filter((c) => ["generating", "sending", "approved", "review"].includes(c.status)).length,
+    draft: campaigns.filter((c) => c.status === "draft").length,
+    sent: campaigns.filter((c) => c.status === "sent").length,
   };
 
-  /* ── Strategy view ──────────────────────────────────────── */
-  if (view === "strategy" && activeCampaignId) {
+  /* ── Sort handler ───────────────────────────────────────── */
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  };
+
+  const sortArrow = (key: SortKey) => {
+    if (sortKey !== key) return "";
+    return sortAsc ? " \u25B2" : " \u25BC";
+  };
+
+  /* ── Builder view ───────────────────────────────────────── */
+  if (activeCampaignId) {
     return (
-      <CampaignStrategyView
+      <CampaignBuilderView
         campaignId={activeCampaignId}
         onBack={() => {
-          setView("list");
           setActiveCampaignId(null);
           loadCampaigns();
         }}
@@ -194,257 +166,181 @@ export default function CampaignListView() {
     );
   }
 
-  /* ── Review view ───────────────────────────────────────── */
-  if (view === "review" && activeCampaignId) {
-    return (
-      <CampaignReviewView
-        campaignId={activeCampaignId}
-        onBack={() => {
-          setView("list");
-          setActiveCampaignId(null);
-          loadCampaigns();
-        }}
-      />
-    );
-  }
-
-  /* ── Render a campaign card ─────────────────────────────── */
-  const renderCampaignCard = (c: EmailCampaign) => {
-    const isGenerating = c.status === "generating";
-    const isPaused = c.status === "paused";
-    const isCancelled = c.status === "cancelled";
-    const isFailed = c.status === "failed";
-    const isActive = isGenerating || isPaused || isCancelled || isFailed;
-
-    return (
-      <div
-        key={c.id}
-        className={`cl-card ${isActive ? "cl-card-active" : ""} ${isFailed ? "cl-card-failed" : ""}`}
-        onClick={() => openCampaign(c)}
-      >
-        {/* Top row: name + meta */}
-        <div className="cl-card-header">
-          <div className="cl-card-title-area">
-            <span className="cl-card-name">{c.name}</span>
-            <div className="cl-card-meta">
-              <span className={`campaign-badge ${typeBadgeClass[c.campaign_type] || "campaign-badge-gray"}`}>
-                {capitalise(c.campaign_type)}
-              </span>
-              <span className={`campaign-badge ${statusBadgeClass[c.status] || "campaign-badge-gray"}`}>
-                {capitalise(c.status)}
-              </span>
-              {c.email_type && (
-                <span className="cl-card-email-type">{capitalise(c.email_type)}</span>
-              )}
-            </div>
-          </div>
-          <div className="cl-card-right">
-            {/* Send button — inline for approved campaigns */}
-            {(c.status === "approved" || c.status === "review") && (c.approved_count ?? 0) > 0 && (
-              <button
-                className="cl-send-btn"
-                disabled={sendingId === c.id}
-                onClick={(e) => handleListSend(e, c.id)}
-              >
-                {sendingId === c.id ? (
-                  <>
-                    <div className="cl-send-spinner" />
-                    Sending...
-                  </>
-                ) : (
-                  <>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13" />
-                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                    </svg>
-                    Send ({c.approved_count})
-                  </>
-                )}
-              </button>
-            )}
-            {c.status === "sent" && (
-              <span className="cl-sent-pill">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                Sent
-              </span>
-            )}
-            <span className="cl-card-date">{formatDate(c.created_at)}</span>
-            <span className="cl-card-variants">
-              {isActive ? (
-                <>{c.total_variants} emails generated</>
-              ) : (
-                <>
-                  {c.approved_count}/{c.total_variants} variants
-                  {c.sent_count > 0 && <span className="cl-card-sent"> ({c.sent_count} sent)</span>}
-                </>
-              )}
-            </span>
-          </div>
-        </div>
-
-        {/* Generating/paused/cancelled actions */}
-        {isActive && (
-          <div className="cl-card-progress-area">
-            {/* Action buttons */}
-            <div className="cl-progress-actions">
-              {isGenerating && (
-                <>
-                  <button
-                    className="cl-action-btn cl-action-pause"
-                    onClick={(e) => handleListAction(e, c.id, "pause")}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                      <rect x="1" y="0.5" width="3.5" height="11" rx="1" />
-                      <rect x="7.5" y="0.5" width="3.5" height="11" rx="1" />
-                    </svg>
-                    Pause
-                  </button>
-                  <button
-                    className="cl-action-btn cl-action-cancel"
-                    onClick={(e) => handleListAction(e, c.id, "cancel")}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" />
-                    </svg>
-                    Cancel
-                  </button>
-                </>
-              )}
-              {isPaused && (
-                <>
-                  <button
-                    className="cl-action-btn cl-action-resume"
-                    onClick={(e) => handleListResume(e, c.id)}
-                  >
-                    <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor">
-                      <path d="M0 1.5C0 .83.837.434 1.374.81L9.2 5.31c.467.327.467 1.053 0 1.38L1.374 11.19C.837 11.566 0 11.17 0 10.5V1.5z" />
-                    </svg>
-                    Resume
-                  </button>
-                  <button
-                    className="cl-action-btn cl-action-cancel"
-                    onClick={(e) => handleListAction(e, c.id, "cancel")}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" />
-                    </svg>
-                    Cancel
-                  </button>
-                </>
-              )}
-              {isCancelled && (
-                <button
-                  className="cl-action-btn cl-action-resume"
-                  onClick={(e) => handleListResume(e, c.id)}
-                >
-                  <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor">
-                    <path d="M0 1.5C0 .83.837.434 1.374.81L9.2 5.31c.467.327.467 1.053 0 1.38L1.374 11.19C.837 11.566 0 11.17 0 10.5V1.5z" />
-                  </svg>
-                  Resume
-                </button>
-              )}
-              {isFailed && (
-                <button
-                  className="cl-action-btn cl-action-resume"
-                  onClick={(e) => handleListResume(e, c.id)}
-                >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 1v4h4" />
-                    <path d="M1 5a5 5 0 1 1 1.5 3.5" />
-                  </svg>
-                  Retry
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  /* ── List view ─────────────────────────────────────────── */
+  /* ── List view (sortable table) ─────────────────────────── */
   return (
     <div className="campaign-page">
       {/* Header */}
       <div className="campaign-page-header">
-        <h1 className="campaign-page-title">Campaigns</h1>
-        <p className="campaign-page-subtitle">
-          Review and manage AI-generated email campaigns
-        </p>
+        <div className="campaign-page-header-left">
+          <h1 className="campaign-page-title">Campaigns</h1>
+          <p className="campaign-page-subtitle">
+            Build, manage and send AI-powered campaigns
+          </p>
+        </div>
       </div>
 
       {/* Stats bar */}
-      <div className="campaign-metrics-bar">
-        <div className="campaign-metric-card">
-          <div className="campaign-metric-value">{stats.total}</div>
-          <div className="campaign-metric-label">Total</div>
+      <div className="stat-grid">
+        <div className="stat-box">
+          <div className="stat-value">{stats.total}</div>
+          <div className="stat-label">Total Campaigns</div>
         </div>
-        <div className="campaign-metric-card">
-          <div className="campaign-metric-value campaign-metric-yellow">
-            {stats.review}
-          </div>
-          <div className="campaign-metric-label">Needs Review</div>
+        <div className="stat-box">
+          <div className="stat-value stat-value-blue">{stats.active}</div>
+          <div className="stat-label">Active</div>
         </div>
-        <div className="campaign-metric-card">
-          <div className="campaign-metric-value campaign-metric-blue">
-            {stats.generating}
-          </div>
-          <div className="campaign-metric-label">Generating</div>
+        <div className="stat-box">
+          <div className="stat-value stat-value-muted">{stats.draft}</div>
+          <div className="stat-label">Draft</div>
         </div>
-        <div className="campaign-metric-card">
-          <div className="campaign-metric-value campaign-metric-green">
-            {stats.sent}
-          </div>
-          <div className="campaign-metric-label">Sent</div>
+        <div className="stat-box">
+          <div className="stat-value stat-value-green">{stats.sent}</div>
+          <div className="stat-label">Sent</div>
         </div>
       </div>
 
-      {/* Toolbar */}
+      {/* Category tabs */}
+      <div className="data-tabs">
+        {(["all", "sales", "marketing"] as CategoryTab[]).map((tab) => (
+          <button
+            key={tab}
+            className={`data-tab ${categoryTab === tab ? "data-tab-active" : ""}`}
+            onClick={() => setCategoryTab(tab)}
+          >
+            {tab === "all" ? "All" : capitalise(tab)}
+            <span className="tab-count">
+              ({tab === "all"
+                ? campaigns.length
+                : campaigns.filter((c) => c.campaign_category === tab).length})
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Search + filters */}
       <div className="campaign-toolbar">
         <input
           type="text"
           className="campaign-search-input"
           placeholder="Search campaigns..."
+          aria-label="Search campaigns"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <div className="campaign-filter-pills">
-          {["all", "draft", "generating", "review", "approved", "sending", "sent", "failed"].map(
-            (s) => (
-              <button
-                key={s}
-                className={`campaign-filter-pill ${statusFilter === s ? "campaign-filter-pill-active" : ""}`}
-                onClick={() => setStatusFilter(s)}
-              >
-                {capitalise(s)}
-              </button>
-            )
-          )}
+          {["all", "draft", "generating", "review", "approved", "sent", "failed"].map((s) => (
+            <button
+              key={s}
+              className={`campaign-filter-pill ${statusFilter === s ? "campaign-filter-pill-active" : ""}`}
+              onClick={() => setStatusFilter(s)}
+            >
+              {capitalise(s)}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Campaign cards */}
+      {/* Campaign table */}
       {loading ? (
         <div className="crm-loading">Loading campaigns...</div>
       ) : filtered.length === 0 ? (
         <div className="campaign-empty">
           <div className="campaign-empty-icon">
-            <svg width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M24 8 6 18v20l18 10 18-10V18L24 8Z" />
               <path d="M6 18l18 10 18-10M24 28v20" />
             </svg>
           </div>
           <h3>No campaigns yet</h3>
           <p>
-            Use the AI chat to generate your first campaign. Try: &quot;Create a
+            Use the AI chat to create your first campaign. Try: &quot;Create a
             win-back campaign for churning customers&quot;
           </p>
         </div>
       ) : (
-        <div className="cl-card-list">
-          {filtered.map(renderCampaignCard)}
+        <div className="crm-table-wrap">
+          <table className="crm-table">
+            <thead>
+              <tr>
+                <th className="sortable col-name" onClick={() => handleSort("name")}>
+                  Name{sortArrow("name")}
+                </th>
+                <th>Category</th>
+                <th className="sortable" onClick={() => handleSort("status")}>
+                  Status{sortArrow("status")}
+                </th>
+                <th>Channel</th>
+                <th>Variants</th>
+                <th className="sortable" onClick={() => handleSort("created_at")}>
+                  Created{sortArrow("created_at")}
+                </th>
+                <th className="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c) => {
+                const channel = c.delivery_channel ? CHANNEL_META[c.delivery_channel] : null;
+                return (
+                  <tr
+                    key={c.id}
+                    className="crm-table-row crm-table-row-clickable"
+                    onClick={() => setActiveCampaignId(c.id)}
+                  >
+                    <td className="crm-cell-name">{c.name}</td>
+                    <td>
+                      <span className={`campaign-badge ${
+                        c.campaign_category === "sales" ? "campaign-badge-purple" : "campaign-badge-blue"
+                      }`}>
+                        {capitalise(c.campaign_category ?? "marketing")}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`campaign-badge ${statusBadgeClass[c.status] || "campaign-badge-gray"}`}>
+                        {capitalise(c.status)}
+                      </span>
+                    </td>
+                    <td>
+                      {channel ? (
+                        <span
+                          className="cb-channel-dot"
+                          style={{ background: channel.color }}
+                          title={c.delivery_channel}
+                        >
+                          {channel.label}
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {c.total_variants > 0 ? (
+                        <span>
+                          {c.approved_count}/{c.total_variants}
+                          {c.sent_count > 0 && (
+                            <span className="text-success tab-count">({c.sent_count} sent)</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td>{formatDate(c.created_at)}</td>
+                    <td>
+                      {(c.status === "approved" || c.status === "review") && (c.approved_count ?? 0) > 0 && (
+                        <button
+                          className="btn btn-xs btn-primary"
+                          disabled={sendingId === c.id}
+                          onClick={(e) => handleListSend(e, c.id)}
+                        >
+                          {sendingId === c.id ? "\u2026" : `Send (${c.approved_count})`}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -469,10 +365,6 @@ export default function CampaignListView() {
                   Cancel
                 </button>
                 <button className="cl-send-btn" onClick={confirmListSend}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13" />
-                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                  </svg>
                   Send Now
                 </button>
               </div>

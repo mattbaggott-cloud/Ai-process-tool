@@ -306,7 +306,14 @@ export async function executeTool(
       case "get_painpoints_view":
         return await handleGetPainpointsView(supabase, userId, orgId);
       case "get_cadence_view":
-        return await handleGetCadenceView(supabase, userId, orgId);
+        // Deprecated: redirect to unified campaigns view
+        return await handleGetCampaignsView(supabase, orgId);
+      case "update_campaign_steps":
+        return await handleUpdateCampaignSteps(input, supabase, orgId);
+      case "manage_tasks":
+        return await handleManageTasks(input, supabase, orgId, userId);
+      case "get_tasks_view":
+        return await handleGetTasksView(supabase, orgId, userId);
       case "get_organization_view":
         return await handleGetOrganizationView(supabase, userId, orgId);
       case "get_data_view":
@@ -2518,11 +2525,17 @@ async function handleLogActivity(
     deal_id: dealId,
   };
 
+  // Activity date — the canonical "when did this happen" field
+  const activityDate = input.activity_date
+    ? new Date(input.activity_date as string).toISOString()
+    : new Date().toISOString();
+  actRow.activity_date = activityDate;
+
   // New fields from Phase 5
   if (input.duration_minutes !== undefined) actRow.duration_minutes = input.duration_minutes as number;
   if (input.outcome !== undefined) actRow.outcome = (input.outcome as string).trim();
   if (input.scheduled_at) actRow.scheduled_at = input.scheduled_at as string;
-  if (input.completed === true) actRow.completed_at = new Date().toISOString();
+  if (input.completed === true) actRow.completed_at = activityDate;
 
   const { data, error } = await supabase
     .from("crm_activities")
@@ -2716,7 +2729,7 @@ async function handleUpdateActivity(
     .from("crm_activities")
     .select("id, user_id, subject, type, contact_id")
     .ilike("subject", `%${actSubject}%`)
-    .order("created_at", { ascending: false })
+    .order("activity_date", { ascending: false })
     .limit(1);
 
   // If contact_name provided, narrow down
@@ -2733,13 +2746,17 @@ async function handleUpdateActivity(
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.subject !== undefined) updates.subject = (input.subject as string).trim();
   if (input.description !== undefined) updates.description = (input.description as string).trim();
+  if (input.activity_date !== undefined) updates.activity_date = new Date(input.activity_date as string).toISOString();
   if (input.outcome !== undefined) updates.outcome = (input.outcome as string).trim();
   if (input.duration_minutes !== undefined) updates.duration_minutes = input.duration_minutes;
   if (input.scheduled_at !== undefined) updates.scheduled_at = (input.scheduled_at as string) || null;
 
-  // Handle completed flag
+  // Handle completed flag — use activity_date if provided, otherwise now()
   if (input.completed === true) {
-    updates.completed_at = new Date().toISOString();
+    const completedDate = input.activity_date
+      ? new Date(input.activity_date as string).toISOString()
+      : new Date().toISOString();
+    updates.completed_at = completedDate;
   } else if (input.completed === false) {
     updates.completed_at = null;
   }
@@ -5834,6 +5851,8 @@ async function handleQuickCampaign(
 
   // 1. Create the campaign record
   const executionMode = (input.execution_mode as ExecutionMode) || "automatic";
+  const campaignCategory = (input.campaign_category as string as import("@/lib/types/database").CampaignCategory) || "marketing";
+  const sendSchedule = (input.send_schedule as import("@/lib/types/database").SendSchedule) || undefined;
   const campaign = await createCampaign(supabase, orgId, userId, {
     name,
     campaignType,
@@ -5844,6 +5863,8 @@ async function handleQuickCampaign(
     templateId: input.template_id as string | undefined,
     deliveryChannel,
     executionMode,
+    campaignCategory,
+    sendSchedule,
   });
 
   // 2. Load customer IDs for the strategy group
@@ -5977,6 +5998,8 @@ async function handleSequenceCampaign(
   const emailType = (input.email_type as CampaignEmailType) || "custom";
   const deliveryChannel = (input.delivery_channel as DeliveryChannel) || "klaviyo";
   const executionMode = (input.execution_mode as ExecutionMode) || "automatic";
+  const campaignCategory = (input.campaign_category as string as import("@/lib/types/database").CampaignCategory) || "marketing";
+  const sendSchedule = (input.send_schedule as import("@/lib/types/database").SendSchedule) || undefined;
 
   // 1. Create campaign record
   const campaign = await createCampaign(supabase, orgId, userId, {
@@ -5989,6 +6012,8 @@ async function handleSequenceCampaign(
     templateId: input.template_id as string | undefined,
     deliveryChannel,
     executionMode,
+    campaignCategory,
+    sendSchedule,
   });
 
   // 2. Load customer IDs
@@ -6697,13 +6722,13 @@ async function handleGetPeopleView(
     if (contactIds.length > 0) {
       const { data: activities } = await supabase
         .from("crm_activities")
-        .select("contact_id, created_at")
+        .select("contact_id, activity_date")
         .in("contact_id", contactIds)
-        .order("created_at", { ascending: false });
+        .order("activity_date", { ascending: false });
       if (activities) {
         for (const a of activities) {
           if (a.contact_id && !activityMap[a.contact_id]) {
-            activityMap[a.contact_id] = a.created_at;
+            activityMap[a.contact_id] = a.activity_date;
           }
         }
       }
@@ -6861,59 +6886,136 @@ async function handleGetCampaignsView(
   orgId: string
 ): Promise<ToolResult> {
   try {
-    const { data: campaigns, error } = await supabase
-      .from("email_campaigns")
-      .select("id, name, status, campaign_type, created_at, sent_at")
-      .eq("org_id", orgId)
-      .order("created_at", { ascending: false });
+    // Progressive column discovery: try richest query first, fall back to base columns
+    // campaign_category + execution_mode are from migrations 040/043 and may not exist
+    // sent_at is on email_customer_variants, NOT email_campaigns — derive from variants instead
+    const COLUMN_SETS = [
+      "id, name, status, campaign_type, campaign_category, delivery_channel, execution_mode, created_at",
+      "id, name, status, campaign_type, campaign_category, delivery_channel, created_at",
+      "id, name, status, campaign_type, delivery_channel, created_at",
+      "id, name, status, campaign_type, created_at",  // absolute minimum
+    ];
 
-    if (error) return { success: false, message: `Failed to fetch campaigns: ${error.message}` };
+    let allCampaigns: Array<Record<string, unknown>> = [];
+    let usedColumnSet = 0;
 
-    const allCampaigns = campaigns || [];
+    for (let i = 0; i < COLUMN_SETS.length; i++) {
+      const { data, error } = await supabase
+        .from("email_campaigns")
+        .select(COLUMN_SETS[i])
+        .eq("org_id", orgId)
+        .order("created_at", { ascending: false });
 
-    // Batch-fetch variant counts and delivery metrics per campaign
-    const campaignIds = allCampaigns.map(c => c.id);
-    let variantMap: Record<string, { total: number; sent: number; opens: number; clicks: number }> = {};
+      if (!error) {
+        allCampaigns = (data || []) as unknown as Array<Record<string, unknown>>;
+        usedColumnSet = i;
+        break;
+      }
+      // Column doesn't exist — try next fallback
+      if (i === COLUMN_SETS.length - 1) {
+        return { success: false, message: `Failed to fetch campaigns: ${error.message}` };
+      }
+    }
+
+    const hasCategory = usedColumnSet <= 1; // campaign_category available
+    const campaignIds = allCampaigns.map(c => c.id as string);
+
+    // Batch-fetch variant counts, delivery metrics, and sent_at timestamps
+    const variantMap: Record<string, { total: number; sent: number; opens: number; clicks: number; lastSentAt: string | null }> = {};
+    // Batch-fetch strategy groups for step counts + channels
+    const stepMap: Record<string, { step_count: number; channels: string[] }> = {};
+    // Batch-fetch task counts (pending)
+    const taskMap: Record<string, number> = {};
 
     if (campaignIds.length > 0) {
+      // Variants — also grab sent_at from here (it lives on variants, not campaigns)
       const { data: variants } = await supabase
         .from("email_customer_variants")
-        .select("campaign_id, status, email_sent, email_opened, link_clicked")
+        .select("campaign_id, status, email_sent, email_opened, link_clicked, sent_at")
         .in("campaign_id", campaignIds);
 
       for (const v of (variants || [])) {
         if (!variantMap[v.campaign_id]) {
-          variantMap[v.campaign_id] = { total: 0, sent: 0, opens: 0, clicks: 0 };
+          variantMap[v.campaign_id] = { total: 0, sent: 0, opens: 0, clicks: 0, lastSentAt: null };
         }
         variantMap[v.campaign_id].total++;
         if (v.email_sent) variantMap[v.campaign_id].sent++;
         if (v.email_opened) variantMap[v.campaign_id].opens++;
         if (v.link_clicked) variantMap[v.campaign_id].clicks++;
+        // Track latest sent_at across variants
+        if (v.sent_at && (!variantMap[v.campaign_id].lastSentAt || v.sent_at > variantMap[v.campaign_id].lastSentAt!)) {
+          variantMap[v.campaign_id].lastSentAt = v.sent_at;
+        }
+      }
+
+      // Strategy groups for step counts + channels
+      const { data: groups } = await supabase
+        .from("campaign_strategy_groups")
+        .select("campaign_id, sequence_steps")
+        .in("campaign_id", campaignIds);
+
+      for (const g of (groups || [])) {
+        const steps = (g.sequence_steps as Array<{ step_type?: string; channel?: string }>) || [];
+        if (!stepMap[g.campaign_id]) {
+          stepMap[g.campaign_id] = { step_count: 0, channels: [] };
+        }
+        stepMap[g.campaign_id].step_count = Math.max(stepMap[g.campaign_id].step_count, steps.length);
+        for (const s of steps) {
+          if (s.channel && !stepMap[g.campaign_id].channels.includes(s.channel)) {
+            stepMap[g.campaign_id].channels.push(s.channel);
+          }
+        }
+      }
+
+      // Task counts (pending only) — campaign_tasks may not exist yet (migration 040)
+      {
+        const { data: taskRows, error: taskErr } = await supabase
+          .from("campaign_tasks")
+          .select("campaign_id")
+          .in("campaign_id", campaignIds)
+          .eq("status", "pending");
+
+        if (!taskErr) {
+          for (const t of (taskRows || [])) {
+            taskMap[t.campaign_id] = (taskMap[t.campaign_id] || 0) + 1;
+          }
+        }
       }
     }
 
     // Count by status
     const byStatus: Record<string, number> = {};
+    const byCategory: Record<string, number> = {};
     for (const c of allCampaigns) {
-      const s = c.status || "draft";
+      const s = (c.status as string) || "draft";
       byStatus[s] = (byStatus[s] || 0) + 1;
+      const cat = hasCategory ? ((c.campaign_category as string) || "marketing") : "marketing";
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
     }
 
     const payload = {
       total_campaigns: allCampaigns.length,
       by_status: byStatus,
+      by_category: byCategory,
       campaigns: allCampaigns.map(c => {
-        const stats = variantMap[c.id] || { total: 0, sent: 0, opens: 0, clicks: 0 };
+        const stats = variantMap[c.id as string] || { total: 0, sent: 0, opens: 0, clicks: 0, lastSentAt: null };
+        const stepInfo = stepMap[c.id as string] || { step_count: 0, channels: [] };
+        const pendingTasks = taskMap[c.id as string] || 0;
         return {
           id: c.id,
-          name: c.name || "Untitled Campaign",
-          status: c.status || "draft",
-          campaign_type: c.campaign_type || "",
+          name: (c.name as string) || "Untitled Campaign",
+          status: (c.status as string) || "draft",
+          campaign_type: (c.campaign_type as string) || "",
+          campaign_category: hasCategory ? ((c.campaign_category as string) || "marketing") : "marketing",
+          delivery_channel: (c.delivery_channel as string) || "klaviyo",
+          step_count: stepInfo.step_count,
+          channels: stepInfo.channels,
+          pending_tasks: pendingTasks,
           variant_count: stats.total,
           sent_count: stats.sent,
           open_rate: stats.sent > 0 ? Math.round((stats.opens / stats.sent) * 100) : null,
           click_rate: stats.sent > 0 ? Math.round((stats.clicks / stats.sent) * 100) : null,
-          sent_at: c.sent_at || null,
+          sent_at: stats.lastSentAt,
           created_at: c.created_at,
         };
       }),
@@ -6922,6 +7024,428 @@ async function handleGetCampaignsView(
     return { success: true, message: `<!--SLASH_CAMPAIGNS:${JSON.stringify(payload)}-->` };
   } catch (err) {
     return { success: false, message: `Campaigns view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ── handleUpdateCampaignSteps ─────────────────────────── */
+
+async function handleUpdateCampaignSteps(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string
+): Promise<ToolResult> {
+  try {
+    const campaignId = input.campaign_id as string;
+    const action = input.action as string;
+    if (!campaignId || !action) {
+      return { success: false, message: "campaign_id and action are required." };
+    }
+
+    // Determine group
+    let groupId = input.group_id as string | undefined;
+    if (!groupId) {
+      const { data: groups } = await supabase
+        .from("campaign_strategy_groups")
+        .select("id")
+        .eq("campaign_id", campaignId)
+        .eq("org_id", orgId)
+        .order("sort_order", { ascending: true })
+        .limit(1);
+      if (!groups || groups.length === 0) {
+        return { success: false, message: "No strategy groups found for this campaign." };
+      }
+      groupId = groups[0].id;
+    }
+
+    // Load current steps
+    const { data: group, error: gErr } = await supabase
+      .from("campaign_strategy_groups")
+      .select("sequence_steps")
+      .eq("id", groupId)
+      .eq("org_id", orgId)
+      .single();
+
+    if (gErr || !group) {
+      return { success: false, message: "Strategy group not found." };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let steps = (group.sequence_steps as any[]) || [];
+
+    if (action === "add") {
+      const afterStep = (input.step_number as number) ?? steps.length;
+      const newStep = input.step as Record<string, unknown> || {};
+      const stepEntry = {
+        step_number: afterStep + 1,
+        delay_days: (newStep.delay_days as number) ?? 3,
+        email_type: (newStep.email_type as string) ?? "custom",
+        prompt: (newStep.prompt as string) ?? "",
+        subject_hint: (newStep.subject_hint as string) ?? undefined,
+        step_type: (newStep.step_type as string) ?? "auto_email",
+        channel: (newStep.channel as string) ?? undefined,
+        task_instructions: (newStep.task_instructions as string) ?? undefined,
+      };
+      steps.splice(afterStep, 0, stepEntry);
+      // Renumber
+      steps = steps.map((s, i) => ({ ...s, step_number: i + 1 }));
+    } else if (action === "remove") {
+      const stepNum = input.step_number as number;
+      if (!stepNum || stepNum < 1 || stepNum > steps.length) {
+        return { success: false, message: `Invalid step_number ${stepNum}. Must be 1-${steps.length}.` };
+      }
+      steps.splice(stepNum - 1, 1);
+      steps = steps.map((s, i) => ({ ...s, step_number: i + 1 }));
+    } else if (action === "update") {
+      const stepNum = input.step_number as number;
+      if (!stepNum || stepNum < 1 || stepNum > steps.length) {
+        return { success: false, message: `Invalid step_number ${stepNum}. Must be 1-${steps.length}.` };
+      }
+      const updates = input.step as Record<string, unknown> || {};
+      const existing = steps[stepNum - 1];
+      steps[stepNum - 1] = { ...existing, ...updates, step_number: stepNum };
+    } else if (action === "replace_all") {
+      const newSteps = input.steps as Array<Record<string, unknown>>;
+      if (!newSteps || !Array.isArray(newSteps)) {
+        return { success: false, message: "steps array required for replace_all action." };
+      }
+      steps = newSteps.map((s, i) => ({
+        step_number: i + 1,
+        delay_days: (s.delay_days as number) ?? 0,
+        email_type: (s.email_type as string) ?? "custom",
+        prompt: (s.prompt as string) ?? "",
+        subject_hint: (s.subject_hint as string) ?? undefined,
+        step_type: (s.step_type as string) ?? "auto_email",
+        channel: (s.channel as string) ?? undefined,
+        task_instructions: (s.task_instructions as string) ?? undefined,
+      }));
+    } else {
+      return { success: false, message: `Unknown action: ${action}. Use add, remove, update, or replace_all.` };
+    }
+
+    // Save
+    const { error: saveErr } = await supabase
+      .from("campaign_strategy_groups")
+      .update({
+        sequence_steps: steps,
+        total_emails: steps.length,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", groupId)
+      .eq("org_id", orgId);
+
+    if (saveErr) {
+      return { success: false, message: `Failed to save steps: ${saveErr.message}` };
+    }
+
+    let message = `**Steps Updated** ✅\n\n`;
+    message += `Campaign now has **${steps.length} steps**:\n`;
+    for (const s of steps) {
+      const stepType = s.step_type || "auto_email";
+      const channel = s.channel ? ` via ${s.channel}` : "";
+      message += `- **Step ${s.step_number}** (Day ${s.delay_days}): ${stepType}${channel}\n`;
+    }
+
+    return { success: true, message };
+  } catch (err) {
+    return { success: false, message: `Failed to update steps: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH VIEW: TASKS — Unified task hub view
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleGetTasksView(
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  try {
+    // Fetch general tasks (non-cancelled, limit 30)
+    // `tasks` table may not exist if migration 044 hasn't been applied
+    let tasks: Array<Record<string, unknown>> | null = null;
+    {
+      const { data, error } = await supabase
+        .from("tasks")
+        .select("id, title, task_type, priority, status, due_at, tags, created_at, assigned_to")
+        .eq("org_id", orgId)
+        .neq("status", "cancelled")
+        .order("due_at", { ascending: true, nullsFirst: false })
+        .limit(30);
+      // If error (table doesn't exist), gracefully fall back to empty
+      tasks = error ? null : (data as Array<Record<string, unknown>> | null);
+    }
+
+    // Fetch campaign tasks (non-skipped, limit 30)
+    // `campaign_tasks` table may not exist if migration 040 hasn't been applied
+    let ctasks: Array<Record<string, unknown>> | null = null;
+    {
+      const { data, error } = await supabase
+        .from("campaign_tasks")
+        .select("id, title, step_type, status, due_at, customer_email, campaign_id, created_at, assigned_to, email_campaigns(name)")
+        .eq("org_id", orgId)
+        .not("status", "in", "(skipped)")
+        .order("due_at", { ascending: true, nullsFirst: false })
+        .limit(30);
+      // If error (table doesn't exist), gracefully fall back to empty
+      ctasks = error ? null : (data as Array<Record<string, unknown>> | null);
+    }
+
+    // Build unified list
+    interface SlashTaskItem {
+      id: string;
+      source: "task" | "campaign_task";
+      title: string;
+      task_type: string;
+      priority: string | null;
+      status: string;
+      due_at: string | null;
+      tags: string[];
+      campaign_name: string | null;
+      contact_name: string | null;
+      is_mine: boolean;
+      created_at: string;
+    }
+
+    const unified: SlashTaskItem[] = [];
+
+    for (const t of tasks ?? []) {
+      unified.push({
+        id: t.id as string,
+        source: "task",
+        title: t.title as string,
+        task_type: (t.task_type as string) || "todo",
+        priority: (t.priority as string) || null,
+        status: (t.status as string) || "pending",
+        due_at: (t.due_at as string) || null,
+        tags: (t.tags as string[]) ?? [],
+        campaign_name: null,
+        contact_name: null,
+        is_mine: t.assigned_to === userId,
+        created_at: t.created_at as string,
+      });
+    }
+
+    for (const ct of ctasks ?? []) {
+      const camp = ct.email_campaigns as { name?: string } | null;
+      unified.push({
+        id: ct.id as string,
+        source: "campaign_task",
+        title: (ct.title as string) || `Campaign Task`,
+        task_type: (ct.step_type as string) ?? "auto_email",
+        priority: null,
+        status: (ct.status as string) || "pending",
+        due_at: (ct.due_at as string) || null,
+        tags: [],
+        campaign_name: camp?.name ?? null,
+        contact_name: (ct.customer_email as string) ?? null,
+        is_mine: ct.assigned_to === userId,
+        created_at: ct.created_at as string,
+      });
+    }
+
+    // Sort by due_at ascending (nulls last)
+    unified.sort((a, b) => {
+      if (!a.due_at && !b.due_at) return 0;
+      if (!a.due_at) return 1;
+      if (!b.due_at) return -1;
+      return a.due_at.localeCompare(b.due_at);
+    });
+
+    // Stats
+    const now = new Date();
+    const stats = {
+      total: unified.length,
+      pending: unified.filter(t => t.status === "pending").length,
+      in_progress: unified.filter(t => t.status === "in_progress").length,
+      completed: unified.filter(t => t.status === "completed").length,
+      overdue: unified.filter(t =>
+        t.due_at && new Date(t.due_at) < now &&
+        (t.status === "pending" || t.status === "in_progress")
+      ).length,
+      my_tasks: unified.filter(t => t.is_mine && t.status !== "completed").length,
+    };
+
+    // Type counts
+    const by_type: Record<string, number> = {};
+    for (const t of unified) {
+      by_type[t.task_type] = (by_type[t.task_type] || 0) + 1;
+    }
+
+    // Source counts
+    const by_source: Record<string, number> = {
+      task: unified.filter(t => t.source === "task").length,
+      campaign_task: unified.filter(t => t.source === "campaign_task").length,
+    };
+
+    const payload = {
+      stats,
+      by_type,
+      by_source,
+      tasks: unified.slice(0, 25), // Limit for rendering
+    };
+
+    return { success: true, message: `<!--SLASH_TASKS:${JSON.stringify(payload)}-->` };
+  } catch (err) {
+    return { success: false, message: `Tasks view failed: ${err instanceof Error ? err.message : "Unknown error"}` };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MANAGE TASKS — Unified task hub (create/list/complete/update/cancel)
+   ═══════════════════════════════════════════════════════════ */
+
+async function handleManageTasks(
+  input: Record<string, unknown>,
+  supabase: SupabaseClient,
+  orgId: string,
+  userId: string
+): Promise<ToolResult> {
+  const action = input.action as string;
+
+  try {
+    if (action === "create") {
+      const title = input.title as string;
+      if (!title) return { success: false, message: "title is required for create." };
+
+      const { data, error } = await supabase
+        .from("tasks")
+        .insert({
+          org_id: orgId,
+          created_by: userId,
+          title,
+          description: (input.description as string) ?? null,
+          task_type: (input.task_type as string) ?? "todo",
+          priority: (input.priority as string) ?? "medium",
+          due_at: (input.due_at as string) ?? null,
+          remind_at: (input.remind_at as string) ?? null,
+          assigned_to: (input.assigned_to as string) ?? userId,
+          project_id: (input.project_id as string) ?? null,
+          contact_id: (input.contact_id as string) ?? null,
+          company_id: (input.company_id as string) ?? null,
+          deal_id: (input.deal_id as string) ?? null,
+          tags: (input.tags as string[]) ?? [],
+        })
+        .select()
+        .single();
+
+      if (error) return { success: false, message: `Failed to create task: ${error.message}` };
+
+      let msg = `**Task Created** \u2705\n\n`;
+      msg += `- **Title:** ${data.title}\n`;
+      msg += `- **Type:** ${data.task_type}\n`;
+      msg += `- **Priority:** ${data.priority}\n`;
+      if (data.due_at) msg += `- **Due:** ${new Date(data.due_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}\n`;
+      if (data.remind_at) msg += `- **Reminder:** ${new Date(data.remind_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}\n`;
+      msg += `- **ID:** ${data.id}\n`;
+      return { success: true, message: msg };
+
+    } else if (action === "list") {
+      const statusFilter = (input.status_filter as string) || "pending";
+
+      let query = supabase
+        .from("tasks")
+        .select("id, title, task_type, priority, status, due_at, remind_at, tags, created_at")
+        .eq("org_id", orgId);
+
+      if (statusFilter !== "all") {
+        query = query.eq("status", statusFilter);
+      }
+
+      query = query.order("due_at", { ascending: true, nullsFirst: false }).limit(25);
+      const { data, error } = await query;
+
+      if (error) return { success: false, message: `Failed to list tasks: ${error.message}` };
+
+      const tasks = data ?? [];
+      if (tasks.length === 0) {
+        return { success: true, message: `No ${statusFilter === "all" ? "" : statusFilter + " "}tasks found.` };
+      }
+
+      const priorityEmoji: Record<string, string> = { urgent: "\uD83D\uDD34", high: "\uD83D\uDFE0", medium: "\uD83D\uDFE1", low: "\uD83D\uDFE2" };
+      const typeEmoji: Record<string, string> = { todo: "\u2611\uFE0F", reminder: "\u23F0", follow_up: "\uD83D\uDD04", project_task: "\uD83D\uDCC1", action_item: "\u26A1" };
+
+      let msg = `**Tasks** (${tasks.length} ${statusFilter})\n\n`;
+      for (const t of tasks) {
+        const pEmoji = priorityEmoji[t.priority] || "";
+        const tEmoji = typeEmoji[t.task_type] || "";
+        const due = t.due_at ? new Date(t.due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+        const overdue = t.due_at && new Date(t.due_at) < new Date() && t.status !== "completed" ? " \u26A0\uFE0F overdue" : "";
+        msg += `${pEmoji} ${tEmoji} **${t.title}**`;
+        if (due) msg += ` \u2014 ${due}${overdue}`;
+        msg += `\n`;
+      }
+      return { success: true, message: msg };
+
+    } else if (action === "complete") {
+      const taskId = input.task_id as string;
+      if (!taskId) return { success: false, message: "task_id is required for complete." };
+
+      const updateData: Record<string, unknown> = {
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        completed_by: userId,
+        updated_at: new Date().toISOString(),
+      };
+      if (input.notes) updateData.notes = input.notes;
+
+      const { error } = await supabase
+        .from("tasks")
+        .update(updateData)
+        .eq("id", taskId)
+        .eq("org_id", orgId);
+
+      if (error) return { success: false, message: `Failed to complete task: ${error.message}` };
+      return { success: true, message: `**Task Completed** \u2705` };
+
+    } else if (action === "update") {
+      const taskId = input.task_id as string;
+      if (!taskId) return { success: false, message: "task_id is required for update." };
+
+      const allowedFields = ["title", "description", "task_type", "priority", "due_at", "remind_at", "assigned_to", "tags", "notes"];
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      let fieldCount = 0;
+      for (const f of allowedFields) {
+        if (input[f] !== undefined) {
+          updates[f] = input[f];
+          fieldCount++;
+        }
+      }
+      if (fieldCount === 0) return { success: false, message: "No fields to update. Provide title, description, priority, due_at, etc." };
+
+      const { error } = await supabase
+        .from("tasks")
+        .update(updates)
+        .eq("id", taskId)
+        .eq("org_id", orgId);
+
+      if (error) return { success: false, message: `Failed to update task: ${error.message}` };
+      return { success: true, message: `**Task Updated** \u2705 (${fieldCount} field${fieldCount > 1 ? "s" : ""} changed)` };
+
+    } else if (action === "cancel") {
+      const taskId = input.task_id as string;
+      if (!taskId) return { success: false, message: "task_id is required for cancel." };
+
+      const updateData: Record<string, unknown> = {
+        status: "cancelled",
+        updated_at: new Date().toISOString(),
+      };
+      if (input.notes) updateData.notes = input.notes;
+
+      const { error } = await supabase
+        .from("tasks")
+        .update(updateData)
+        .eq("id", taskId)
+        .eq("org_id", orgId);
+
+      if (error) return { success: false, message: `Failed to cancel task: ${error.message}` };
+      return { success: true, message: `**Task Cancelled** \u274C` };
+
+    } else {
+      return { success: false, message: `Unknown action: ${action}. Use create, list, complete, update, or cancel.` };
+    }
+  } catch (err) {
+    return { success: false, message: `Task operation failed: ${err instanceof Error ? err.message : "Unknown error"}` };
   }
 }
 

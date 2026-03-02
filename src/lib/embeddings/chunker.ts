@@ -269,6 +269,7 @@ function chunkCrmActivity(id: string, r: Record<string, unknown>): Chunk[] {
       ? `${String(r.type).charAt(0).toUpperCase() + String(r.type).slice(1)}: ${r.subject}`
       : r.subject,
     r.description,
+    r.activity_date && `Date: ${r.activity_date}`,
     r.scheduled_at && `Scheduled: ${r.scheduled_at}`,
     r.completed_at && `Completed: ${r.completed_at}`,
   ].filter(Boolean);
@@ -281,6 +282,7 @@ function chunkCrmActivity(id: string, r: Record<string, unknown>): Chunk[] {
       title: r.subject,
       type: "crm_activity",
       activity_type: r.type,
+      activity_date: r.activity_date,
       contact_id: r.contact_id,
       company_id: r.company_id,
       deal_id: r.deal_id,

@@ -19,6 +19,7 @@ import type {
   SlashCadenceData,
   SlashOrganizationData,
   SlashDataData,
+  SlashTasksData,
 } from "@/components/chat/ChatMessageRenderer";
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -331,17 +332,8 @@ export function SlashKnowledgeView({ data }: { data: SlashKnowledgeData }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   CAMPAIGNS VIEW — Campaign list with status + metrics
+   CAMPAIGNS VIEW — Table-based, matching pipeline/people pattern
    ═══════════════════════════════════════════════════════════ */
-
-const CAMPAIGN_STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  draft: { bg: "#f3f4f6", text: "#6b7280" },
-  generating: { bg: "#ede9fe", text: "#7c3aed" },
-  ready: { bg: "#dbeafe", text: "#2563eb" },
-  sending: { bg: "#fef3c7", text: "#d97706" },
-  sent: { bg: "#dcfce7", text: "#16a34a" },
-  paused: { bg: "#fee2e2", text: "#dc2626" },
-};
 
 export function SlashCampaignsView({ data }: { data: SlashCampaignsData }) {
   const router = useRouter();
@@ -353,63 +345,62 @@ export function SlashCampaignsView({ data }: { data: SlashCampaignsData }) {
   return (
     <div className="slash-view slash-campaigns-view">
       <div className="slash-view-header">
-        <h3 className="slash-view-title">Campaigns ({data.total_campaigns})</h3>
-        <div className="slash-campaigns-stats">
+        <h3 className="slash-view-title">Campaigns</h3>
+        <div className="slash-pipeline-stats">
           {data.by_status && Object.entries(data.by_status).map(([status, count]) => (
-            <span
-              key={status}
-              className="slash-status-badge"
-              style={{
-                background: CAMPAIGN_STATUS_COLORS[status]?.bg || "#f3f4f6",
-                color: CAMPAIGN_STATUS_COLORS[status]?.text || "#6b7280",
-              }}
-            >
-              {status}: {count}
-            </span>
+            <div key={status} className="slash-stat">
+              <span className="slash-stat-label">{status}</span>
+              <span className="slash-stat-value">{count}</span>
+            </div>
           ))}
         </div>
       </div>
 
       {data.campaigns.length > 0 ? (
-        <div className="slash-campaigns-list">
-          {data.campaigns.map((campaign) => (
-            <div
-              key={campaign.id}
-              className="slash-campaign-card"
-              onClick={handleCampaignClick}
-              title="Click to view campaigns"
-            >
-              <div className="slash-campaign-top">
-                <div className="slash-campaign-name">{campaign.name}</div>
-                <span
-                  className="slash-campaign-status"
-                  style={{
-                    background: CAMPAIGN_STATUS_COLORS[campaign.status]?.bg || "#f3f4f6",
-                    color: CAMPAIGN_STATUS_COLORS[campaign.status]?.text || "#6b7280",
-                  }}
-                >
-                  {campaign.status}
-                </span>
-              </div>
-              {campaign.campaign_type && (
-                <div className="slash-campaign-type">{campaign.campaign_type}</div>
-              )}
-              <div className="slash-campaign-metrics">
-                <span>{campaign.variant_count} variants</span>
-                {campaign.sent_count > 0 && <span>{formatNumber(campaign.sent_count)} sent</span>}
-                {campaign.open_rate !== null && <span>{campaign.open_rate}% opened</span>}
-                {campaign.click_rate !== null && <span>{campaign.click_rate}% clicked</span>}
-              </div>
-              <div className="slash-campaign-date">
-                {campaign.sent_at
-                  ? `Sent ${formatRelativeDate(campaign.sent_at)}`
-                  : `Created ${formatRelativeDate(campaign.created_at)}`}
-              </div>
-            </div>
-          ))}
+        <div className="slash-table-scroll">
+          <table className="slash-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Type</th>
+                <th>Variants</th>
+                <th>Sent</th>
+                <th>Opens</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.campaigns.map((c) => (
+                <tr key={c.id} onClick={handleCampaignClick}>
+                  <td>
+                    <span className="slash-people-name">{c.name}</span>
+                  </td>
+                  <td>
+                    <span className={`slash-status-pill slash-camp-st-${c.status}`}>
+                      {c.status}
+                    </span>
+                  </td>
+                  <td style={{ color: "var(--color-gray-500)" }}>
+                    {c.campaign_category || c.campaign_type || "\u2014"}
+                  </td>
+                  <td>{c.variant_count || "\u2014"}</td>
+                  <td>{c.sent_count ? formatNumber(c.sent_count) : "\u2014"}</td>
+                  <td>{c.open_rate !== null ? `${c.open_rate}%` : "\u2014"}</td>
+                  <td style={{ color: "var(--color-gray-400)", fontSize: 11 }}>
+                    {c.sent_at
+                      ? formatRelativeDate(c.sent_at)
+                      : formatRelativeDate(c.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
-        <div className="slash-empty">No campaigns yet. Create one by saying &quot;Create a campaign for...&quot;</div>
+        <div className="slash-empty">
+          No campaigns yet. Create one by saying &quot;Create a campaign for...&quot;
+        </div>
       )}
     </div>
   );
@@ -1081,123 +1072,21 @@ export function SlashPainpointsView({ data }: { data: SlashPainpointsData }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   /cadence VIEW
+   /cadence VIEW — DEPRECATED, kept for backward compat.
+   Now redirects to unified campaigns view at the API level.
    ═══════════════════════════════════════════════════════════ */
 
-const CHANNEL_COLORS: Record<string, string> = {
-  Email: "#3b82f6",
-  Call: "#10b981",
-  LinkedIn: "#0a66c2",
-  SMS: "#8b5cf6",
-  "Direct Mail": "#f59e0b",
-  Other: "#6b7280",
-};
-
-const CHANNEL_ICONS: Record<string, string> = {
-  Email: "✉",
-  Call: "📞",
-  LinkedIn: "💼",
-  SMS: "💬",
-  "Direct Mail": "📦",
-};
-
-const CADENCE_STATUS_COLORS: Record<string, string> = {
-  Draft: "#6b7280",
-  Active: "#10b981",
-  Paused: "#f59e0b",
-  Archived: "#9ca3af",
-};
-
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function SlashCadenceView({ data }: { data: SlashCadenceData }) {
-  if (data.cadences.length === 0) {
-    return (
-      <div className="slash-view">
-        <div className="slash-view-header">
-          <span className="slash-view-title">Sales Cadences (0)</span>
-        </div>
-        <div className="slash-empty">No cadences yet. Ask the AI to help build a multi-step outreach sequence for your target persona.</div>
-      </div>
-    );
-  }
-
-  const statusEntries = Object.entries(data.status_counts).sort((a, b) => b[1] - a[1]);
-  const channelEntries = Object.entries(data.channel_counts).sort((a, b) => b[1] - a[1]);
-
+  // This should no longer be rendered since get_cadence_view redirects
+  // to get_campaigns_view. Kept for TypeScript/import compatibility.
   return (
     <div className="slash-view">
       <div className="slash-view-header">
-        <span className="slash-view-title">Sales Cadences ({data.total})</span>
+        <span className="slash-view-title">Sales Cadences</span>
       </div>
-
-      {/* Status bar */}
-      <div className="slash-cadence-status-bar">
-        {statusEntries.map(([status, count]) => (
-          <span key={status} className="slash-cadence-status-pill" style={{ color: CADENCE_STATUS_COLORS[status] || "#6b7280" }}>
-            <span className="slash-cadence-status-dot" style={{ background: CADENCE_STATUS_COLORS[status] || "#6b7280" }} />
-            {status}: {count}
-          </span>
-        ))}
-      </div>
-
-      {/* Channel chips */}
-      {channelEntries.length > 0 && (
-        <div className="slash-cadence-channels">
-          {channelEntries.map(([ch, count]) => (
-            <span key={ch} className="slash-cadence-channel-chip" style={{ borderColor: CHANNEL_COLORS[ch] || "#6b7280", color: CHANNEL_COLORS[ch] || "#6b7280" }}>
-              {CHANNEL_ICONS[ch] || "📌"} {ch} ({count})
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Cadence cards */}
-      <div className="slash-cadence-list">
-        {data.cadences.map((cadence) => (
-          <div key={cadence.id} className="slash-cadence-card">
-            <div className="slash-cadence-card-top">
-              <span className="slash-cadence-card-name">{cadence.name}</span>
-              <span className="slash-cadence-card-status" style={{ color: CADENCE_STATUS_COLORS[cadence.status] || "#6b7280" }}>
-                {cadence.status}
-              </span>
-            </div>
-
-            {cadence.description && (
-              <div className="slash-cadence-card-desc">{cadence.description}</div>
-            )}
-
-            <div className="slash-cadence-card-meta">
-              {cadence.target_persona && <span className="slash-cadence-meta-item">Persona: {cadence.target_persona}</span>}
-              <span className="slash-cadence-meta-item">{cadence.total_steps} steps over {cadence.total_days} days</span>
-              <div className="slash-cadence-meta-channels">
-                {cadence.channels.map((ch) => (
-                  <span key={ch} className="slash-cadence-mini-channel" style={{ color: CHANNEL_COLORS[ch] || "#6b7280" }}>
-                    {CHANNEL_ICONS[ch] || "•"} {ch}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            {/* Step timeline */}
-            {cadence.steps.length > 0 && (
-              <div className="slash-cadence-steps">
-                {cadence.steps.map((step, idx) => (
-                  <div key={idx} className="slash-cadence-step">
-                    <div className="slash-cadence-step-day">
-                      <span className="slash-cadence-step-dot" style={{ background: CHANNEL_COLORS[step.channel] || "#6b7280" }} />
-                      Day {step.day}
-                    </div>
-                    <div className="slash-cadence-step-detail">
-                      <span className="slash-cadence-step-channel" style={{ color: CHANNEL_COLORS[step.channel] || "#6b7280" }}>
-                        {CHANNEL_ICONS[step.channel] || "•"} {step.channel}
-                      </span>
-                      <span className="slash-cadence-step-action">{step.action}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+      <div className="slash-empty">
+        Cadences are now unified with campaigns. Use /campaigns to see all campaigns and cadences.
       </div>
     </div>
   );
@@ -1475,6 +1364,96 @@ export function SlashDataView({ data }: { data: SlashDataData }) {
         </svg>
         Manage connections
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   /tasks VIEW — Unified task hub
+   ═══════════════════════════════════════════════════════════ */
+
+export function SlashTasksView({ data }: { data: SlashTasksData }) {
+  const activeTasks = useMemo(() =>
+    data.tasks.filter(t => t.status === "pending" || t.status === "in_progress"),
+  [data.tasks]);
+
+  return (
+    <div className="slash-view slash-tasks-view">
+      <div className="slash-view-header">
+        <h3 className="slash-view-title">Tasks</h3>
+        <div className="slash-pipeline-stats">
+          <div className="slash-stat">
+            <span className="slash-stat-label">Active</span>
+            <span className="slash-stat-value">{data.stats.pending + data.stats.in_progress}</span>
+          </div>
+          <div className="slash-stat">
+            <span className="slash-stat-label">Done</span>
+            <span className="slash-stat-value slash-stat-won">{data.stats.completed}</span>
+          </div>
+          {data.stats.overdue > 0 && (
+            <div className="slash-stat">
+              <span className="slash-stat-label">Overdue</span>
+              <span className="slash-stat-value" style={{ color: "#dc2626" }}>{data.stats.overdue}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {activeTasks.length > 0 ? (
+        <div className="slash-table-scroll">
+          <table className="slash-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Type</th>
+                <th>Due</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeTasks.map((task) => {
+                const isOverdue = task.due_at && new Date(task.due_at) < new Date() &&
+                  task.status !== "completed" && task.status !== "cancelled";
+                return (
+                  <tr key={task.id}>
+                    <td>
+                      <div className="slash-people-name" style={{ cursor: "default" }}>{task.title}</div>
+                      {task.campaign_name && (
+                        <div style={{ fontSize: 10, color: "var(--color-gray-400)", marginTop: 1 }}>
+                          {task.campaign_name}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`slash-status-pill slash-task-st-${task.status.replace(/_/g, "-")}`}>
+                        {task.status.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td>
+                      {task.priority ? (
+                        <span className={`slash-status-pill slash-task-pri-${task.priority}`}>
+                          {task.priority}
+                        </span>
+                      ) : "\u2014"}
+                    </td>
+                    <td style={{ color: "var(--color-gray-500)", textTransform: "capitalize" }}>
+                      {task.source === "campaign_task" ? "Campaign" : task.task_type.replace(/_/g, " ")}
+                    </td>
+                    <td style={{ color: isOverdue ? "#dc2626" : "var(--color-gray-400)", fontSize: 11, fontWeight: isOverdue ? 600 : 400 }}>
+                      {task.due_at ? formatRelativeDate(task.due_at) : "\u2014"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="slash-empty">
+          No active tasks. Ask the AI to create a reminder or to-do.
+        </div>
+      )}
     </div>
   );
 }

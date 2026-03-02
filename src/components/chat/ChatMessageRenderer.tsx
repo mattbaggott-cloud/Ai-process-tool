@@ -19,6 +19,7 @@ import {
   SlashCadenceView,
   SlashOrganizationView,
   SlashDataView,
+  SlashTasksView,
 } from "@/components/chat/SlashViews";
 
 /* Lazy-load ChartRenderer (uses Recharts which is heavy) */
@@ -161,11 +162,17 @@ export interface SlashKnowledgeData {
 export interface SlashCampaignsData {
   total_campaigns: number;
   by_status: Record<string, number>;
+  by_category?: Record<string, number>;
   campaigns: Array<{
     id: string;
     name: string;
     status: string;
     campaign_type: string;
+    campaign_category?: string;
+    delivery_channel?: string;
+    step_count?: number;
+    channels?: string[];
+    pending_tasks?: number;
     variant_count: number;
     sent_count: number;
     open_rate: number | null;
@@ -342,6 +349,33 @@ export interface SlashOrganizationData {
   }>;
 }
 
+export interface SlashTasksData {
+  stats: {
+    total: number;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    overdue: number;
+    my_tasks: number;
+  };
+  by_type: Record<string, number>;
+  by_source: Record<string, number>;
+  tasks: Array<{
+    id: string;
+    source: "task" | "campaign_task";
+    title: string;
+    task_type: string;
+    priority: string | null;
+    status: string;
+    due_at: string | null;
+    tags: string[];
+    campaign_name: string | null;
+    contact_name: string | null;
+    is_mine: boolean;
+    created_at: string;
+  }>;
+}
+
 export interface SlashDataData {
   total_connectors: number;
   active_connectors: number;
@@ -387,11 +421,12 @@ export type ContentSegment =
   | { type: "slash_painpoints"; data: SlashPainpointsData }
   | { type: "slash_cadence"; data: SlashCadenceData }
   | { type: "slash_organization"; data: SlashOrganizationData }
-  | { type: "slash_data"; data: SlashDataData };
+  | { type: "slash_data"; data: SlashDataData }
+  | { type: "slash_tasks"; data: SlashTasksData };
 
 /* ── Parse message content for inline blocks ────────────── */
 
-export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)|(SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA))):([\s\S]*?)-->/g;
+export const INLINE_PATTERN = /<!--(?:INLINE_(TABLE|CHART|PROFILE|METRIC)|(CLARIFICATION)|(CONFIDENCE)|(SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA|TASKS))):([\s\S]*?)-->/g;
 
 export function parseMessageContent(content: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
@@ -462,6 +497,8 @@ export function parseMessageContent(content: string): ContentSegment[] {
         segments.push({ type: "slash_organization", data: parsed as SlashOrganizationData });
       } else if (slashType === "SLASH_DATA") {
         segments.push({ type: "slash_data", data: parsed as SlashDataData });
+      } else if (slashType === "SLASH_TASKS") {
+        segments.push({ type: "slash_tasks", data: parsed as SlashTasksData });
       } else {
         // Malformed inline block — skip silently
         segments.push({ type: "text", content: "" });
@@ -738,6 +775,9 @@ export function RichMessageContent({
         }
         if (seg.type === "slash_data") {
           return <SlashDataView key={i} data={seg.data} />;
+        }
+        if (seg.type === "slash_tasks") {
+          return <SlashTasksView key={i} data={seg.data} />;
         }
         if (seg.type === "text") {
           return (

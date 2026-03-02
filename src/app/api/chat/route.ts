@@ -269,7 +269,8 @@ When the user sends a message that is exactly a slash command, IMMEDIATELY call 
 - "/people" → call get_people_view (CRM contacts table)
 - "/accounts" → call get_accounts_view (CRM companies grid)
 - "/knowledge" → call get_knowledge_view (knowledge base library)
-- "/campaigns" → call get_campaigns_view (email campaigns list)
+- "/campaigns" → call get_campaigns_view (unified campaigns — both marketing & sales)
+- "/cadence" → call get_campaigns_view (alias for /campaigns — shows unified view)
 - "/projects" → call get_projects_view (workspace projects)
 - "/customers" → call get_customers_view (e-commerce customers)
 - "/orders" → call get_orders_view (e-commerce orders)
@@ -278,7 +279,7 @@ When the user sends a message that is exactly a slash command, IMMEDIATELY call 
 - "/tools" → call get_tools_view (tech stack)
 - "/goals" → call get_goals_view (org goals with sub-goals)
 - "/obstacles" → call get_painpoints_view (org obstacles & blockers)
-- "/cadence" → call get_cadence_view (sales cadences)
+- "/tasks" → call get_tasks_view (unified task hub — to-dos, reminders, campaign tasks)
 - "/organization" → call get_organization_view (organization profile & team)
 - "/data" → call get_data_view (data connections & imports)
 
@@ -449,6 +450,9 @@ Before any campaign sends, the system validates all variants:
 
 **Campaign Builder — Key Principle:**
 Campaigns do NOT require a pre-built segment. The AI can work directly off the full customer list and create its own sub-groups internally. Segments are an OPTIONAL filter — use them when the user has already identified a specific audience, or when they say "create a campaign from this segment."
+
+**Unified Campaign System:**
+Campaigns and cadences are unified. Both marketing automation campaigns and sales engagement cadences live in the same system, differentiated by campaign_category ('marketing' or 'sales'). When creating sales outreach, set campaign_category='sales'. The /campaigns view shows both. Use **update_campaign_steps** to add, remove, or modify steps in an existing campaign via chat. Use campaign_category to help the AI infer the right defaults (sales = manual mode, outreach channel; marketing = automatic mode, klaviyo channel).
 
 **Campaign Pre-flight — Ask Before You Build:**
 Before calling create_campaign, ask the user 2-3 brief clarifying questions specific to their request. This makes you a strategic collaborator, not a task executor.
@@ -1054,37 +1058,22 @@ export async function POST(req: Request) {
     supabase.from("org_invites").select("id", { count: "exact", head: true }).eq("org_id", orgId).is("accepted_at", null),
   ]);
 
-  /* Fetch universal identity resolution stats (non-blocking) */
-  let identityStats: Awaited<ReturnType<typeof getIdentityResolutionSummary>> | null = null;
-  try {
-    identityStats = await getIdentityResolutionSummary(supabase, orgId);
-  } catch {
-    // Non-fatal — identity stats are informational
-  }
+  /* Fetch domain summaries in parallel (all non-fatal) */
+  const [identityStatsResult, segmentSummaryResult, emailSummaryResult, campaignSummaryResult] =
+    await Promise.allSettled([
+      getIdentityResolutionSummary(supabase, orgId),
+      getSegmentSummary(supabase, orgId),
+      getEmailSummary(supabase, orgId),
+      getCampaignSummary(supabase, orgId),
+    ]);
 
-  /* Fetch segment summary (non-blocking) */
+  const identityStats = identityStatsResult.status === "fulfilled" ? identityStatsResult.value : null;
   let segmentSummary = { total: 0, byType: {} as Record<string, number>, totalMembers: 0 };
-  try {
-    segmentSummary = await getSegmentSummary(supabase, orgId);
-  } catch {
-    // Non-fatal
-  }
-
-  /* Fetch email summary (non-blocking) */
+  if (segmentSummaryResult.status === "fulfilled") segmentSummary = segmentSummaryResult.value;
   let emailSummary = { totalEmails: 0, byStatus: {} as Record<string, number>, brandAssetCount: 0 };
-  try {
-    emailSummary = await getEmailSummary(supabase, orgId);
-  } catch {
-    // Non-fatal
-  }
-
-  /* Fetch campaign summary (non-blocking) */
+  if (emailSummaryResult.status === "fulfilled") emailSummary = emailSummaryResult.value;
   let campaignSummary: Awaited<ReturnType<typeof getCampaignSummary>> = { totalCampaigns: 0, byStatus: {}, recentCampaigns: [] };
-  try {
-    campaignSummary = await getCampaignSummary(supabase, orgId);
-  } catch {
-    // Non-fatal
-  }
+  if (campaignSummaryResult.status === "fulfilled") campaignSummary = campaignSummaryResult.value;
 
   /* Build goal summary */
   const goalStatusCounts: Record<string, number> = {};
@@ -1500,7 +1489,7 @@ export async function POST(req: Request) {
 
               // Extract inline viz markers BEFORE they go to Claude
               // These get streamed directly to the user — Claude narrates, code renders
-              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE|SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA)):[\s\S]*?-->/g;
+              const vizMarkerRegex = /<!--(?:INLINE_(?:TABLE|CHART|PROFILE|METRIC)|CLARIFICATION|CONFIDENCE|SLASH_(?:PIPELINE|PEOPLE|ACCOUNTS|KNOWLEDGE|CAMPAIGNS|PROJECTS|CUSTOMERS|ORDERS|PRODUCTS|DASHBOARD|TOOLS|GOALS|PAINPOINTS|CADENCE|ORGANIZATION|DATA|TASKS)):[\s\S]*?-->/g;
               const vizMarkers: string[] = [];
               let vizMatch;
               while ((vizMatch = vizMarkerRegex.exec(resultMessage)) !== null) {
@@ -1537,6 +1526,7 @@ export async function POST(req: Request) {
                 .replace(/<!--SLASH_CADENCE:[\s\S]*?-->/g, "\n[A sales cadences view has been rendered for the user. Add a brief 1-2 sentence commentary about the outreach sequences.]\n")
                 .replace(/<!--SLASH_ORGANIZATION:[\s\S]*?-->/g, "\n[An organization profile view has been rendered for the user. Add a brief 1-2 sentence commentary about their company profile.]\n")
                 .replace(/<!--SLASH_DATA:[\s\S]*?-->/g, "\n[A data connections view has been rendered for the user showing their connected data sources. Add a brief commentary about their data setup and suggest connecting sources if none are connected.]\n")
+                .replace(/<!--SLASH_TASKS:[\s\S]*?-->/g, "\n[A unified tasks view has been rendered for the user showing to-dos, reminders, campaign tasks, and action items. Add a brief 1-2 sentence commentary about their task queue and any overdue items.]\n")
                 .trim();
 
               // Prepend the narrative summary so Claude leads with accurate facts
